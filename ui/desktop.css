@@ -2351,3 +2351,27 @@ audio.st-media { width: 100%; background: none; }
 .st-sheet .st-actions { display: flex; grid-template-columns: none; justify-content: flex-start; }
 .st-sheet .st-actions .btn { flex: none; width: auto; }
 .st-sheet .st-actions .btn.primary { margin-left: auto; min-width: 140px; }
+
+/* Discover's toolbar (under the search): Sort (ways of looking and time spans in one list), ratings, Tile size, Customise */
+.dc-lens { gap: 10px 12px; }
+.dc-tool-h { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+.dc-views { border: 0; overflow: visible; }
+.dc-sortbtn { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border-radius: 99px; border: 2px solid var(--line); border-bottom-width: 4px;
+  background: color-mix(in srgb, var(--src, var(--accent)) 14%, var(--panel)); color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
+.dc-sortbtn:hover { border-color: var(--src, var(--accent)); }
+.dc-sortbtn b { font-weight: 800; }
+.dc-caret { color: var(--dim); font-size: 12px; }
+.dc-menu { position: fixed; z-index: 60; min-width: 200px; max-height: 60vh; overflow-y: auto; display: grid; gap: 2px; padding: 6px; border-radius: 14px;
+  border: 2px solid var(--line); background: var(--panel); box-shadow: 0 18px 40px -16px rgba(0, 0, 0, .8); }
+.dc-menu-item { text-align: left; padding: 8px 12px; border: 0; border-radius: 10px; background: none; color: var(--text); font: inherit; font-size: 14px; font-weight: 750; cursor: pointer; }
+.dc-menu-item.sub { padding-left: 30px; font-size: 13px; font-weight: 600; color: var(--dim); }
+.dc-menu-item:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text); }
+.dc-menu-item.on { background: color-mix(in srgb, var(--accent) 24%, transparent); color: var(--text); }
+.dc-size { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border-radius: 99px; border: 2px solid var(--line); border-bottom-width: 4px; background: var(--panel); }
+.dc-size:empty { display: none; }
+.dc-size input[type=range] { width: 150px; accent-color: var(--accent); cursor: pointer; }
+.dc-size-ico { color: var(--dim); line-height: 1; }
+.dc-size-ico.s { font-size: 11px; }
+.dc-size-ico.l { font-size: 20px; }
+.dc-head .dc-lens { max-height: 200px; overflow: visible; }
+.dc-head.compact .dc-lens { max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; overflow: hidden; }

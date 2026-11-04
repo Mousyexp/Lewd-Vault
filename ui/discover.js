@@ -783,13 +783,13 @@
       <div class="dc-sources"></div>
       <button class="dc-manage" type="button" title="Sources, API keys, tags never to show">Sources</button>
     </div>
-    <div class="dc-mast"><div class="dc-mast-id"></div><div class="dc-lens"><div class="dc-views"></div><div class="dc-spans"></div><div class="dc-lens-end"></div></div></div>
+    <div class="dc-mast"><div class="dc-mast-id"></div></div>
     <div class="dc-searchrow">
       <button class="dc-subpill hidden" type="button" title="Pick a community"></button>
       <div class="searchbar dc-search"><span class="search-icon"></span><input type="search" spellcheck="false" autocomplete="off"><div class="dc-sugg hidden"></div></div>
-      <div class="dc-ratings"></div>
       <button class="dc-markbtn" type="button" title="Keep this search as a bookmark">☆ Bookmark</button>
     </div>
+    <div class="dc-lens"><div class="dc-views"></div><div class="dc-spans"></div><div class="dc-ratings"></div><div class="dc-size"></div><div class="dc-lens-end"></div></div>
     <div class="dc-rail"></div>
     <div class="dc-subpick hidden"></div>
     <div class="dc-marks"></div>
@@ -811,7 +811,7 @@
   {
     const head = make('div', 'dc-head'), space = make('div', 'dc-headspace');
     tab.querySelector('.dc-bar').before(space, head);
-    head.append(...['.dc-bar', '.dc-mast', '.dc-searchrow', '.dc-rail', '.dc-marks'].map(sel => tab.querySelector(sel)));
+    head.append(...['.dc-bar', '.dc-mast', '.dc-searchrow', '.dc-lens', '.dc-rail', '.dc-marks'].map(sel => tab.querySelector(sel)));
     // (it floats over the page, which keeps a space as tall as the whole top: shrinking moves nothing below)
     // (measured once it has settled at full size: not while it shrinks or grows back)
     let settle = null;
@@ -1043,24 +1043,17 @@
   // the site's ways of looking (Latest, Hot, Popular today...) and, for some, over what time
   function drawViews(src) {
     const views = src ? viewsOf(src) : [];
-    q('.dc-lens').classList.toggle('hidden', !views.length && !(src && src.kind === 'bing'));
-    q('.dc-views').replaceChildren(...views.map(v => {
-      const b = make('button', 'dc-vw' + (state.view === v.id ? ' on' : ''), v.label);
-      b.type = 'button';
-      b.onclick = () => {
-        if (state.view === v.id) return;
-        const span = !v.spans ? '' : v.spans.includes(state.span) ? state.span : v.spans.includes('week') ? 'week' : v.spans[0];
-        go({ ...state, view: v.id, span });
-      };
-      return b;
-    }));
+    q('.dc-lens').classList.toggle('hidden', !src);
+    // the site's ways of looking and their time spans, together in one Sort list
+    q('.dc-spans').replaceChildren();
     const v = views.find(x => x.id === state.view);
-    q('.dc-spans').replaceChildren(...(v && v.spans ? v.spans.map(sp => {
-      const b = make('button', 'dc-span' + (state.span === sp ? ' on' : ''), SPAN_LABEL[sp]);
-      b.type = 'button';
-      b.onclick = () => { if (state.span !== sp) go({ ...state, span: sp }); };
-      return b;
-    }) : []));
+    if (views.length) {
+      const btn = make('button', 'dc-sortbtn'); btn.type = 'button'; btn.title = 'How to sort, and over what time';
+      btn.append(make('span', 'dc-tool-h', 'Sort'), make('b', '', v ? v.label + (v.spans && state.span ? ' · ' + SPAN_LABEL[state.span] : '') : views[0].label), make('span', 'dc-caret', '▾'));
+      btn.onclick = () => sortMenu(btn, views);
+      q('.dc-views').replaceChildren(btn);
+    } else q('.dc-views').replaceChildren();
+    drawSize(src);
     const end = q('.dc-lens-end');
     end.replaceChildren();
     if (src) {
@@ -1081,6 +1074,46 @@
     if (src && src.kind === 'danbooru' && !(src.user && src.key) && /^(hot|popular|top|random)$/.test(state.view)) {
       end.append(make('span', 'dc-lens-note', 'Uses one of your 2 tags'));
     }
+  }
+  // the Sort list: each way of looking, with its time spans right under it
+  function sortMenu(btn, views) {
+    const old = document.querySelector('.dc-menu');
+    if (old) { old.remove(); return; }
+    const menu = make('div', 'dc-menu');
+    const pick = (view, span) => { close(); if (state.view !== view || state.span !== span) go({ ...state, view, span }); };
+    for (const v of views) {
+      const span = !v.spans ? '' : v.spans.includes(state.span) ? state.span : v.spans.includes('week') ? 'week' : v.spans[0];
+      const b = make('button', 'dc-menu-item' + (state.view === v.id ? ' on' : ''), v.label); b.type = 'button';
+      b.onclick = () => pick(v.id, span);
+      menu.append(b);
+      for (const sp of v.spans || []) {
+        const s = make('button', 'dc-menu-item sub' + (state.view === v.id && state.span === sp ? ' on' : ''), SPAN_LABEL[sp]); s.type = 'button';
+        s.onclick = () => pick(v.id, sp);
+        menu.append(s);
+      }
+    }
+    const r = btn.getBoundingClientRect();
+    Object.assign(menu.style, { left: r.left + 'px', top: r.bottom + 6 + 'px' });
+    document.body.append(menu);
+    const away = e => { if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) close(); };
+    const esc = e => { if (e.key === 'Escape') close(); };
+    function close() { menu.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', esc, true); removeEventListener('scroll', close, true); }
+    addEventListener('pointerdown', away, true); addEventListener('keydown', esc, true); addEventListener('scroll', close, true);
+  }
+  // Tile size: right in the toolbar, changes the grid as you drag, kept per source (the same setting as in Customise)
+  function drawSize(src) {
+    const box = q('.dc-size');
+    if (!src) return box.replaceChildren();
+    const size = make('input'); Object.assign(size, { type: 'range', min: 140, max: 480, step: 10, value: siteOf(src).row || 260 });
+    size.title = 'Tile size';
+    let timer = null;
+    size.oninput = () => {
+      cfg.look = cfg.look || {};
+      cfg.look[src.id] = { ...(cfg.look[src.id] || {}), row: +size.value };
+      drawGrid();
+      clearTimeout(timer); timer = setTimeout(saveConfig, 500);
+    };
+    box.replaceChildren(make('span', 'dc-tool-h', 'Tile size'), make('span', 'dc-size-ico s', '▣'), size, make('span', 'dc-size-ico l', '▣'));
   }
   // ---------- Customise: a source made yours ----------
   function customise(src) {
@@ -1396,7 +1429,7 @@
       if (my !== ticket) return;
       // Danbooru answers 500 QueryCanceled (and others 502/503/504) when a search takes too long:
       // try once more after a moment before saying anything
-      if (!retried && /^(500|502|503|504)|QueryCanceled|timed? ?out|Couldn't reach/i.test(errMsg(e))) {
+      if (!retried && /^(500|502|503|504)\b|QueryCanceled|timed? ?out|Couldn't reach/i.test(errMsg(e))) {
         retried = true; loading = false;
         status.textContent = `${cur.name} is slow right now, trying again…`;
         setTimeout(() => { if (my === ticket) loadMore(); }, 3000);
@@ -1411,8 +1444,10 @@
   }
   function errorNote(src, msg) {
     const box = make('div', 'dc-note err');
-    let text = `${src.name} said: ${msg}`;
-    if (/QueryCanceled|^50[0-4]|timed? ?out/i.test(msg)) text = `${src.name} took too long on this search. Try fewer or more common tags, or try again in a minute.`;
+    // (a site's error page is HTML: never shown as it is)
+    let text = `${src.name} said: ${msg.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)}`;
+    if (/QueryCanceled|timed? ?out|^\s*504/i.test(msg)) text = `${src.name} took too long on this search. Try fewer or more common tags, or try again in a minute.`;
+    else if (/^\s*50[0-3]\b|<html|<!doctype|downbooru|maintenance/i.test(msg)) text = `${src.name} is down or too busy right now (its own servers, not the app). Try again in a few minutes, or pick another source.`;
     if (/^401|^403|authentication|api key/i.test(msg)) text = `${src.name} wants your API key.`;
     if (/more than 2 tags|tag limit/i.test(msg)) text = `${src.name} allows 2 tags per search without an account, and a chosen category or Hot, Popular, Top and Random each count as one. Use fewer tags or Latest, or add your API key.`;
     box.append(make('span', '', text));

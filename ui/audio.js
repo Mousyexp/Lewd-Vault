@@ -321,6 +321,27 @@
       body.append(list, btns);
     });
   }
+  // Configure sources: pick where to look, add your own site, or change which ones are listed
+  function pickSource() {
+    const P = findPrefs();
+    window.vaultSites.sheet('Configure sources', (body, close) => {
+      body.append(make('p', 'dc-sheet-lead', 'Choose where to look for audio.'));
+      const grid = make('div', 'au-subs');
+      grid.append(...shownFind().map(id => {
+        const s = FIND[id], b = make('button', 'au-src' + (id === P.source ? ' on' : ''));
+        const im = make('img'); im.alt = ''; im.src = s.icon; im.onerror = () => im.remove();
+        b.append(im, make('span', '', s.name));
+        if (id === 'reddit') b.append(make('small', 'au-src-sub', 'r/' + P.sub));
+        b.title = s.line;
+        b.onclick = () => { close(); if (P.source === id) return; P.source = id; save(); found = []; findPage = 1; findDone = false; drawFind(); };
+        return b;
+      }));
+      const own = make('button', 'au-src au-src-add', '＋ Your own site'); own.title = 'Any other site with audio: give its addresses and the app reads it'; own.onclick = () => { close(); editOwnSite(null); };
+      const tune = make('button', 'au-src au-src-add', '⚙ Customise list'); tune.title = 'Which places are listed, in what order'; tune.onclick = () => { close(); customiseFind(); };
+      grid.append(own, tune);
+      body.append(grid);
+    });
+  }
   const findPrefs = () => (list.find = list.find || { source: 'reddit', sub: 'gonewildaudio', performers: [], seen: [], fsKey: '', fantasy: 'joi' });
   let found = [], findTicket = 0, findPage = 1, findDone = false;
   const pasteInput = q('.au-paste input');
@@ -328,19 +349,15 @@
     if (!acfg) return loadOwn().then(drawFind, () => { acfg = { sites: [], audio: { order: [], hidden: [] } }; drawFind(); });
     const P = findPrefs();
     if (!FIND[P.source]) P.source = shownFind()[0] || 'reddit';
-    // the sources, Reddit's communities together in one tab
-    q('.au-subs').replaceChildren(...shownFind().map(id => [id, FIND[id]]).map(([id, s]) => {
-      const b = make('button', 'au-src' + (id === P.source ? ' on' : ''));
-      const im = make('img'); im.alt = ''; im.src = s.icon; im.onerror = () => im.remove();
-      b.append(im, make('span', '', s.name));
-      if (id === 'reddit') b.append(make('small', 'au-src-sub', 'r/' + P.sub));
-      b.title = s.line;
-      b.onclick = () => { if (P.source === id) return; P.source = id; save(); found = []; findPage = 1; findDone = false; drawFind(); };
-      return b;
-    }));
-    const own = make('button', 'au-src au-src-add', '＋ Your own site'); own.title = 'Any other site with audio: give its addresses and the app reads it'; own.onclick = () => editOwnSite(null);
-    const tune = make('button', 'au-src au-src-add', '⚙ Customise'); tune.title = 'Which places, in what order'; tune.onclick = () => customiseFind();
-    q('.au-subs').append(own, tune);
+    // the sources stay out of the way: one button shows the current one and opens the picker
+    const cur = FIND[P.source], pickBtn = make('button', 'au-src on');
+    const im = make('img'); im.alt = ''; im.src = cur.icon; im.onerror = () => im.remove();
+    pickBtn.append(im, make('span', '', cur.name));
+    if (P.source === 'reddit') pickBtn.append(make('small', 'au-src-sub', 'r/' + P.sub));
+    pickBtn.title = cur.line;
+    const conf = make('button', 'au-src au-src-add', '⚙ Configure sources'); conf.title = 'Choose where to look for audio';
+    pickBtn.onclick = conf.onclick = () => pickSource();
+    q('.au-subs').replaceChildren(pickBtn, conf);
     pasteInput.placeholder = { reddit: `Search r/${P.sub}, or paste a soundgasm link`, soundgasm: 'A performer\'s soundgasm name, or paste a link', audiodesires: 'Search these stories, or paste a link',
       classics: 'Search the classics (Fanny Hill, Venus in Furs…)', freesound: 'Search sounds: moan, breathing, whisper…' }[P.source] || `Search ${FIND[P.source].name}…`;
     drawRail();
