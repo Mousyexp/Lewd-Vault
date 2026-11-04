@@ -22,7 +22,7 @@ Lewd Vault is a cute, fast Windows app for collecting, tagging and enjoying your
 
 ## 📸 Take a peek
 
-| ➕ Add & tag | 🎞️ Slideshow setup |
+| ➕ Add & tag | 🎞️ Slideshow |
 | --- | --- |
 | ![Adding and tagging](docs/screenshots/add.webp) | ![Slideshow](docs/screenshots/slideshow.webp) |
 | 🏆 **Your profile & levels** | 💪 **The coach** |
@@ -30,7 +30,7 @@ Lewd Vault is a cute, fast Windows app for collecting, tagging and enjoying your
 | 🎨 **Themes & settings** | 📊 **Stats** |
 | ![Settings](docs/screenshots/settings.webp) | ![Stats](docs/screenshots/stats.webp) |
 
-<sub>Screenshots show a demo vault filled with placeholder art.</sub>
+<sub>Screenshots show a demo vault. Artwork is used with permission of its creators.</sub>
 
 ## 🚀 Get started
 
