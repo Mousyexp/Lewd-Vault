@@ -1,30 +1,54 @@
-# Lewd Vault
+# 💖 Lewd Vault
 
-A private, offline Windows app for collecting and enjoying your NSFW pictures, GIFs, videos and audio. 18+ only.
+**Your spicy collection, beautifully organised, 100% private, and all yours.** 🔒✨
 
-## Features
+Lewd Vault is a cute, fast Windows app for collecting, tagging and enjoying your NSFW pictures, GIFs, videos and audio. No accounts, no cloud you didn't pick, no judgement. 😏 *18+ only.*
 
-- **Your files, your disk.** One portable `.exe` (≈6 MB). Everything lives in a plain folder on your PC, a USB stick, or a synced Google Drive / OneDrive / Dropbox / iCloud folder.
-- **Library.** Fast grid with preview clips, categories, ratings, collections and a "For you" order.
-- **Tags.** Booru-style tags (`artist:`, `character:`, `series:`) with suggestions and tag search.
-- **Discover.** Browse image, video and audio sites inside the app and save to your vault in one click. Add your own sites too.
-- **Slideshow.** Timed NSFW-level stages, motion effects and true full screen.
-- **Video player.** Smooth seeking, A–B loop, speed and frame stepping, plus keyboard shortcuts.
-- **Privacy.** Discreet file names and an emergency hide key. Nothing leaves your PC unless you choose to.
-- **You.** Profile, levels, badges and time-spent stats.
-- **Coach.** Guided Kegel and JOI sessions.
-- **Share packs.** Bundle a collection into one `.zip` with a preview card. Open a friend's pack to add it to your vault.
-- **Themes.** Built-in themes, plus a Custom theme you design yourself.
+![The Library](docs/screenshots/library.webp)
 
-## Run
+## ✨ Why you'll love it
 
-Build it (below), open `dist\Image Vault\Lewd Vault.exe`, and pick where your vault should live. You need WebView2, which Windows 10 and 11 already have.
+- 🗂️ **A Library that just works.** Big, buttery-smooth grid with preview clips, collections, ratings and a "For you" order.
+- 🏷️ **Booru-style tags.** `artist:`, `character:`, `series:`… with suggestions and lightning-fast tag search.
+- 🔍 **Discover.** Browse your favourite image, video and audio sites right inside the app, then save with one click. You can even add your own sites!
+- 🎞️ **Slideshow.** Timed NSFW-level stages that build up, with motion effects and true full screen. 🔥
+- 🎬 **A real video player.** Smooth seeking, A–B loop, speed control, frame-by-frame stepping and keyboard shortcuts.
+- 🕵️ **Privacy first.** Discreet file names, plus an **emergency key** that hides everything instantly. 🙈
+- 🏆 **Level up!** Earn XP, unlock titles and badges, keep a streak and see your stats.
+- 💪 **Your coach.** Guided Kegel workouts and JOI sessions with a cute companion.
+- 🎁 **Share packs.** Bundle a collection into one `.zip` with a pretty preview card, and open packs from friends.
+- 🎨 **Themes galore.** Rose, Berry night, Lavender, Mint… or design your own.
+- 💾 **Your files, your disk.** One tiny ~6 MB portable `.exe`. Keep your vault on your PC, a USB stick, or a synced Google Drive, OneDrive, Dropbox or iCloud folder.
 
-## Build
+## 📸 Take a peek
+
+| ➕ Add & tag | 🎞️ Slideshow setup |
+| --- | --- |
+| ![Adding and tagging](docs/screenshots/add.webp) | ![Slideshow](docs/screenshots/slideshow.webp) |
+| 🏆 **Your profile & levels** | 💪 **The coach** |
+| ![Profile](docs/screenshots/you.webp) | ![Coach](docs/screenshots/coach.webp) |
+| 🎨 **Themes & settings** | 📊 **Stats** |
+| ![Settings](docs/screenshots/settings.webp) | ![Stats](docs/screenshots/stats.webp) |
+
+<sub>Screenshots show a demo vault filled with placeholder art.</sub>
+
+## 🚀 Get started
+
+1. 🛠️ Build it (see below).
+2. 🖱️ Double-click `dist\Image Vault\Lewd Vault.exe`.
+3. 📁 Pick where your vault should live, and start adding! 🎉
+
+You need WebView2, which Windows 10 and 11 already have. 👍
+
+## 🧑‍💻 Build it yourself
 
 ```bash
 npm install
 npm run dist
 ```
 
-You need Node.js, Rust and the [Tauri prerequisites](https://tauri.app/start/prerequisites/). The full guide is in [docs/GUIDE.md](docs/GUIDE.md).
+You need Node.js, Rust and the [Tauri prerequisites](https://tauri.app/start/prerequisites/). 📖 Want every detail? The full guide is in [docs/GUIDE.md](docs/GUIDE.md).
+
+---
+
+Made with 💕 and a little bit of mischief.
