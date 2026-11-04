@@ -1,0 +1,29 @@
+{
+  "name": "image-vault-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "sync": "node sync-ui.mjs",
+    "dev": "node sync-ui.mjs && tauri dev",
+    "build": "node sync-ui.mjs && tauri build --no-bundle",
+    "icon": "node tools/make-icon.mjs",
+    "dist": "npm run build && node tools/dist.mjs",
+    "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/shortcut.ps1",
+    "decor": "node tools/make-decor.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "sharp": "0.34.5"
+  },
+  "dependencies": {
+    "@fontsource-variable/comfortaa": "^5.3.0",
+    "@fontsource-variable/dancing-script": "^5.3.0",
+    "@fontsource-variable/fredoka": "^5.3.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/nunito": "^5.3.0",
+    "@fontsource-variable/quicksand": "^5.3.0",
+    "mediabunny": "1.61.0",
+    "thumbhash": "0.1.1"
+  }
+}
