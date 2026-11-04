@@ -18,7 +18,7 @@ A private, offline Windows app for collecting and enjoying your NSFW pictures, G
 
 ## Run
 
-Build it (below), open `distImage Vaultewd vault.exe`, and pick where your vault should live. You need WebView2, which Windows 10 and 11 already have.
+Build it (below), open `dist\Image Vault\Lewd Vault.exe`, and pick where your vault should live. You need WebView2, which Windows 10 and 11 already have.
 
 ## Build
 
