@@ -1,4 +1,4 @@
-// Builds the desktop app's page (src/) from the shared page (ui/Index.html, the web app's page):
+// Builds the desktop app's page (src/) from the web app's page (../Index.html):
 //   - applies the few changes the desktop needs to Index.html (the Drive / Apps Script calls go to
 //     the Rust backend and the local files instead, plus hooks for the tags feature),
 //   - adds the desktop layer: ui/desktop.css (the desktop look) and ui/desktop.js (tags, search,
@@ -12,7 +12,7 @@ import fs from 'node:fs';
 
 const here = new URL('.', import.meta.url);
 const out = new URL('src/', here);
-let page = fs.readFileSync(new URL('ui/Index.html', here), 'utf8');
+let page = fs.readFileSync(new URL('../Index.html', here), 'utf8');
 
 function patch(find, replace) {
   const n = page.split(find).length - 1;
@@ -205,12 +205,12 @@ patch(`const b = document.createElement('span'); b.className = 'tag badge';`,
 
 // ---------- Phase 3 (PLAN.md): the Library ----------
 // preview clips are made by library.js (from 2/5 of the way in, short side capped, so landscape
-// clips are as sharp as portrait ones), and named .c2.mp4 so older ones can be told apart and remade
+// clips are as sharp as portrait ones), and named .c3.mp4 (24 fps at most) so older ones can be told apart and remade
 patch(`async function makePreview(blob, info, stage) {
   try {`, `async function makePreview(blob, info, stage) {
   if (makeClip) return makeClip(blob, info, stage);
   try {`);
-patch(`uploadHelper(out.preview, uid + '.mp4', s.folders.clips)`, `uploadHelper(out.preview, uid + '.c2.mp4', s.folders.clips)`);
+patch(`uploadHelper(out.preview, uid + '.mp4', s.folders.clips)`, `uploadHelper(out.preview, uid + '.c3.mp4', s.folders.clips)`);
 // more layouts (library.js): the picker keeps whichever is chosen, and the grid knows it
 patch(`  $('fLayout').value = asRows ? 'rows' : 'grid';
   grid.classList.toggle('rows', asRows);`, `  $('fLayout').value = S('libraryLayout');

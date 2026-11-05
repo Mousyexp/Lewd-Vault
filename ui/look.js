@@ -218,8 +218,9 @@
       && $('detail').classList.contains('hidden') && $('show').classList.contains('hidden') && !covered();
     function frame(now) {
       if (!wanted()) { running = false; return; }
-      requestAnimationFrame(frame);
-      if (now - last < 33) return;
+      // 20 frames a second, woken by a timer: hearts drifting a few pixels a second look the same, and
+      // waking on every screen refresh (60+ a second) to skip most of them cost ~10% of the main thread
+      setTimeout(() => requestAnimationFrame(frame), 50);
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
       ctx.clearRect(0, 0, w, h);
@@ -296,11 +297,26 @@
       side.compact = false; side.width = Math.max(200, Math.min(400, x));
       applySide();
     };
-    const up = () => { grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); html.classList.remove('side-dragging'); saveSide(); };
+    const up = () => { grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); html.classList.remove('side-dragging'); saveSide(); drawFold(); };
     grip.addEventListener('pointermove', move);
     grip.addEventListener('pointerup', up);
   });
-  grip.addEventListener('dblclick', () => { side.compact = !side.compact; applySide(); saveSide(); });
+  grip.addEventListener('dblclick', () => { side.compact = !side.compact; applySide(); saveSide(); drawFold(); });
+  // a fold button on the sidebar's edge, like the Library's tag panel has: the sidebar shrinks to its icons
+  const fold = make('button', 'side-fold'); fold.type = 'button';
+  const drawFold = () => {
+    fold.innerHTML = side.compact ? '<span>›</span>' : '<span>‹</span>';
+    fold.title = side.compact ? 'Show the sidebar' : 'Fold the sidebar to icons';
+  };
+  fold.onclick = () => { side.compact = !side.compact; applySide(); saveSide(); drawFold(); };
+  document.body.append(fold);
+  drawFold();
+  // ---------- while the window is in the background, the endless little decorations rest ----------
+  // (the logo's water, the flame, pulsing stars...: nobody sees them then, and each costs drawing time)
+  const away = () => html.classList.toggle('app-away', document.visibilityState !== 'visible' || !document.hasFocus());
+  for (const ev of ['focus', 'blur']) addEventListener(ev, away);
+  document.addEventListener('visibilitychange', away);
+  away();
   // when the tiles don't fit, the list scrolls, with a faint arrow at the edge that has more
   const up = make('button', 'side-more up'), down = make('button', 'side-more down');
   up.type = down.type = 'button';
@@ -335,6 +351,18 @@
       <path d="${HEART}" fill="url(#lvShine)"/>
       <path d="${HEART}" fill="none" stroke="#F9CDD4" stroke-width="3" stroke-linejoin="round"/>
     </svg>`;
+    // The water moves 8 times a second from a timer, not as a CSS animation: SVG animations can't run on
+    // the graphics card, and that one restyled the whole page every frame (~60 times a second, on every
+    // page). At 34 px the steps can't be told apart. It rests while the window is in the background.
+    const front = mark.querySelector('.lv-wave.front'), back = mark.querySelector('.lv-wave.back'), level = mark.querySelector('.lv-level');
+    const t0 = performance.now();
+    setInterval(() => {
+      if (html.classList.contains('app-away') || html.classList.contains('motion-off')) return;
+      const s = (performance.now() - t0) / 1000;
+      front.setAttribute('transform', `translate(${(-(s / 7 % 1) * 50).toFixed(1)} 0)`);
+      back.setAttribute('transform', `translate(${(-50 + (s / 11 % 1) * 50).toFixed(1)} 0)`);
+      level.setAttribute('transform', `translate(0 ${(1 - Math.cos(s / 5 * 2 * Math.PI)).toFixed(2)})`);
+    }, 125);
   }
 
   // ---------- the welcome screen also asks for the mouse pointer ----------

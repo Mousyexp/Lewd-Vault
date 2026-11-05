@@ -2430,3 +2430,32 @@ html.desktop.side-compact nav [data-tab] { grid-column: auto; }
 
 /* the Library's tiles: square corners in every layout */
 html.desktop #grid .card, html.desktop .jrow .card, html.desktop #grid[data-layout] > .card, html.desktop #grid .card.held { border-radius: 0 !important; }
+
+/* =====================================================================================
+   Performance (measured: these kept the whole page restyling and laying out ~60 times a second,
+   on every page, even in the background)
+   ===================================================================================== */
+/* the logo's water: SVG animations can't run on the graphics card, so each frame restyled the whole page */
+/* (it's moved by a timer in look.js instead) */
+.lv-wave.front, .lv-wave.back, .lv-level { animation: none !important; }
+/* the pulsing three-star rating: colour and glow repainted every frame on every 3-star tile; now
+   only its size pulses (run on the graphics card) and the glow stays */
+@keyframes pink-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+.lv-stars.q3, #dQ.q3, .stars button[data-q="3"].on, .ask-star.q3.on .ask-star-s { text-shadow: 0 0 10px rgba(255, 79, 154, .45); will-change: transform; }
+/* the profile banner's shine moved a background every frame; now it slides as one layer */
+@keyframes banner-shine { 0%, 60% { transform: translateX(-60%); } 100% { transform: translateX(60%); } }
+.pf-banner-shine { background-size: 100% 100% !important; inset: 0 -60% !important; will-change: transform; }
+/* window in the background: the endless decorations rest */
+html.app-away :is(.lv-wave, .lv-level, .tb-flame, .tail-tip svg, .lust-heart, .pf-banner-shine, .pf-stop-dot, .au-art svg, .lv-stars, #dQ, .stars button, .ask-star-s),
+html.app-away :is(.tb-clock, .pf-stop-dot)::before, html.app-away .pf-stop-dot::after { animation-play-state: paused !important; }
+
+/* the left sidebar's fold button (like the Library's tag panel) */
+.side-fold { position: fixed; z-index: 30; top: calc(var(--bar, 48px) + 54px); left: calc(var(--side, 268px) - 13px); width: 26px; height: 46px; display: grid; place-items: center; padding: 0;
+  border-radius: 10px; border: 2px solid var(--line); background: var(--panel); color: var(--dim); font: inherit; font-size: 16px; font-weight: 800; cursor: pointer; transition: color .15s, border-color .15s, left .2s; }
+.side-fold:hover { color: var(--text); border-color: var(--accent); }
+@media (max-width: 900px) { .side-fold { display: none; } }
+html.vp-fullscreen .side-fold, html:has(#show:not(.hidden)) .side-fold { display: none; }
+/* labels over the Library's tiles: no see-through blur. Over a playing preview the blur under every
+   badge was recomputed for each video frame; a slightly more solid background looks the same */
+html.desktop .card .badge.vid, html.desktop .ctile .badge.vid { backdrop-filter: none; background: color-mix(in srgb, var(--accent) 45%, rgba(20, 10, 14, .72)); }
+html.desktop .card .tag, html.desktop .ctile .tag { backdrop-filter: none; background: rgba(0, 0, 0, .66); }

@@ -24,7 +24,7 @@
   // =====================================================================================
   // the short side is capped at 320 px: exactly the old portrait clips (320 x 568), and landscape ones
   // get the same number of pixels (568 x 320) instead of 320 x 180, so no clip costs more to play than before
-  const CLIP_SHORT = 320, CLIP_LONG = 960, CLIP_MARK = '.c2.';
+  const CLIP_SHORT = 320, CLIP_LONG = 960, CLIP_MARK = '.c3.', CLIP_FPS = 24;
   const clipSize = (w, h) => { const s = Math.min(1, CLIP_SHORT / Math.min(w, h), CLIP_LONG / Math.max(w, h)); return [even(w * s), even(h * s)]; };
   async function clipFrom(source, info, stage, onConversion) {
     const mb = await loadMediabunny();
@@ -41,7 +41,9 @@
       const output = new mb.Output({ format: new mb.Mp4OutputFormat({ fastStart: 'in-memory' }), target: new mb.BufferTarget() });
       const conversion = await mb.Conversion.init({
         input, output, tracks: 'primary', showWarnings: false,
-        video: { codec: 'avc', quality: mb.QUALITY_MEDIUM, width: cw, height: ch, fit: 'fill' },
+        // (at most 24 frames a second: previews play sped up, many at once, and a 60 fps source played at
+        // 1.5x meant 90 frames a second to decode per tile; 24 fps at 1.5x is 36)
+        video: { codec: 'avc', quality: mb.QUALITY_MEDIUM, width: cw, height: ch, fit: 'fill', frameRate: CLIP_FPS },
         audio: { discard: true },
         trim: { start, end: dur ? Math.min(dur, start + len) : start + len }
       });
@@ -96,7 +98,7 @@
         if (stopped) { todo.push(item); continue; } // you came back: later
         if (blob) {
           const s = await needSetup();
-          const id = await uploadHelper(blob, item.uid + '.c2.mp4', s.folders.clips);
+          const id = await uploadHelper(blob, item.uid + '.c3.mp4', s.folders.clips);
           const r = await api('updateThumbs', [{ id: item.id, previewId: id }]);
           item.previewId = id;
           libraryWritten(r);
