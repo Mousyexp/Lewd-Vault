@@ -2724,3 +2724,109 @@ details.fold[open] > summary { margin-bottom: 10px; }
 .tag-panel:not(.bulk-open) .bulk > h4::after { transform: rotate(-90deg); }
 .tag-panel:not(.bulk-open) .bulk > :not(h4) { display: none !important; }
 #tab-library .filters > .lf-chips:empty { display: none !important; }
+
+/* =====================================================================================
+   Round three: the pill behind the avatar, the profile overview, one Share panel, the full view
+   (one close, details at the right, the filmstrip's fold, no fade), browser tabs in Videos and Audio
+   ===================================================================================== */
+/* ---------- the top bar: streak, coach and stopwatch tucked behind your picture; a ‹ shows there's more ---------- */
+.tb-cluster { gap: 0; padding: 2px; }
+.tb-cluster > :not(.tb-me) { max-width: 0 !important; opacity: 0; padding-left: 0 !important; padding-right: 0 !important; overflow: hidden; pointer-events: none;
+  transition: max-width .22s ease, opacity .18s ease, padding .22s ease; }
+.tb-cluster::before { content: "‹"; padding: 0 6px 0 8px; color: var(--dim); font-weight: 900; font-size: 15px; line-height: 1; transition: opacity .15s, padding .2s; }
+.tb-cluster:hover::before, .tb-cluster:focus-within::before { opacity: 0; padding: 0; width: 0; overflow: hidden; }
+.tb-cluster:hover > :not(.tb-me), .tb-cluster:focus-within > :not(.tb-me) { max-width: 140px !important; opacity: 1; pointer-events: auto; padding-left: 9px !important; padding-right: 9px !important; }
+.tb-cluster:hover > .tb-coach, .tb-cluster:focus-within > .tb-coach { padding: 0 !important; width: 30px; }
+.tb-cluster:hover .tb-clock, .tb-cluster:focus-within .tb-clock { max-width: 110px !important; }
+
+/* ---------- the profile: an overview band (numbers and a graph on the left, a list on the right) ---------- */
+.pf-overview { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(240px, 1fr); gap: 18px; margin: 18px 0 8px; }
+.pf-ov-main { display: grid; gap: 16px; align-content: start; padding: 18px 20px; border-radius: var(--r-l, 18px); background: var(--panel); border: 1px solid var(--line); }
+.pf-ov-heads { display: flex; flex-wrap: wrap; gap: 14px 34px; }
+.pf-ov-head { display: grid; gap: 2px; }
+.pf-ov-head span, .pf-ov-label { font-size: 11.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+.pf-ov-head b { font-size: 30px; font-weight: 800; line-height: 1.05; color: var(--text); font-variant-numeric: tabular-nums; }
+.pf-graph { display: grid; gap: 6px; color: var(--accent); }
+.pf-graph-svg { width: 100%; height: 130px; overflow: visible; }
+.pf-graph-line { fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.pf-graph-end, .pf-graph-dot { fill: currentColor; stroke: var(--panel); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.pf-graph .pf-axis { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.pf-graph .pf-label { fill: var(--dim); font-size: 11px; }
+.pf-topbadges { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.pf-topbadges .pf-ov-label { flex-basis: 100%; }
+.pf-topbadge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px 6px 6px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel)); font-size: 13.5px; }
+.pf-topbadge .pf-badge-ico { width: 30px; height: 30px; margin: 0; }
+.pf-topbadge .pf-badge-ico svg { width: 100%; height: 100%; }
+.pf-topbadge-none { color: var(--dim); font-size: 13.5px; }
+.pf-ov-list { margin: 0; display: grid; grid-template-columns: auto auto; align-content: start; gap: 9px 18px; padding: 18px 20px; border-radius: var(--r-l, 18px); background: var(--panel); border: 1px solid var(--line); }
+.pf-ov-list dt { color: var(--dim); font-size: 14px; }
+.pf-ov-list dd { margin: 0; text-align: right; font-weight: 800; font-variant-numeric: tabular-nums; }
+@media (max-width: 1100px) { .pf-overview { grid-template-columns: 1fr; } }
+.pf-allbadges { margin: 18px 0; }
+.pf-allbadges > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 99px; border: 1px solid var(--line);
+  background: var(--panel); font-weight: 800; font-size: 14px; user-select: none; }
+.pf-allbadges > summary::-webkit-details-marker { display: none; }
+.pf-allbadges > summary::before { content: "▸"; color: var(--accent); transition: transform .15s; }
+.pf-allbadges[open] > summary::before { transform: rotate(90deg); }
+.pf-allbadges > summary:hover { border-color: var(--accent); }
+.pf-allbadges[open] > .pf-badges { margin-top: 14px; }
+
+/* ---------- Share: one panel, the import in its header ---------- */
+.sh-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sh-head .pf-h { margin: 0; flex: 1; }
+.sh-import { display: inline-flex; align-items: center; gap: 8px; }
+.sh-import svg { width: 18px; height: 18px; }
+.sh-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 20px; align-items: start; margin-top: 12px; }
+.sh-panel .sh-form { display: grid; gap: 10px; align-content: start; }
+.sh-panel .sh-form h4 { margin: 0; }
+.sh-panel .sh-form .btn.primary { justify-self: start; }
+.sh-panel .sh-preview { width: 100%; margin: 0; }
+@media (max-width: 1000px) { .sh-panel { grid-template-columns: 1fr; } }
+.sh-box > .sh-note { margin: 10px 2px 0; color: var(--dim); font-size: 12.5px; }
+
+/* ---------- the full view ---------- */
+/* no zoom-and-fade when moving to the next picture: it changes at once */
+html.desktop #detail:not(.hidden) .big img, html.desktop #detail:not(.hidden) .big video { animation: none !important; }
+/* one close button, top left, a cross and the word; the panel's own Close is gone */
+#detail aside #closeDetail { display: none !important; }
+html.desktop #detail .view-close { left: 14px; right: auto; top: 14px; width: auto; height: 42px; padding: 0 16px 0 12px; border-radius: 99px; display: inline-flex; gap: 8px; font: inherit; font-size: 14px; font-weight: 800; color: #fff; }
+#detail .view-close svg { width: 18px; height: 18px; }
+html.desktop #detail .view-bin { left: 14px; right: auto; top: 66px; }
+/* details: hide and show from the right edge, next to the panel */
+html.desktop #detail .info-toggle { right: 14px !important; left: auto !important; top: 14px !important; }
+html.desktop #detail.no-info .info-toggle { right: 14px !important; }
+/* the filmstrip's fold: a small tab sitting on top of it */
+.fs-fold { position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 6; width: 44px; height: 24px; padding: 0; display: grid; place-items: center; cursor: pointer;
+  border-radius: 12px 12px 0 0; border: 1px solid rgba(255, 255, 255, .12); border-bottom: 0; background: rgba(14, 8, 12, .62); color: #fff; opacity: .45; transition: opacity .2s, bottom .2s; }
+.fs-fold svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.fs-fold:hover, .filmstrip:hover ~ .fs-fold { opacity: 1; }
+.filmstrip.hidden ~ .fs-fold { display: none; }
+html.strip-folded #detail .filmstrip { display: none; }
+html.strip-folded #detail .fs-fold { bottom: 0; }
+html.vp-fullscreen #detail :is(.filmstrip, .fs-fold) { display: none !important; }
+/* the sidebar's fold button only where the sidebar is */
+html:has(#detail:not(.hidden)) .side-fold, html:has(.dc-view:not(.hidden)) .side-fold, html:has(#collage:not(.hidden)) .side-fold { display: none; }
+
+/* ---------- Videos and Audio: sources as browser tabs over a tinted panel (like Images) ---------- */
+#tab-videos .vd-top { flex-wrap: wrap; }
+#tab-videos .vd-sites:not(.hidden), #tab-audio .au-subs { flex-basis: 100%; display: flex; flex-wrap: nowrap; gap: 0; align-items: flex-end; overflow-x: auto; scrollbar-width: none;
+  padding: 8px 12px 0; margin: 4px 0 0; }
+:is(#tab-videos .vd-site, #tab-audio .au-src) { position: relative; flex: none; min-height: 42px; height: auto; padding: 8px 16px; margin: 0; border: 0 !important; border-radius: 12px 12px 0 0 !important;
+  background: none !important; box-shadow: none !important; color: var(--dim); font-weight: 750; transform: none !important; }
+:is(#tab-videos .vd-site, #tab-audio .au-src) + :is(.vd-site, .au-src):not(.on, :hover) { background: linear-gradient(var(--line), var(--line)) left center / 1px 46% no-repeat !important; }
+:is(#tab-videos .vd-site, #tab-audio .au-src):not(.on):hover { background: color-mix(in srgb, var(--text) 7%, transparent) !important; color: var(--text); }
+:is(#tab-videos .vd-site, #tab-audio .au-src).on { --tab: color-mix(in srgb, var(--accent) 20%, var(--panel)); background: var(--tab) !important; color: var(--text) !important; z-index: 1; }
+:is(#tab-videos .vd-site, #tab-audio .au-src).on::before, :is(#tab-videos .vd-site, #tab-audio .au-src).on::after { content: ""; position: absolute; bottom: 0; width: 12px; height: 12px; pointer-events: none; }
+:is(#tab-videos .vd-site, #tab-audio .au-src).on::before { left: -12px; background: radial-gradient(circle at 0 0, transparent 11.5px, var(--tab) 12px); }
+:is(#tab-videos .vd-site, #tab-audio .au-src).on::after { right: -12px; background: radial-gradient(circle at 100% 0, transparent 11.5px, var(--tab) 12px); }
+.vd-tabicon, #tab-audio .au-conf { padding: 8px 12px !important; }
+.vd-tabicon svg, #tab-audio .au-conf svg { width: 18px; height: 18px; display: block; }
+#tab-videos .vd-search:not(.hidden) { flex-basis: 100%; margin: 0 0 10px; padding: 12px; border-radius: 0 var(--r-l, 18px) var(--r-l, 18px) var(--r-l, 18px); background: color-mix(in srgb, var(--accent) 20%, var(--panel)); }
+#tab-audio .au-findbar { flex-direction: column; align-items: stretch; gap: 0; }
+#tab-audio .au-paste { margin: 0; padding: 12px; border-radius: 0 var(--r-l, 18px) var(--r-l, 18px) var(--r-l, 18px); background: color-mix(in srgb, var(--accent) 20%, var(--panel)); }
+
+/* on a video the filmstrip and its tab sit above the player's controls (94 px) */
+#detail .big:has(#detailVideo:not(.hidden)) .filmstrip { bottom: 104px; }
+#detail .big:has(#detailVideo:not(.hidden)) .fs-fold { bottom: 174px; }
+html.strip-folded #detail .big:has(#detailVideo:not(.hidden)) .fs-fold { bottom: 96px; }

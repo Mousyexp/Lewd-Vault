@@ -196,7 +196,22 @@
   // 5. Full view: filmstrip, and ? for the keyboard shortcuts
   // =====================================================================================
   const strip = make('div', 'filmstrip hidden');
-  document.querySelector('#detail .big').append(strip);
+  // a tab on top of the strip folds it away (arrow down) and brings it back (arrow up); remembered
+  const stripFold = make('button', 'fs-fold'); stripFold.type = 'button';
+  const drawFold = () => {
+    const folded = document.documentElement.classList.contains('strip-folded');
+    stripFold.innerHTML = folded ? '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>' : '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
+    stripFold.title = folded ? 'Show the pictures around this one' : 'Hide the pictures around this one';
+  };
+  try { document.documentElement.classList.toggle('strip-folded', localStorage.getItem('imageVault.stripFolded') === '1'); } catch (e) {}
+  stripFold.onclick = e => {
+    e.stopPropagation();
+    const now = document.documentElement.classList.toggle('strip-folded');
+    try { localStorage.setItem('imageVault.stripFolded', now ? '1' : '0'); } catch (err) {}
+    drawFold();
+  };
+  drawFold();
+  document.querySelector('#detail .big').append(strip, stripFold);
   function drawStrip() {
     // opened from the Library's grid (which gives no list): the tiles shown there, in their order
     let list = detailList;

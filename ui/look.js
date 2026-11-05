@@ -276,7 +276,7 @@
   document.head.append(sideRule);
   let side = (() => { try { return JSON.parse(localStorage.getItem(SIDE_KEY)) || {}; } catch (e) { return {}; } })();
   function applySide() {
-    const width = Math.max(200, Math.min(400, side.width || 268));
+    const width = Math.max(200, Math.min(400, side.width || 240)); // (240 by default: 10% narrower than it was)
     html.classList.toggle('side-compact', !!side.compact);
     // only for wide windows: narrow ones keep their column of icons
     sideRule.textContent = `@media (min-width: 901px) { html.desktop { --side: ${side.compact ? 76 : width}px; } }`;

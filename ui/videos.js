@@ -442,9 +442,10 @@
       b.onclick = () => { site = id; try { localStorage.setItem('imageVault.videoSite', id); } catch (e) {} input.value = ''; draw(); };
       return b;
     }));
-    const own = make('button', 'vd-site vd-site-add', '＋ Your own site'); own.title = 'Any other site with videos: give its addresses and the app reads it';
+    // like a browser's new-tab button: + adds your own site; the gear customises the row
+    const own = make('button', 'vd-site vd-site-add vd-tabicon', '＋'); own.title = 'Add your own site: any other site with videos (give its addresses and the app reads it)';
     own.onclick = () => editOwnSite(null);
-    const tune = make('button', 'vd-site vd-site-add', '⚙ Customise'); tune.title = 'Which sites, in what order, your own rows, card size';
+    const tune = make('button', 'vd-site vd-site-add vd-tabicon'); tune.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>'; tune.title = 'Customise: which sites, in what order, your own rows, card size';
     tune.onclick = () => customise();
     box.append(own, tune);
   }

@@ -349,15 +349,21 @@
     if (!acfg) return loadOwn().then(drawFind, () => { acfg = { sites: [], audio: { order: [], hidden: [] } }; drawFind(); });
     const P = findPrefs();
     if (!FIND[P.source]) P.source = shownFind()[0] || 'reddit';
-    // the sources stay out of the way: one button shows the current one and opens the picker
-    const cur = FIND[P.source], pickBtn = make('button', 'au-src on');
-    const im = make('img'); im.alt = ''; im.src = cur.icon; im.onerror = () => im.remove();
-    pickBtn.append(im, make('span', '', cur.name));
-    if (P.source === 'reddit') pickBtn.append(make('small', 'au-src-sub', 'r/' + P.sub));
-    pickBtn.title = cur.line;
-    const conf = make('button', 'au-src au-src-add', '⚙ Configure sources'); conf.title = 'Choose where to look for audio';
-    pickBtn.onclick = conf.onclick = () => pickSource();
-    q('.au-subs').replaceChildren(pickBtn, conf);
+    // the sources as browser tabs (like Images and Videos); the gear opens Configure sources
+    q('.au-subs').replaceChildren(...shownFind().map(id => {
+      const s = FIND[id], b = make('button', 'au-src' + (id === P.source ? ' on' : ''));
+      const im = make('img'); im.alt = ''; im.src = s.icon; im.onerror = () => im.remove();
+      b.append(im, make('span', '', s.name));
+      if (id === 'reddit') b.append(make('small', 'au-src-sub', 'r/' + P.sub));
+      b.title = s.line;
+      b.onclick = () => { if (P.source === id) return; P.source = id; save(); found = []; findPage = 1; findDone = false; drawFind(); };
+      return b;
+    }));
+    const conf = make('button', 'au-src au-src-add au-conf'); conf.type = 'button';
+    conf.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>';
+    conf.title = 'Configure sources: add your own site, choose which show, their order';
+    conf.onclick = () => pickSource();
+    q('.au-subs').append(conf);
     pasteInput.placeholder = { reddit: `Search r/${P.sub}, or paste a soundgasm link`, soundgasm: 'A performer\'s soundgasm name, or paste a link', audiodesires: 'Search these stories, or paste a link',
       classics: 'Search the classics (Fanny Hill, Venus in Furs…)', freesound: 'Search sounds: moan, breathing, whisper…' }[P.source] || `Search ${FIND[P.source].name}…`;
     drawRail();

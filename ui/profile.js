@@ -391,6 +391,34 @@
     if (moving && it.previewId) { const v = make('video', cls); Object.assign(v, { muted: true, loop: true, autoplay: true, playsInline: true, src: vaultUrl(it.previewId) }); return v; }
     const im = make('img', cls); im.src = thumbSrc(it, 960); im.alt = ''; return im;
   }
+  // your time looking, minutes per day over the last 60 days: a line with a soft fill, the day on hover
+  function timeGraph() {
+    const N = 60, vals = [], labels = [];
+    for (let k = N - 1; k >= 0; k--) { const d = new Date(); d.setDate(d.getDate() - k); vals.push(((daily[dayKey(d)] || {}).secs || 0) / 60); labels.push(d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })); }
+    const W = 600, H = 120, max = Math.max(10, ...vals), x = k => k / (N - 1) * W, y = v => H - 6 - v / max * (H - 16);
+    const pts = vals.map((v, k) => `${x(k).toFixed(1)},${y(v).toFixed(1)}`);
+    const wrap = make('div', 'pf-graph');
+    wrap.append(make('span', 'pf-ov-label', 'Minutes a day · last 60 days'));
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H + 16}`); svg.setAttribute('preserveAspectRatio', 'none'); svg.classList.add('pf-graph-svg');
+    svg.innerHTML = `<defs><linearGradient id="pfFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".35"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
+      <line class="pf-axis" x1="0" x2="${W}" y1="${H - 6}" y2="${H - 6}"/>
+      <path class="pf-graph-fill" d="M0,${H - 6} L${pts.join(' L')} L${W},${H - 6} Z" fill="url(#pfFill)"/>
+      <polyline class="pf-graph-line" points="${pts.join(' ')}"/>
+      <circle class="pf-graph-end" cx="${x(N - 1)}" cy="${y(vals[N - 1])}" r="4"/>
+      <text class="pf-label" x="0" y="${H + 12}">${labels[0]}</text><text class="pf-label" x="${W}" y="${H + 12}" text-anchor="end">Today</text>`;
+    // hover: the nearest day
+    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle'); dot.setAttribute('r', '4'); dot.setAttribute('class', 'pf-graph-dot'); dot.style.display = 'none';
+    svg.append(dot);
+    svg.addEventListener('pointermove', e => {
+      const r = svg.getBoundingClientRect(), k = Math.max(0, Math.min(N - 1, Math.round((e.clientX - r.left) / r.width * (N - 1))));
+      dot.setAttribute('cx', x(k)); dot.setAttribute('cy', y(vals[k])); dot.style.display = '';
+      showTip(e, `${labels[k]}: ${vals[k] < 1 ? 'not used' : Math.round(vals[k]) + ' min'}`);
+    });
+    svg.addEventListener('pointerleave', () => { dot.style.display = 'none'; hideTip(); });
+    wrap.append(svg);
+    return wrap;
+  }
   function drawProfile() {
     const S = statsNow(), xp = xpOf(S), L = levelOf(xp);
     const lib = library || [], byId = id => lib.find(i => i.id === id);
@@ -436,13 +464,38 @@
     lvl.append(ring, xpText);
     names.append(name, title, lvl);
     who.append(av, names);
-    // stats
-    const tiles = make('div', 'pf-tiles');
-    const t = (k, v) => { const d = make('div', 'pf-tile'); d.append(make('span', '', k), make('b', '', v)); tiles.append(d); };
-    t('Items', fmtN(S.items)); t('Time looking', fmtLen(S.look)); t('Time in the app', fmtLen(S.appTime)); t('Longest session', fmtLen(S.longest));
-    t('Streak', `${S.streak} ${S.streak === 1 ? 'day' : 'days'} (best ${S.bestStreak})`); t('Appreciations', fmtN(S.likes)); t('Favourite', S.favourite || '–'); t('Slideshows', fmtLen(S.showSecs));
-    // badges
+    // the overview: headline numbers and your time as a graph on the left, every number as a list on the right
     const got = BADGES.filter(b => profile.unlocked[b.id]).length;
+    const ov = make('section', 'pf-overview');
+    const main = make('div', 'pf-ov-main');
+    const heads = make('div', 'pf-ov-heads');
+    for (const [k, v] of [['Time looking', fmtLen(S.look)], ['Items', fmtN(S.items)], ['Streak', `${S.streak} ${S.streak === 1 ? 'day' : 'days'}`]]) {
+      const h = make('div', 'pf-ov-head'); h.append(make('span', '', k), make('b', '', v)); heads.append(h);
+    }
+    main.append(heads, timeGraph());
+    // the three best badges you have (the later ones in the list are the harder ones), the rest folded below
+    const earned = BADGES.map((b, k) => ({ b, k, on: profile.unlocked[b.id] })).filter(x => x.on).sort((a, c) => c.k - a.k).slice(0, 3);
+    const top = make('div', 'pf-topbadges');
+    top.append(make('span', 'pf-ov-label', 'Best badges'));
+    if (!earned.length) top.append(make('span', 'pf-topbadge-none', 'None yet: keep going!'));
+    for (const { b, on } of earned) {
+      const c = make('div', 'pf-topbadge'); c.title = `${b.desc} · earned ${new Date(on).toLocaleDateString()}`;
+      const ico = make('span', 'pf-badge-ico'); ico.innerHTML = badgeArt(b.id, true);
+      c.append(ico, make('b', '', b.name));
+      top.append(c);
+    }
+    main.append(top);
+    const list = make('dl', 'pf-ov-list');
+    const row = (k, v) => { list.append(make('dt', '', k), make('dd', '', v)); };
+    row('Items', fmtN(S.items)); row('Time looking', fmtLen(S.look)); row('Time in the app', fmtLen(S.appTime)); row('Longest session', fmtLen(S.longest));
+    row('Streak', `${S.streak} ${S.streak === 1 ? 'day' : 'days'} (best ${S.bestStreak})`); row('Appreciations', fmtN(S.likes)); row('Favourite', S.favourite || '–');
+    row('Slideshows', fmtLen(S.showSecs)); row('Badges', `${got} of ${BADGES.length}`); row('XP', fmtN(xp));
+    ov.append(main, list);
+    // every badge, folded away (it remembers if you left it open)
+    const all = make('details', 'pf-allbadges');
+    try { all.open = localStorage.getItem('imageVault.fold.badges') === '1'; } catch (e) {}
+    all.addEventListener('toggle', () => { try { localStorage.setItem('imageVault.fold.badges', all.open ? '1' : '0'); } catch (e) {} });
+    all.append(make('summary', '', `All badges · ${got} of ${BADGES.length}`));
     const badges = make('div', 'pf-badges');
     for (const b of BADGES) {
       const on = profile.unlocked[b.id], p = Math.min(1, b.test(S));
@@ -453,7 +506,8 @@
       else c.title = 'Earned ' + new Date(on).toLocaleDateString();
       badges.append(c);
     }
-    tab.append(banner, who, road(L.level, L), tiles, make('h3', 'pf-h', `Badges · ${got} of ${BADGES.length}`), badges);
+    all.append(badges);
+    tab.append(banner, who, ov, road(L.level, L), all);
     if (window.vaultShare) window.vaultShare.section(tab, { name: profile.name || 'My vault', level: L.level, title: profile.title, avatarId: profile.avatarId });
   }
   function chooseBanner(level) {

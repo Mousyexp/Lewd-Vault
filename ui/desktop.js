@@ -539,7 +539,8 @@
   $('dTrash').textContent = 'Delete';
   const bigClose = make('button', 'view-close');
   bigClose.type = 'button'; bigClose.title = 'Close (Esc)';
-  bigClose.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  // the one close button of the full view (top left, a cross and the word); the panel's own Close is hidden
+  bigClose.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg><span>Close</span>';
   bigClose.onclick = () => closeDetail();
   const bigBin = make('button', 'view-bin');
   bigBin.type = 'button'; bigBin.title = 'Delete (Del)';

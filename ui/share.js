@@ -111,16 +111,25 @@
       } catch (e) { if (!/Cancelled/.test(String(e))) toast(String(e), 'err'); }
       go.disabled = false; go.textContent = 'Save the pack…';
     };
-    if (!sel.options.length) mk.append(make('p', 'sh-sub', 'Add something to your vault first.'));
-    else mk.append(sel, title, preview, go);
-    // open a pack
-    const op = make('div', 'sh-card');
-    const openBtn = make('button', 'btn primary', 'Open a pack…');
+    // one panel: the header holds both ways to share (making a pack is the panel itself; a friend's
+    // pack comes in through the button on the right), the form on the left, the pack's card on the right
+    const openBtn = make('button', 'btn sh-import');
+    openBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>Open a friend\'s pack…</span>';
+    openBtn.title = 'See what\'s in a pack, then add it all to your vault with its tags and sources';
     openBtn.onclick = openPack;
-    op.append(make('h4', '', 'Open a friend\'s pack'), make('p', 'sh-sub', 'See what\'s in it, then add it all to your vault with its tags and sources.'), openBtn,
-      make('p', 'sh-note', 'A shared online space (accounts, a feed, likes) would need a server, sign-ups and age checks, so packs are the way to share for now.'));
-    grid.append(mk, op);
-    box.append(grid);
+    const head = make('div', 'sh-head');
+    head.append(make('h3', 'pf-h', 'Share packs'), openBtn);
+    box.replaceChildren(head);
+    mk.classList.add('sh-panel');
+    mk.replaceChildren();
+    if (!sel.options.length) mk.append(make('p', 'sh-sub', 'Add something to your vault first, then pack it up here.'));
+    else {
+      const form = make('div', 'sh-form');
+      form.append(make('h4', '', 'Make a pack'), make('p', 'sh-sub', 'One .zip with the files, their tags, scores and sources, and a card like the one on the right, to give to a friend however you like.'), sel, title, go);
+      mk.append(form, preview);
+    }
+    box.append(mk, make('p', 'sh-note', 'Packs are the way to share for now: a shared online space would need a server, sign-ups and age checks.'));
+    void grid;
     tab.append(box);
     if (sel.options.length) redraw();
   }
