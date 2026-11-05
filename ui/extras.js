@@ -103,21 +103,41 @@
     walk(settingsTab);
     return out;
   }
+  // each section folds behind its heading (Theme open at first; what you open or close is remembered);
+  // a search shows every match whatever is folded
+  const ACC_KEY = 'imageVault.settingsOpen';
+  let opened = null;
+  try { opened = new Set(JSON.parse(localStorage.getItem(ACC_KEY))); } catch (e) {}
+  if (!opened || !localStorage.getItem(ACC_KEY)) opened = new Set(['Theme']);
+  const keepOpened = () => { try { localStorage.setItem(ACC_KEY, JSON.stringify([...opened])); } catch (e) {} };
+  const headName = h => h.textContent.trim();
   function applyFind() {
     const q = findInput.value.trim().toLowerCase();
-    let head = null, headText = '', shownInSection = 0;
+    let head = null, headText = '', shownInSection = 0, open = true;
     const heads = [];
     const finish = () => { if (head) head.classList.toggle('st-hide', !!q && !shownInSection); };
     for (const n of blocks()) {
-      if (n.tagName === 'H3') { finish(); head = n; headText = n.textContent.toLowerCase(); shownInSection = 0; heads.push(n); continue; }
-      const hit = !q || headText.includes(q) || n.textContent.toLowerCase().includes(q);
+      if (n.tagName === 'H3') {
+        finish(); head = n; headText = n.textContent.toLowerCase(); shownInSection = 0; heads.push(n);
+        open = opened.has(headName(n));
+        n.classList.add('st-acc'); n.classList.toggle('st-closed', !open && !q);
+        n.tabIndex = 0; n.setAttribute('role', 'button'); n.setAttribute('aria-expanded', String(open || !!q));
+        if (!n.dataset.acc) {
+          n.dataset.acc = '1';
+          const flip = () => { const k = headName(n); opened.has(k) ? opened.delete(k) : opened.add(k); keepOpened(); applyFind(); };
+          n.addEventListener('click', flip);
+          n.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); } });
+        }
+        continue;
+      }
+      const hit = q ? headText.includes(q) || n.textContent.toLowerCase().includes(q) : open;
       n.classList.toggle('st-hide', !hit);
       if (hit) shownInSection++;
     }
     finish();
     index.replaceChildren(...heads.filter(h => !h.classList.contains('st-hide')).map(h => {
       const b = make('button', 'st-jump', h.textContent); b.type = 'button';
-      b.onclick = () => h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      b.onclick = () => { opened.add(headName(h)); keepOpened(); applyFind(); h.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
       return b;
     }));
   }

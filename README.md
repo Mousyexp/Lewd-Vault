@@ -8,6 +8,7 @@ Lewd Vault is a cute, fast Windows app for collecting, tagging and enjoying your
 
 ## ✨ Why you'll love it
 
+- 🧘 **Calm by default.** The everyday stuff is big and up front; extra options fold away next to where you use them and remember how you left them.
 - 🗂️ **A Library that just works.** Big, buttery-smooth grid with preview clips, collections, ratings and a "For you" order.
 - 🏷️ **Booru-style tags.** `artist:`, `character:`, `series:`… with suggestions and lightning-fast tag search.
 - 🔍 **Browser.** One big tile for 🖼️ Images, 🎬 Videos and 🎧 Audio. Browse your favourite sites in browser-style tabs right inside the app, resize the tiles, and save with one click. You can even add your own sites!

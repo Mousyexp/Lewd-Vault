@@ -775,6 +775,7 @@
   }
 
   // ---------- the page ----------
+  const DC_ICON = {"star": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8L3.5 9.7l5.9-.8z"/></svg>', "eye": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c5.5 0 9 7 9 7a16 16 0 0 1-3 3.8M6.6 6.6C4.2 8.2 3 12 3 12s3.5 7 9 7c1.7 0 3.2-.5 4.4-1.2M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>', "gear": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>', "info": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>'};
   const navBtn = make('button');
   navBtn.dataset.tab = 'discover';
   const navLogo = make('img', 'nt-logo');
@@ -840,7 +841,7 @@
     <div class="dc-searchrow">
       <button class="dc-subpill hidden" type="button" title="Pick a community"></button>
       <div class="searchbar dc-search"><span class="search-icon"></span><input type="search" spellcheck="false" autocomplete="off"><div class="dc-sugg hidden"></div></div>
-      <button class="dc-markbtn" type="button" title="Keep this search as a bookmark">☆ Bookmark</button>
+      <button class="dc-markbtn dc-icon" type="button" title="Keep this search as a bookmark" aria-label="Bookmark this search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8L3.5 9.7l5.9-.8z"/></svg></button>
     </div>
     <div class="dc-lens"><div class="dc-views"></div><div class="dc-spans"></div><div class="dc-ratings"></div><div class="dc-size"></div><div class="dc-lens-end"></div></div>
     <div class="dc-rail"></div>
@@ -1116,10 +1117,18 @@
       const tune = make('button', 'dc-ext dc-tune', '⚙ Customise'); tune.type = 'button';
       tune.title = `Your own categories, the tile size and more for ${src.kind === 'reddit' ? 'Reddit' : src.name}`;
       tune.onclick = () => customise(src);
-      const hide = make('button', 'dc-ext dc-hidesaved' + (cfg.hideSaved ? ' on' : ''), (cfg.hideSaved ? '✓ ' : '') + 'Hide saved'); hide.type = 'button';
-      hide.title = 'Hide what\'s already in your vault';
+      const hide = make('button', 'dc-ext dc-icon dc-hidesaved' + (cfg.hideSaved ? ' on' : '')); hide.type = 'button';
+      hide.innerHTML = DC_ICON.eye;
+      hide.title = cfg.hideSaved ? 'Showing only what you don\'t have yet (click to show everything)' : 'Hide what\'s already in your vault';
+      hide.setAttribute('aria-pressed', String(!!cfg.hideSaved));
       hide.onclick = () => { cfg.hideSaved = !cfg.hideSaved; saveConfig(); drawViews(src); drawGrid(); };
-      end.append(hide, tune);
+      tune.classList.add('dc-icon'); tune.innerHTML = DC_ICON.gear; tune.setAttribute('aria-label', 'Customise');
+      // the site's description and notes (the banner) folded away behind (i)
+      const info = make('button', 'dc-ext dc-icon dc-infobtn' + (cfg.showMast ? ' on' : '')); info.type = 'button';
+      info.innerHTML = DC_ICON.info; info.title = (siteOf(src).line || src.help || 'About this site') + ' · click to show or hide the details';
+      info.onclick = () => { cfg.showMast = !cfg.showMast; saveConfig(); tab.classList.toggle('dc-mast-open', !!cfg.showMast); info.classList.toggle('on', !!cfg.showMast); };
+      tab.classList.toggle('dc-mast-open', !!cfg.showMast);
+      end.append(info, hide, tune);
     }
     if (src && src.kind === 'bing') {
       // Google's and DuckDuckGo's image searches no longer let apps in: they open in your browser
