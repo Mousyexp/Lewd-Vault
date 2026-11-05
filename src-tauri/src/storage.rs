@@ -21,6 +21,23 @@ const LOCAL_FOLDER: &str = "Image Vault data";
 pub(crate) fn exe_dir() -> PathBuf {
     std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default()
 }
+/// Can this app write next to itself? Not when installed (Program Files): then the vault and the
+/// setting live in the user's own folders instead.
+pub(crate) fn exe_dir_writable() -> bool {
+    let probe = exe_dir().join(format!(".lewd-vault-probe-{}", std::process::id()));
+    let ok = fs::write(&probe, b"").is_ok();
+    let _ = fs::remove_file(&probe);
+    ok
+}
+/// Where "This PC" keeps the vault: next to the app (portable), else Documents\Image Vault data.
+fn local_home() -> PathBuf {
+    if exe_dir_writable() {
+        return exe_dir();
+    }
+    env_path("USERPROFILE").map(|u| u.join("Documents")).filter(|d| d.is_dir())
+        .or_else(|| env_path("LOCALAPPDATA"))
+        .unwrap_or_else(exe_dir)
+}
 fn env_path(key: &str) -> Option<PathBuf> {
     std::env::var_os(key).map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
 }
@@ -52,7 +69,7 @@ pub fn start() -> Start {
             return Start { root, first_run: false };
         }
     }
-    Start { root: exe_dir().join(LOCAL_FOLDER), first_run: true }
+    Start { root: local_home().join(LOCAL_FOLDER), first_run: true }
 }
 
 fn save_config(root: &Path) -> Res<()> {
@@ -137,13 +154,13 @@ fn option(id: &str, name: &str, base: Option<PathBuf>, folder: Option<PathBuf>, 
 
 /// The places the welcome screen offers, with what's already there.
 pub fn options(current: &Path) -> Value {
-    let local = exe_dir().join(LOCAL_FOLDER);
+    let local = local_home().join(LOCAL_FOLDER);
     let mut list = vec![
         option("gdrive", "Google Drive", google_drive(), None, current),
         option("onedrive", "OneDrive", onedrive(), None, current),
         option("dropbox", "Dropbox", dropbox(), None, current),
         option("icloud", "iCloud Drive", icloud(), None, current),
-        option("local", "This PC", Some(exe_dir()), Some(local.clone()), current),
+        option("local", "This PC", Some(local_home()), Some(local.clone()), current),
     ];
     // a folder chosen earlier that's none of these
     if !list.iter().any(|o| o["current"] == json!(true)) {

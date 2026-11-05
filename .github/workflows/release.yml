@@ -1,8 +1,11 @@
-# Checks every push, and builds the Windows app for every version tag (v0.2.0, v0.3.0 …), attaching
-# it to a GitHub Release as Lewd-Vault.exe. The app's "Check for updates" reads that release.
+# Checks every push, and for every version tag (v1.0.0, v1.1.0 …) builds the Windows app and publishes
+# a GitHub Release named "Lewd Vault <version>" with two downloads:
+#   Lewd Vault.msi            the installer (Program Files, Start menu, uninstall from Settings)
+#   Lewd Vault Portable.zip   the app in a folder, to run from anywhere (a USB stick works too)
+# (GitHub writes spaces in file names as dots.) The app's own "Check for updates" reads that release.
 #
 # To release: bump the version in package.json, src-tauri/Cargo.toml and src-tauri/tauri.conf.json,
-# then push a tag:  git tag v0.2.0  &&  git push origin v0.2.0
+# then push a tag:  git tag v1.1.0  &&  git push origin v1.1.0
 name: Build
 
 on:
@@ -42,11 +45,40 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
-      - run: npm run build
-      - name: Name the app
+      # one build gives both: the app (named "Lewd Vault.exe") and its installer
+      - run: npm run installer
+      - name: Package the installer and the portable zip
+        id: pack
         shell: pwsh
-        run: Copy-Item src-tauri/target/release/image-vault.exe Lewd-Vault.exe
+        run: |
+          $msi = Get-ChildItem src-tauri/target/release/bundle/msi/*.msi | Select-Object -First 1
+          Copy-Item $msi.FullName 'Lewd Vault.msi'
+          New-Item -ItemType Directory 'Lewd Vault Portable' | Out-Null
+          Copy-Item 'src-tauri/target/release/Lewd Vault.exe' 'Lewd Vault Portable/Lewd Vault.exe'
+          Compress-Archive -Path 'Lewd Vault Portable' -DestinationPath 'Lewd Vault Portable.zip'
+          # "v1.0.0" is named "Lewd Vault 1.0", "v1.2.3" "Lewd Vault 1.2.3"
+          $v = '${{ github.ref_name }}'.TrimStart('v')
+          if ($v -match '^\d+\.\d+\.0$') { $v = $v.Substring(0, $v.Length - 2) }
+          "name=Lewd Vault $v" >> $env:GITHUB_OUTPUT
       - uses: softprops/action-gh-release@v2
         with:
-          files: Lewd-Vault.exe
+          name: ${{ steps.pack.outputs.name }}
+          files: |
+            Lewd Vault.msi
+            Lewd Vault Portable.zip
           generate_release_notes: true
+          body: |
+            **Two ways to get it:**
+            - **Lewd.Vault.msi**: the installer. It puts Lewd Vault in Program Files with a Start menu entry; your vault goes in Documents\Image Vault data (or wherever you choose).
+            - **Lewd.Vault.Portable.zip**: unzip it anywhere (a USB stick works too) and run Lewd Vault.exe. Your vault sits next to it.
+
+            Both update themselves from Settings → Updates.
+      # the 1.0 release replaces the earlier test release (one time only)
+      - name: Remove the earlier releases and tags
+        if: github.ref_name == 'v1.0.0'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete v0.2.0 --yes --cleanup-tag --repo ${{ github.repository }}
+          if ($LASTEXITCODE -ne 0) { Write-Host 'v0.2.0 was already gone'; $global:LASTEXITCODE = 0 }

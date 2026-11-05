@@ -162,7 +162,15 @@ pub fn health_fix(vault: &Vault, what: &str) -> Res<Value> {
 
 // ---------- updates ----------
 const RELEASES: &str = "https://api.github.com/repos/Mousyexp/Lewd-Vault/releases/latest";
-const ASSET: &str = "Lewd-Vault.exe";
+// the release's files (GitHub writes spaces in file names as dots): the portable app as a zip, and the
+// installer. A portable copy updates from the zip (its exe swapped in); an installed one (it can't write
+// next to itself) runs the new installer.
+fn pick_asset(rel: &Value, installed: bool) -> String {
+    let assets = rel["assets"].as_array().cloned().unwrap_or_default();
+    let want = |name: &str| if installed { name.ends_with(".msi") } else { name.contains("Portable") && name.ends_with(".zip") };
+    assets.iter().find(|a| a["name"].as_str().map(want).unwrap_or(false))
+        .and_then(|a| a["browser_download_url"].as_str()).unwrap_or("").to_string()
+}
 
 fn version_parts(v: &str) -> Vec<u64> {
     v.trim_start_matches('v').split(|c: char| !c.is_ascii_digit()).filter(|s| !s.is_empty()).filter_map(|s| s.parse().ok()).collect()
@@ -179,10 +187,11 @@ pub fn update_check() -> Res<Value> {
     })?;
     let rel: Value = serde_json::from_str(&r.into_string().map_err(err)?).map_err(err)?;
     let tag = rel["tag_name"].as_str().unwrap_or("").to_string();
-    let url = rel["assets"].as_array().and_then(|a| a.iter().find(|x| x["name"] == ASSET)).and_then(|x| x["browser_download_url"].as_str()).unwrap_or("").to_string();
+    let installed = !storage::exe_dir_writable();
+    let url = pick_asset(&rel, installed);
     let current = env!("CARGO_PKG_VERSION");
     let newer = version_parts(&tag) > version_parts(current);
-    Ok(json!({ "current": current, "latest": tag, "newer": newer && !url.is_empty(), "notes": rel["body"], "url": url, "page": rel["html_url"] }))
+    Ok(json!({ "current": current, "latest": tag, "newer": newer && !url.is_empty(), "notes": rel["body"], "url": url, "page": rel["html_url"], "installed": installed }))
 }
 
 fn update_state() -> &'static Mutex<Value> {
@@ -192,6 +201,23 @@ fn update_state() -> &'static Mutex<Value> {
 
 fn new_exe() -> PathBuf {
     storage::exe_dir().join("Lewd Vault.new.exe")
+}
+fn new_msi() -> PathBuf {
+    std::env::temp_dir().join("Lewd Vault update.msi")
+}
+
+/// The app out of the portable zip: its one .exe.
+pub(crate) fn exe_from_zip(zip_path: &Path, to: &Path) -> Res<()> {
+    let mut z = zip::ZipArchive::new(fs::File::open(zip_path).map_err(err)?).map_err(err)?;
+    for k in 0..z.len() {
+        let mut f = z.by_index(k).map_err(err)?;
+        if f.is_file() && f.name().to_ascii_lowercase().ends_with(".exe") {
+            let mut out = fs::File::create(to).map_err(err)?;
+            std::io::copy(&mut f, &mut out).map_err(|e| format!("Couldn't unpack the update: {e}"))?;
+            return Ok(());
+        }
+    }
+    Err("The update has no app in it.".into())
 }
 
 pub fn update_download(url: &str) -> Res<Value> {
@@ -206,7 +232,8 @@ pub fn update_download(url: &str) -> Res<Value> {
             let r = agent().get(&url).timeout(Duration::from_secs(600)).call().map_err(err)?;
             let total = r.header("content-length").and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
             update_state().lock().unwrap()["total"] = json!(total);
-            let part = new_exe().with_extension("part");
+            let is_msi = url.ends_with(".msi");
+            let part = if is_msi { new_msi().with_extension("part") } else { new_exe().with_extension("part") };
             let mut out = fs::File::create(&part).map_err(err)?;
             let mut reader = r.into_reader();
             let mut buf = vec![0u8; 256 * 1024];
@@ -221,14 +248,33 @@ pub fn update_download(url: &str) -> Res<Value> {
                 update_state().lock().unwrap()["done"] = json!(done);
             }
             drop(out);
-            // a Windows program starts with "MZ": anything else (an error page) is refused
-            let mut head = [0u8; 2];
-            std::io::Read::read_exact(&mut fs::File::open(&part).map_err(err)?, &mut head).map_err(err)?;
-            if &head != b"MZ" || done < 1_000_000 {
+            if done < 1_000_000 {
                 let _ = fs::remove_file(&part);
-                return Err("The download wasn't the app.".into());
+                return Err("The download was too small to be the app.".into());
             }
-            fs::rename(&part, new_exe()).map_err(err)?;
+            if is_msi {
+                // an installer starts with the Windows "compound file" signature
+                let mut head = [0u8; 8];
+                std::io::Read::read_exact(&mut fs::File::open(&part).map_err(err)?, &mut head).map_err(err)?;
+                if head != [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1] {
+                    let _ = fs::remove_file(&part);
+                    return Err("The download wasn't the installer.".into());
+                }
+                let _ = fs::remove_file(new_msi());
+                fs::rename(&part, new_msi()).map_err(err)?;
+            } else {
+                // the zip's app; a Windows program starts with "MZ"
+                let exe = new_exe();
+                let result = exe_from_zip(&part, &exe);
+                let _ = fs::remove_file(&part);
+                result?;
+                let mut head = [0u8; 2];
+                std::io::Read::read_exact(&mut fs::File::open(&exe).map_err(err)?, &mut head).map_err(err)?;
+                if &head != b"MZ" {
+                    let _ = fs::remove_file(&exe);
+                    return Err("The update wasn't the app.".into());
+                }
+            }
             Ok(())
         })();
         *update_state().lock().unwrap() = match result {
@@ -246,23 +292,19 @@ pub fn update_progress() -> Value {
 // swaps the downloaded app in once this one has closed, then starts it again
 #[tauri::command]
 pub fn install_update(app: tauri::AppHandle) -> Res<()> {
-    let new = new_exe();
-    if !new.exists() {
-        return Err("The update hasn't been downloaded.".into());
-    }
     let exe = std::env::current_exe().map_err(err)?;
     let pid = std::process::id();
+    let wait = format!(":wait\r\ntasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n");
+    let body = if new_msi().exists() {
+        // installed: the new installer runs (it asks Windows for permission), then the app starts again
+        format!("start \"\" /wait msiexec /i \"{}\" /passive /norestart\r\ndel \"{}\"\r\nstart \"\" \"{}\"\r\n", new_msi().display(), new_msi().display(), exe.display())
+    } else if new_exe().exists() {
+        format!("move /Y \"{}\" \"{}\" >nul\r\nstart \"\" \"{}\"\r\n", new_exe().display(), exe.display(), exe.display())
+    } else {
+        return Err("The update hasn't been downloaded.".into());
+    };
     let script = std::env::temp_dir().join("lewd-vault-update.cmd");
-    fs::write(
-        &script,
-        format!(
-            "@echo off\r\n:wait\r\ntasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\nmove /Y \"{}\" \"{}\" >nul\r\nstart \"\" \"{}\"\r\ndel \"%~f0\"\r\n",
-            new.display(),
-            exe.display(),
-            exe.display()
-        ),
-    )
-    .map_err(err)?;
+    fs::write(&script, format!("@echo off\r\n{wait}{body}del \"%~f0\"\r\n")).map_err(err)?;
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

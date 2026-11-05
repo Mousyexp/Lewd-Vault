@@ -38,9 +38,12 @@ Lewd Vault is a cute, fast Windows app for collecting, tagging and enjoying your
 
 ## 🚀 Get started
 
-1. 🛠️ Build it (see below).
-2. 🖱️ Double-click `dist\Image Vault\Lewd Vault.exe`.
-3. 📁 Pick where your vault should live, and start adding! 🎉
+Grab **[Lewd Vault 1.0](https://github.com/Mousyexp/Lewd-Vault/releases/latest)** from Releases:
+
+- 💿 **Lewd.Vault.msi**: the installer. Start menu entry, uninstall from Windows Settings.
+- 🎒 **Lewd.Vault.Portable.zip**: unzip anywhere (a USB stick works too) and run `Lewd Vault.exe`.
+
+Then pick where your vault should live, and start adding! 🎉 Both update themselves from Settings → Updates.
 
 You need WebView2, which Windows 10 and 11 already have. 👍
 

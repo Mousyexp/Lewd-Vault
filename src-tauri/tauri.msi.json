@@ -1,0 +1,8 @@
+{
+  "mainBinaryName": "Lewd Vault",
+  "bundle": {
+    "active": true,
+    "targets": ["msi"],
+    "windows": { "wix": { "language": "en-US" } }
+  }
+}

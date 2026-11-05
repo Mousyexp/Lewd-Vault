@@ -1,6 +1,6 @@
 [package]
 name = "image-vault"
-version = "0.2.0"
+version = "1.0.0"
 description = "Image Vault, as a portable desktop app over a local folder"
 edition = "2021"
 
@@ -20,7 +20,7 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
 rust_xlsxwriter = "0.100"
-zip = { version = "2", default-features = false }
+zip = { version = "2", default-features = false, features = ["deflate"] } # (deflate: to read the portable zip an update comes in)
 ureq = "2"
 image = { version = "0.25", default-features = false, features = ["webp", "jpeg", "png", "gif"] }
 
