@@ -2375,3 +2375,58 @@ audio.st-media { width: 100%; background: none; }
 .dc-size-ico.l { font-size: 20px; }
 .dc-head .dc-lens { max-height: 200px; overflow: visible; }
 .dc-head.compact .dc-lens { max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; overflow: hidden; }
+
+/* Discover's sources as browser tabs: the chosen one is a notch joined to the site's header below it */
+#tab-discover .dc-bar { align-items: flex-end; padding-bottom: 0; gap: 10px; }
+#tab-discover .dc-history, #tab-discover .dc-manage { margin-bottom: 8px; }
+html.desktop #tab-discover .dc-sources { gap: 0; align-items: flex-end; padding: 8px 12px 0; scrollbar-width: none; overflow-y: hidden; }
+html.desktop #tab-discover .dc-sources::-webkit-scrollbar { display: none; }
+html.desktop #tab-discover .dc-src { position: relative; min-height: 42px; padding: 8px 18px; margin: 0; border: 0; border-radius: 12px 12px 0 0; background: none; box-shadow: none;
+  color: var(--dim); font-size: 14px; font-weight: 750; transform: none; }
+html.desktop #tab-discover .dc-src:active { transform: none; }
+/* thin dividers between tabs, gone next to the chosen or hovered one */
+html.desktop #tab-discover .dc-src + .dc-src:not(.on, :hover) { background: linear-gradient(var(--line), var(--line)) left center / 1px 46% no-repeat; }
+html.desktop #tab-discover .dc-src:is(.on, :hover) + .dc-src { background: none; }
+html.desktop #tab-discover .dc-src:not(.on):hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+html.desktop #tab-discover .dc-src.on { --tab: color-mix(in srgb, var(--src) 20%, var(--panel)); background: var(--tab); color: var(--text); z-index: 1; animation: none; }
+/* the chosen tab's little curved feet, so it flows into the header */
+html.desktop #tab-discover .dc-src.on::before, html.desktop #tab-discover .dc-src.on::after { content: ""; position: absolute; bottom: 0; width: 12px; height: 12px; pointer-events: none; }
+html.desktop #tab-discover .dc-src.on::before { left: -12px; background: radial-gradient(circle at 0 0, transparent 11.5px, var(--tab) 12px); }
+html.desktop #tab-discover .dc-src.on::after { right: -12px; background: radial-gradient(circle at 100% 0, transparent 11.5px, var(--tab) 12px); }
+html.desktop #tab-discover .dc-src.locked::after { content: " \1F511"; position: static; width: auto; height: auto; background: none; }
+/* the header the chosen tab opens onto: the same flat colour, no outline */
+#tab-discover .dc-mast { margin-top: 0; border: 0; background: color-mix(in srgb, var(--src) 20%, var(--panel)); min-height: 44px; }
+#tab-discover .dc-mast-name { flex-wrap: wrap; gap: 6px 12px; }
+#tab-discover .dc-mast-line { font-size: 13.5px; color: var(--text); opacity: .85; }
+
+/* =====================================================================================
+   Sidebar: Browser (Images, Videos, Audio) as one big tile under the Library; Videos' and Audio's
+   own tiles are hidden (the Browser menu opens them)
+   ===================================================================================== */
+html.desktop nav [data-tab="videos"], html.desktop nav [data-tab="audio"] { display: none !important; }
+html.desktop nav [data-tab="library"] { order: -2; }
+html.desktop nav [data-tab="discover"] { order: -1; grid-column: span 2; }
+html.desktop nav [data-tab="discover"] .nt-title { font-size: 21px; }
+html.desktop nav [data-tab="settings"] { grid-column: span 2; }
+html.desktop nav { grid-template-rows: minmax(140px, 1.3fr) minmax(120px, 1.15fr) repeat(3, minmax(92px, 1fr)); }
+html.desktop nav button.br-on { filter: none; box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .85), 0 10px 22px -12px rgba(0, 0, 0, .7); }
+@media (max-width: 900px) { html.desktop nav [data-tab] { grid-column: auto; } }
+html.desktop.side-compact nav [data-tab] { grid-column: auto; }
+/* the menu: three big tiles beside the sidebar */
+.br-menu { position: fixed; z-index: 80; display: grid; grid-template-columns: repeat(3, 150px); gap: 10px; padding: 10px; border-radius: 18px;
+  background: var(--panel); border: 2px solid var(--line); box-shadow: 0 24px 60px -18px rgba(0, 0, 0, .85); animation: br-pop .16s ease-out; }
+@keyframes br-pop { from { opacity: 0; transform: translateX(-8px) scale(.97); } }
+.br-tile { position: relative; overflow: hidden; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; height: 150px; padding: 14px; border: 0; border-radius: 14px;
+  color: #fff; text-align: left; font: inherit; cursor: pointer; filter: saturate(.85) brightness(.92); transition: filter .15s, transform .12s; }
+.br-tile:hover { filter: none; transform: translateY(-2px); }
+.br-tile.on { filter: none; box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .85); }
+.br-tile b { font-size: 19px; font-weight: 800; margin-top: auto; }
+.br-tile span:not(.br-ico) { font-size: 12px; font-weight: 600; opacity: .85; }
+.br-ico { width: 40px; height: 40px; }
+.br-ico svg { width: 100%; height: 100%; }
+.br-images { background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 85%, #3a1a4a), color-mix(in srgb, var(--accent) 40%, #1a1022)); }
+.br-videos { background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 60%, #4a1a2a), color-mix(in srgb, var(--accent) 28%, #1a1016)); }
+.br-audio { background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 45%, #2a1a4a), color-mix(in srgb, var(--accent) 20%, #120e22)); }
+
+/* the Library's tiles: square corners in every layout */
+html.desktop #grid .card, html.desktop .jrow .card, html.desktop #grid[data-layout] > .card, html.desktop #grid .card.held { border-radius: 0 !important; }

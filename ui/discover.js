@@ -773,8 +773,53 @@
   navLogo.alt = '';
   navLogo.onload = () => navBtn.classList.add('has-logo');
   navLogo.onerror = () => navBtn.classList.remove('has-logo');
-  navBtn.append(make('span', 'nt-title', 'Discover'), make('span', 'nt-sub', 'Gelbooru & more'), make('span', 'nt-art'), navLogo);
+  navBtn.append(make('span', 'nt-title', 'Browser'), make('span', 'nt-sub', 'Images · Videos · Audio'), make('span', 'nt-art'), navLogo);
   document.querySelector('nav [data-tab="add"]').after(navBtn);
+  // ---------- Browser: one big sidebar tile for Images (this page), Videos and Audio ----------
+  // Videos' and Audio's own tiles stay in the sidebar, hidden; the menu opens them.
+  {
+    let direct = false;
+    const otherBtn = id => document.querySelector(`nav [data-tab="${id}"]`);
+    const ICONS = {
+      images: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
+      videos: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="15" height="14" rx="3"/><path d="M17 10l5-3v10l-5-3z"/></svg>',
+      audio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="7" rx="1.5"/><rect x="17" y="14" width="4" height="7" rx="1.5"/></svg>'
+    };
+    const CHOICES = [['images', 'Images', 'Booru sites, Reddit & more'], ['videos', 'Videos', 'Long-form & sites'], ['audio', 'Audio', 'JOI, hypno, ASMR']];
+    const openChoice = id => {
+      if (id === 'images') { direct = true; try { navBtn.click(); } finally { direct = false; } }
+      else { const b = otherBtn(id); if (b) b.click(); }
+    };
+    const current = () => ['videos', 'audio'].find(id => { const b = otherBtn(id); return b && b.classList.contains('on'); }) || (navBtn.classList.contains('on') ? 'images' : '');
+    function browserMenu() {
+      const old = document.querySelector('.br-menu');
+      if (old) { old.remove(); return; }
+      const menu = make('div', 'br-menu'), now = current();
+      menu.append(...CHOICES.map(([id, title, sub]) => {
+        const t = make('button', 'br-tile br-' + id + (now === id ? ' on' : '')); t.type = 'button';
+        const ico = make('span', 'br-ico'); ico.innerHTML = ICONS[id];
+        t.append(ico, make('b', '', title), make('span', '', sub));
+        t.onclick = () => { close(); openChoice(id); };
+        return t;
+      }));
+      const r = navBtn.getBoundingClientRect();
+      Object.assign(menu.style, { left: r.right + 12 + 'px', top: Math.max(8, Math.min(r.top, innerHeight - 220)) + 'px' });
+      document.body.append(menu);
+      const away = e => { if (!menu.contains(e.target) && !navBtn.contains(e.target)) close(); };
+      const key = e => { if (e.key === 'Escape') close(); };
+      function close() { menu.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); }
+      addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
+    }
+    // a click on the tile opens the menu (the page itself opens only through it, or on start-up)
+    navBtn.addEventListener('click', e => {
+      if (direct || !e.isTrusted) return;
+      e.stopImmediatePropagation(); e.preventDefault();
+      browserMenu();
+    }, true);
+    // the tile shows as chosen while Videos or Audio is open too
+    const mark = () => navBtn.classList.toggle('br-on', ['videos', 'audio'].some(id => { const b = otherBtn(id); return b && b.classList.contains('on'); }));
+    new MutationObserver(mark).observe(document.querySelector('nav'), { subtree: true, attributes: true, attributeFilter: ['class'] });
+  }
   const tab = make('section', 'hidden');
   tab.id = 'tab-discover';
   tab.innerHTML = `
@@ -1001,12 +1046,12 @@
     const box = q('.dc-mast-id');
     q('.dc-mast').classList.toggle('hidden', !src);
     if (!src) return box.replaceChildren();
-    const ico = iconEl(src); ico.classList.add('dc-mast-ico');
+    // (the site's name and icon are on its tab, just above: here only what it is and what to know)
     const txt = make('div', 'dc-mast-txt');
     const facts = make('span', 'dc-mast-facts');
     const head = make('div', 'dc-mast-name');
-    head.append(make('b', '', src.kind === 'reddit' ? 'Reddit' : src.name), facts);
-    txt.append(head, make('span', 'dc-mast-line', site.line || src.help || ''));
+    head.append(make('span', 'dc-mast-line', site.line || src.help || ''), facts);
+    txt.append(head);
     const fact = (text, cls) => facts.append(make('span', 'dc-fact-chip' + (cls ? ' ' + cls : ''), text));
     if (site.only) fact(site.only === 'All explicit' ? 'Everything here is explicit' : 'All-ages site', site.only === 'All explicit' ? 'x' : 'safe');
     for (const f of site.facts || []) {
@@ -1017,7 +1062,7 @@
     if (src.kind === 'reddit' && cfg.reddit.clientId) fact(cfg.reddit.refresh ? 'Logged in' : 'Your app id', 'ok');
     if (src.needsKey && src.key) fact('Your key', 'ok');
     if ((src.kind === 'danbooru' || src.kind === 'e621') && src.user && src.key) fact('Your account', 'ok');
-    box.replaceChildren(ico, txt);
+    box.replaceChildren(txt);
     box.classList.toggle('hidden', site.banner === false);
   }
   // the site's own levels: its rating names (several at once), Bing's SafeSearch (one), Reddit's kinds of post
@@ -1199,6 +1244,12 @@
     trendCache.set(src.base, chips);
     return chips;
   }
+  // the tabs scroll sideways with the mouse wheel too (their scrollbar is hidden, like a browser's tabs)
+  q('.dc-sources').addEventListener('wheel', e => {
+    const bar = e.currentTarget;
+    if (bar.scrollWidth <= bar.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    e.preventDefault(); bar.scrollLeft += e.deltaY;
+  }, { passive: false });
   q('.dc-rail').addEventListener('wheel', e => {
     const rail = e.currentTarget;
     if (rail.scrollWidth <= rail.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
