@@ -765,6 +765,14 @@
   const enabled = () => cfg.sources.filter(s => s.enabled);
   const sourceById = id => cfg.sources.find(s => s.id === id);
   const ready = s => s.kind === 'reddit' ? true : !s.needsKey || (s.user && s.key); // (Reddit works without an app id, through its public feeds)
+  // each source's last answer: ok, slow (it needed a second try) or down; shown as a dot on its tab
+  const health = {};
+  const HEALTH_TEXT = { ok: 'Working', slow: 'Slow: it needed a second try', down: 'Down or refusing right now' };
+  function setHealth(id, v) {
+    health[id] = v;
+    const dot = tab.querySelector(`.dc-src[data-src="${CSS.escape(id)}"] .dc-health`);
+    if (dot) { dot.className = 'dc-health ' + v; dot.title = HEALTH_TEXT[v] || ''; }
+  }
 
   // ---------- the page ----------
   const navBtn = make('button');
@@ -985,6 +993,9 @@
       const b = make('button', 'dc-src' + (on ? ' on' : '') + (ready(s) ? '' : ' locked'), s.kind === 'reddit' ? 'Reddit' : s.name);
       b.type = 'button';
       b.style.setProperty('--src', siteOf(s).color || 'var(--accent)');
+      b.dataset.src = s.id;
+      const dot = make('i', 'dc-health ' + (health[s.id] || '')); dot.title = HEALTH_TEXT[health[s.id]] || 'Not tried yet';
+      b.append(dot);
       b.title = !ready(s) ? 'Needs your API key (Sources)' : (s.kind === 'reddit' ? 'Reddit\'s communities: click again to pick one' : s.base) + ' · drag to reorder';
       b.prepend(iconEl(s));
       b.onclick = () => {
@@ -1105,7 +1116,10 @@
       const tune = make('button', 'dc-ext dc-tune', '⚙ Customise'); tune.type = 'button';
       tune.title = `Your own categories, the tile size and more for ${src.kind === 'reddit' ? 'Reddit' : src.name}`;
       tune.onclick = () => customise(src);
-      end.append(tune);
+      const hide = make('button', 'dc-ext dc-hidesaved' + (cfg.hideSaved ? ' on' : ''), (cfg.hideSaved ? '✓ ' : '') + 'Hide saved'); hide.type = 'button';
+      hide.title = 'Hide what\'s already in your vault';
+      hide.onclick = () => { cfg.hideSaved = !cfg.hideSaved; saveConfig(); drawViews(src); drawGrid(); };
+      end.append(hide, tune);
     }
     if (src && src.kind === 'bing') {
       // Google's and DuckDuckGo's image searches no longer let apps in: they open in your browser
@@ -1466,7 +1480,7 @@
         .filter(p => !p.tags.some(t => NEVER.has(nameOf(t)) || hide.has(nameOf(t)) || hide.has(t)))
         .filter(p => !p.title || !NEVER_TEXT.test(p.title))
         .filter(p => src.kind !== 'reddit' || state.levels.includes(/^(gif|mp4|webm)$/.test(p.ext) ? 'motion' : 'pics')); // (Reddit: pictures, GIFs & videos)
-      pageNo++; retried = false;
+      pageNo++; setHealth(src.id, retried ? 'slow' : 'ok'); retried = false;
       finished = last || (state.view === 'random' && pageNo >= 5 && !kind.fetch);
       posts.push(...fresh);
       drawGrid();
@@ -1487,6 +1501,7 @@
         return;
       }
       finished = true;
+      if (!/^\s*(401|403)|api key|authentication|2 tags|tag limit/i.test(errMsg(e))) setHealth(src.id, 'down');
       status.replaceChildren(errorNote(cur, errMsg(e)));
       more.textContent = '';
     } finally {
@@ -1503,6 +1518,14 @@
     if (/more than 2 tags|tag limit/i.test(msg)) text = `${src.name} allows 2 tags per search without an account, and a chosen category or Hot, Popular, Top and Random each count as one. Use fewer tags or Latest, or add your API key.`;
     box.append(make('span', '', text));
     if (/key|2 tags|401|403/i.test(text)) { const b = make('button', 'btn', 'Add the key'); b.onclick = () => openSources(src.id); box.append(b); }
+    else {
+      // somewhere else to look meanwhile: the next working source
+      const alt = enabled().find(s => s.id !== src.id && ready(s) && s.kind !== 'reddit' && health[s.id] !== 'down');
+      if (alt) { const b = make('button', 'btn primary', `Try ${alt.name} instead`); b.onclick = () => { cfg.active = alt.id; go({ source: alt.id, query: '', ...lensState(alt) }); }; box.append(b); }
+      const again = make('button', 'btn', 'Try again'); again.onclick = () => go({ ...state }, false); box.append(again);
+    }
+    const art = make('img', 'dc-note-art'); art.src = '/decor/croptop.webp'; art.alt = '';
+    box.prepend(art);
     return box;
   }
   function needKeyNote(src) {
@@ -1523,17 +1546,18 @@
   function drawGrid() {
     const src = sourceById(state.source);
     status.replaceChildren();
-    const line = make('span', '', `${describe(state)} · ${fmtN(posts.length)}${finished ? '' : '+'} shown`);
+    const list = cfg.hideSaved ? posts.filter(p => !saved.has(p.page)) : posts;
+    const line = make('span', '', `${describe(state)} · ${fmtN(list.length)}${finished ? '' : '+'} shown` + (list.length < posts.length ? ` · ${fmtN(posts.length - list.length)} you have, hidden` : ''));
     const calm = make('span', 'dc-calm', 'No ads · no popups · read straight from the API');
     status.append(line, calm);
-    if (!posts.length) {
-      grid.replaceChildren(make('div', 'empty', finished ? (note || 'Nothing found. Try other tags or ratings.') : ''));
+    if (!list.length) {
+      grid.replaceChildren(make('div', 'empty', finished ? (posts.length ? 'You already have everything here. Turn off "Hide saved" to see it.' : note || 'Nothing found. Try other tags or ratings.') : ''));
       more.textContent = '';
       return;
     }
     const width = grid.clientWidth || 900;
     const rowH = siteOf(src).row || Math.min(320, Math.max(180, width / 4.5)); // (wallpapers bigger, web thumbnails smaller)
-    const rows = justifyRows(posts.map(p => ({ ...p, width: p.width || 300, height: p.height || 400, post: p })), width, rowH);
+    const rows = justifyRows(list.map(p => ({ ...p, width: p.width || 300, height: p.height || 400, post: p })), width, rowH);
     grid.replaceChildren(...rows.map(row => {
       const div = make('div', 'jrow');
       for (const { item, ar } of row.cells) {
@@ -1788,6 +1812,7 @@
         rating: p.rating, cat: src.cat, siteName: src.name });
     } finally { if (!opts) saving.delete(p.page); }
     if (!opts) return;
+    const dl = window.vaultDownloads ? window.vaultDownloads.add({ title: p.title || `${src.name} #${p.id}`, thumb: proxy(p.preview), from: 'Images · ' + src.name, retry: () => savePost(p) }) : null;
     const mark = cls => { p._tile && p._tile.classList.toggle(cls, true); if (viewing === p) drawSide(p); };
     saved.add(p.page); pending.add(p.page);
     mark('saved'); mark('pending');
@@ -1800,7 +1825,8 @@
       for (let k = 0; k < urls.length; k++) {
         const ext = extOf(urls[k]) || (k ? 'jpg' : p.ext) || 'jpg'; // (each file's own: an album mixes pictures and videos)
         let blob;
-        if (/^(mp4|webm)$/.test(ext)) blob = await downloadBlob(urls[k]);
+        if (dl) dl.progress(null, urls.length > 1 ? `Downloading ${k + 1} of ${urls.length}` : 'Downloading');
+        if (/^(mp4|webm)$/.test(ext)) blob = await downloadBlob(urls[k], pr => dl && pr.total && dl.progress(pr.done / pr.total));
         else {
           const res = await fetch(proxy(urls[k]));
           if (!res.ok) throw new Error(`Couldn't download it (${res.status})`);
@@ -1816,6 +1842,7 @@
       }
       pumpUploads();
       addCategory(category);
+      if (dl) dl.progress(null, 'Adding to the vault');
       // done when the library has it (or the upload failed)
       const until = Date.now() + 10 * 60e3;
       const check = () => {
@@ -1826,11 +1853,13 @@
       check();
     } catch (e) {
       settle(false);
+      if (dl) dl.fail(errMsg(e));
       throw e;
     } finally {
       saving.delete(p.page);
     }
     function settle(ok) {
+      if (dl) { if (ok) dl.done(); else dl.fail('It couldn\'t be added to the vault'); }
       pending.delete(p.page);
       if (!ok) saved.delete(p.page);
       if (p._tile) { p._tile.classList.remove('pending'); p._tile.classList.toggle('saved', ok); if (ok) p._tile.classList.add('just'); }

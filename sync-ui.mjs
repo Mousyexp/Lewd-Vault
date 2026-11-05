@@ -1,4 +1,4 @@
-// Builds the desktop app's page (src/) from the web app's page (../Index.html):
+// Builds the desktop app's page (src/) from the shared page (ui/Index.html, the web app's page):
 //   - applies the few changes the desktop needs to Index.html (the Drive / Apps Script calls go to
 //     the Rust backend and the local files instead, plus hooks for the tags feature),
 //   - adds the desktop layer: ui/desktop.css (the desktop look) and ui/desktop.js (tags, search,
@@ -12,7 +12,7 @@ import fs from 'node:fs';
 
 const here = new URL('.', import.meta.url);
 const out = new URL('src/', here);
-let page = fs.readFileSync(new URL('../Index.html', here), 'utf8');
+let page = fs.readFileSync(new URL('ui/Index.html', here), 'utf8').replace(/\r\n/g, '\n'); // (a Windows checkout may have CRLF line ends: the patches below use LF)
 
 function patch(find, replace) {
   const n = page.split(find).length - 1;
@@ -265,6 +265,7 @@ patch(`</body>`, `<script src="/desktop.js"></script>
 <script src="/privacy.js"></script>
 <script src="/coach.js"></script>
 <script src="/share.js"></script>
+<script src="/extras.js"></script>
 </body>`);
 patch(`<head>`, `<head>\n<title>Lewd Vault</title>
 <meta name="referrer" content="no-referrer">`); // (no page address goes out with requests: RedGifs refuses a foreign one)
@@ -290,6 +291,7 @@ copy(new URL('ui/lust.js', here), new URL('lust.js', out));
 copy(new URL('ui/privacy.js', here), new URL('privacy.js', out));
 copy(new URL('ui/coach.js', here), new URL('coach.js', out));
 copy(new URL('ui/share.js', here), new URL('share.js', out));
+copy(new URL('ui/extras.js', here), new URL('extras.js', out));
 copy(new URL('src-tauri/icons/128x128@2x.png', here), new URL('app-icon.png', out)); // the brand mark in the sidebar
 for (const f of fs.readdirSync(new URL('art/decor/', here))) copy(new URL(`art/decor/${f}`, here), new URL(`decor/${f}`, out)); // see ui/desktop.js
 // her moans (MagicalMysticVA on Freesound, CC BY 4.0): Appreciate's like-*.ogg, the coach's coach-*.ogg

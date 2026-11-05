@@ -591,17 +591,19 @@
     const answer = await window.vaultDiscover.ask({ title: f.title, thumb: f.art ? proxy(f.art) : '', source: f.page || f.link, tags, audio: [guess, ...CATS.filter(c => c !== guess)] });
     if (!answer) return;
     btn.disabled = true; btn.classList.add('added', 'busy'); btn.innerHTML = window.vaultDiscover.spinTick() + '<span>Added</span>';
+    const dl = window.vaultDownloads ? window.vaultDownloads.add({ title: f.title, thumb: f.art ? proxy(f.art) : '', from: 'Audio', retry: () => saveFound(entry, btn) }) : null;
     try {
       await resolveFound(f);
-      const blob = await window.vaultDiscover.downloadBlob(f.url, p => { if (p.total) btn.title = Math.floor(p.done / p.total * 100) + '%'; });
+      const blob = await window.vaultDiscover.downloadBlob(f.url, p => { if (p.total) btn.title = Math.floor(p.done / p.total * 100) + '%'; if (dl) dl.progress(p.total ? p.done / p.total : null); });
+      if (dl) dl.progress(null, 'Adding to the vault');
       const ext = (f.url.split('?')[0].match(AUDIO_EXT) || ['.m4a'])[0].toLowerCase();
       const file = new File([blob], 'audio' + ext, { type: blob.type && blob.type !== 'application/octet-stream' ? blob.type : ext === '.mp3' ? 'audio/mpeg' : 'audio/mp4' });
       if (await addFiles([file], { title: f.title.replace(/\[[^\]]+\]/g, '').replace(/\s+/g, ' ').trim() || f.title, category: answer.category, tags: answer.tags.join(' '), source: f.page || f.link })) {
-        btn.classList.replace('busy', 'done');
+        btn.classList.replace('busy', 'done'); if (dl) dl.done();
         window.vaultUI.burst(btn, 12);
         if (!btn.isConnected) window.vaultDiscover.imported({ thumb: f.art ? proxy(f.art) : '', text: 'Imported!', sub: `Into ${answer.category} · in Audio` });
-      } else { btn.disabled = false; btn.classList.remove('added', 'busy'); btn.textContent = '♥ Save'; }
-    } catch (e) { btn.disabled = false; btn.classList.remove('added', 'busy'); btn.textContent = '♥ Save'; toast(errMsg(e), 'err'); }
+      } else { btn.disabled = false; btn.classList.remove('added', 'busy'); btn.textContent = '♥ Save'; if (dl) dl.fail('It couldn\'t be added'); }
+    } catch (e) { btn.disabled = false; btn.classList.remove('added', 'busy'); btn.textContent = '♥ Save'; if (dl) dl.fail(errMsg(e)); toast(errMsg(e), 'err'); }
   }
   ready.then(() => { navBtn.querySelector('.nt-sub').textContent = list.items.length ? `${fmtN(list.items.length)} in yours` : 'JOI, hypno, ASMR'; });
 })();

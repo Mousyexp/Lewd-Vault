@@ -767,8 +767,9 @@
       trayActions(button('', 'Close', () => tray.classList.add('hidden')));
     }
   }
-  function reviewDuplicates(groups) {
-    const { body, close } = sheet('Duplicates', 'Each row is one picture or video saved more than once. The one marked Keep is the biggest (click another to keep that one instead). "Bin the others" sends the rest to the Recycle Bin.');
+  window.vaultReviewDuplicates = (groups, title, lead) => reviewDuplicates(groups, title, lead); // (extras.js: look-alikes)
+  function reviewDuplicates(groups, title, lead) {
+    const { body, close } = sheet(title || 'Duplicates', lead || 'Each row is one picture or video saved more than once. The one marked Keep is the biggest (click another to keep that one instead). "Bin the others" sends the rest to the Recycle Bin.');
     const keep = new Map(groups.map(g => [g, g[0]]));
     const all = button('danger', 'Bin every extra copy', async () => {
       const gone = groups.flatMap(g => g.filter(i => i !== keep.get(g)));

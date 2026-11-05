@@ -1,0 +1,9 @@
+# keep text files with LF line endings on every checkout (sync-ui patches the page with LF text)
+* text=auto eol=lf
+*.png binary
+*.webp binary
+*.ogg binary
+*.mp3 binary
+*.ico binary
+*.icns binary
+*.woff2 binary

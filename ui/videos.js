@@ -645,9 +645,14 @@
     const job = { text: 'starting…', done: false, btn: null };
     saving.set(v.url, job);
     drawSide(v);
+    const dl = window.vaultDownloads ? window.vaultDownloads.add({ title: v.title, thumb: v.thumb, from: 'Videos · ' + (site.name || v.site), retry: () => saveVideo(v) }) : null;
     const say = text => { job.text = text; const p = job.btn && job.btn.querySelector('.vd-dlprog'); if (p) p.textContent = text; };
     try {
-      const blob = await D.downloadBlob(v.file, p => say(p.total ? `${Math.floor(p.done / p.total * 100)}% of ${mb(p.total)}` : mb(p.done)));
+      const blob = await D.downloadBlob(v.file, p => {
+        say(p.total ? `${Math.floor(p.done / p.total * 100)}% of ${mb(p.total)}` : mb(p.done));
+        if (dl) dl.progress(p.total ? p.done / p.total : null, p.total ? `${mb(p.done)} of ${mb(p.total)}` : mb(p.done));
+      });
+      if (dl) dl.progress(null, 'Adding to the vault');
       say('adding…');
       const file = new File([blob], `${v.site}-${v.id}.mp4`, { type: 'video/mp4' });
       const category = answer.category.replace(/\s*[\\/]+\s*/g, '-').trim();
@@ -658,11 +663,12 @@
         if (Date.now() > until || failed.some(j => j.source === v.url)) throw new Error('It downloaded but couldn\'t be added to the vault');
         await wait(800);
       }
-      job.done = true; say('');
+      job.done = true; say(''); if (dl) dl.done();
       if (showing === v) { drawSide(v); setTimeout(() => window.vaultUI.burst(side.querySelector('.dc-save-big'), 18), 30); }
       else D.imported({ thumb: v.thumb, text: 'Imported!', sub: `Into ${category} · in Videos` });
     } catch (e) {
       saving.delete(v.url);
+      if (dl) dl.fail(errMsg(e));
       if (showing === v) drawSide(v);
       toast(`${v.title.slice(0, 40)} not saved: ${errMsg(e)}`, 'err');
     }

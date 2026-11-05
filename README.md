@@ -13,7 +13,10 @@ Lewd Vault is a cute, fast Windows app for collecting, tagging and enjoying your
 - 🔍 **Browser.** One big tile for 🖼️ Images, 🎬 Videos and 🎧 Audio. Browse your favourite sites in browser-style tabs right inside the app, resize the tiles, and save with one click. You can even add your own sites!
 - 🎞️ **Slideshow.** Timed NSFW-level stages that build up, with motion effects and true full screen. 🔥
 - 🎬 **A real video player.** Smooth seeking, A–B loop, speed control, frame-by-frame stepping and keyboard shortcuts.
-- 🕵️ **Privacy first.** Discreet file names, plus an **emergency key** that hides everything instantly. 🙈
+- 🕵️ **Privacy first.** Discreet file names, a **PIN lock**, plus an **emergency key** that hides everything instantly. 🙈
+- ✅ **Tidy in bulk.** Ctrl/Shift-click to select many tiles and re-rate, re-tag or move them all at once; find duplicates *and* look-alikes (resized or re-saved copies).
+- ⬇️ **One downloads panel** for everything you save, with retry, plus a status dot on every site tab.
+- 🛟 **Backups, health checks and updates** from Settings: copy your vault to a drive (only what changed), fix broken previews, and update the app in one click.
 - 🏆 **Level up!** Earn XP, unlock titles and badges, keep a streak and see your stats.
 - 💪 **Your coach.** Guided Kegel workouts and JOI sessions with a cute companion.
 - 🎁 **Share packs.** Bundle a collection into one `.zip` with a pretty preview card, and open packs from friends.

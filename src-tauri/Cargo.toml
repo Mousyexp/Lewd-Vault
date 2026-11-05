@@ -1,6 +1,6 @@
 [package]
 name = "image-vault"
-version = "0.1.0"
+version = "0.2.0"
 description = "Image Vault, as a portable desktop app over a local folder"
 edition = "2021"
 

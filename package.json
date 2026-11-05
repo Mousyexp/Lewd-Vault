@@ -1,10 +1,11 @@
 {
   "name": "image-vault-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "sync": "node sync-ui.mjs",
+    "test": "node tools/check.mjs",
     "dev": "node sync-ui.mjs && tauri dev",
     "build": "node sync-ui.mjs && tauri build --no-bundle",
     "icon": "node tools/make-icon.mjs",
