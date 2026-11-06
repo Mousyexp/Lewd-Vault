@@ -263,6 +263,7 @@ patch(`</body>`, `<script src="/desktop.js"></script>
 <script src="/profile.js"></script>
 <script src="/lust.js"></script>
 <script src="/privacy.js"></script>
+<script src="/drivesync.js"></script>
 <script src="/coach.js"></script>
 <script src="/share.js"></script>
 <script src="/extras.js"></script>
@@ -290,6 +291,7 @@ copy(new URL('ui/slideshow.js', here), new URL('slideshow.js', out));
 copy(new URL('ui/profile.js', here), new URL('profile.js', out));
 copy(new URL('ui/lust.js', here), new URL('lust.js', out));
 copy(new URL('ui/privacy.js', here), new URL('privacy.js', out));
+copy(new URL('ui/drivesync.js', here), new URL('drivesync.js', out));
 copy(new URL('ui/coach.js', here), new URL('coach.js', out));
 copy(new URL('ui/share.js', here), new URL('share.js', out));
 copy(new URL('ui/extras.js', here), new URL('extras.js', out));

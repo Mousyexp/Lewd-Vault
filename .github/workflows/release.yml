@@ -46,7 +46,11 @@ jobs:
           workspaces: src-tauri
       - run: npm ci
       # one build gives both: the app (named "Lewd Vault.exe") and its installer
+      # (Settings → Storage → Google Drive over the web: the built-in Google key, when the repository has one)
       - run: npm run installer
+        env:
+          LEWD_VAULT_GOOGLE_CLIENT_ID: ${{ secrets.LEWD_VAULT_GOOGLE_CLIENT_ID }}
+          LEWD_VAULT_GOOGLE_CLIENT_SECRET: ${{ secrets.LEWD_VAULT_GOOGLE_CLIENT_SECRET }}
       - name: Package the installer and the portable zip
         id: pack
         shell: pwsh

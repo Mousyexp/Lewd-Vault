@@ -2830,3 +2830,24 @@ html:has(#detail:not(.hidden)) .side-fold, html:has(.dc-view:not(.hidden)) .side
 #detail .big:has(#detailVideo:not(.hidden)) .filmstrip { bottom: 104px; }
 #detail .big:has(#detailVideo:not(.hidden)) .fs-fold { bottom: 174px; }
 html.strip-folded #detail .big:has(#detailVideo:not(.hidden)) .fs-fold { bottom: 96px; }
+
+/* the emergency key's screensaver / cat video (privacy.js): above everything, the PIN lock included */
+.pv-screen { position: fixed; inset: 0; z-index: 2147483000; background: #0b1020; overflow: hidden; cursor: none; user-select: none; }
+.pv-aurora i { position: absolute; width: 70vmax; height: 70vmax; border-radius: 50%; filter: blur(80px); opacity: .55; animation: pv-drift 38s ease-in-out infinite alternate; }
+.pv-aurora i:nth-child(1) { background: #2b6fd6; left: -20vmax; top: -25vmax; }
+.pv-aurora i:nth-child(2) { background: #1aa39a; right: -25vmax; top: 10vmax; animation-duration: 46s; animation-delay: -12s; }
+.pv-aurora i:nth-child(3) { background: #6b4fd8; left: 10vmax; bottom: -35vmax; animation-duration: 54s; animation-delay: -25s; }
+@keyframes pv-drift { 0% { transform: translate(0, 0) scale(1); } 50% { transform: translate(12vmax, 8vmax) scale(1.15); } 100% { transform: translate(-8vmax, 14vmax) scale(.95); } }
+.pv-clock { position: absolute; left: 6vw; bottom: 9vh; display: grid; gap: 4px; color: #fff; font-family: "Segoe UI", system-ui, sans-serif; text-shadow: 0 2px 18px rgba(0, 0, 0, .35); }
+.pv-clock b { font-size: clamp(64px, 11vw, 150px); font-weight: 300; line-height: 1; letter-spacing: -.02em; }
+.pv-clock span { font-size: clamp(18px, 2.2vw, 30px); font-weight: 400; opacity: .9; }
+.pv-video { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: transparent; object-fit: contain; }
+video.pv-video { background: #000; }
+.pv-videorow { flex-wrap: wrap; }
+@media (prefers-reduced-motion: reduce) { .pv-aurora i { animation: none; } }
+
+/* Settings → Storage → Google Drive over the web (drivesync.js) */
+.gd-box .pv-progress { margin: 0 4px 10px; }
+.gd-err { margin: 4px 4px 10px; font-size: 13px; color: #e5486a; }
+.gd-steps { margin: 6px 0 10px; padding-left: 20px; display: grid; gap: 6px; font-size: 13px; line-height: 1.45; }
+.gd-form { max-width: 460px; margin-top: 12px; }

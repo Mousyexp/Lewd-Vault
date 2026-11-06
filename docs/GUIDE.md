@@ -80,6 +80,39 @@ To change it later, go to **Settings → Storage → Change where it lives…**.
 - **Two computers:** use the vault on one computer at a time. The cloud service would make conflict
   copies of `index.csv` if two wrote it at once.
 
+### Google Drive over the web (no Drive app needed)
+
+Google Drive for desktop needs an administrator to install. On a PC without it, keep the vault on
+**This PC** (or any folder) and turn on **Settings → Storage → Google Drive over the web**
+(`ui/drivesync.js`, `src-tauri/src/gdrive.rs`):
+
+1. **A Google key.** Google only lets an app into Drive with an "OAuth client". A release build can
+   carry one (set `LEWD_VAULT_GOOGLE_CLIENT_ID` and `LEWD_VAULT_GOOGLE_CLIENT_SECRET` as repository
+   secrets; the release workflow builds them in). Otherwise press **Add your key…** and make your own,
+   free, in about five minutes:
+   1. [console.cloud.google.com](https://console.cloud.google.com/apis/credentials): make a project.
+   2. **APIs & Services → Library → Google Drive API → Enable.**
+   3. **Google Auth Platform** (OAuth consent screen): any app name, audience **External**. Add your
+      Google address as a **test user**, or press **Publish app** (in "Testing" Google signs you out
+      after 7 days; published, it may show an "unverified app" warning you can click past).
+   4. **Clients → Create client → Desktop app.** Paste its Client ID and Client secret into the app.
+2. **Sign in with Google.** Your web browser opens Google's own sign-in page; the app gets a token
+   that can only reach the files it made itself (the `drive.file` scope), never the rest of your
+   Drive.
+3. **Syncing.** The vault syncs both ways with a **Lewd Vault** folder in My Drive: on sign-in,
+   every 10 minutes while the app is open (can be turned off) and on **Sync now**. Large videos go up
+   in 8 MB resumable pieces.
+
+- **Deletions** go across only for files that were synced before and didn't change since, into the
+  Recycle Bin here or Drive's trash there (restorable for 30 days). Never on a first sync, and a
+  sync that would delete more than half of one side stops and says so.
+- **Both changed:** this PC's copy wins and Drive's is saved beside it as `<name> (from Drive)<ext>`.
+  For `index.csv` and `views.csv` that's a conflict copy the app merges by itself.
+- **Not synced:** `_app/cache`, `_app/backups`, unfinished uploads.
+- **On this PC only:** the key and the sign-in, in `%LOCALAPPDATA%\Image Vault\drive\<vault>\`.
+- **Several PCs:** use the **same key** on each (Drive only shows a key the files made with that
+  key). The Google Drive for desktop option is separate and unchanged.
+
 ## Discover (built-in image browser)
 
 The **Discover** tile browses image sites inside the app and saves straight into the vault.
@@ -447,10 +480,18 @@ community switching (with the one-a-minute countdown).*
   a progress bar, and can be undone. A move cut short is harmless, because items are found by their number in any
   folder. Your existing library is never renamed unless you switch it on. Tested: 12 test files there and back.
 - **The emergency key** (Settings → Privacy; also shown on the welcome screen): Ctrl+Shift+Space by default, and it can
-  be changed by pressing a new combination. It works even when another app is in front: Lewd Vault vanishes at once
-  (from the taskbar too), and every video, the slideshow, the audio player and the coach stop. Press it again to bring
-  it back, optionally behind a plain "Notes" cover that you click away. Tested with real key presses: hide,
-  pause, show.
+  be changed by pressing a new combination. It works even when another app is in front: every video, the slideshow,
+  the audio player and the coach stop, and **The emergency key shows**:
+  - **A screensaver** (the default): soft drifting colours behind a big clock and the date, full screen, like a
+    lock screen.
+  - **A cat video**: Keyboard Cat from YouTube, looping, with sound; or **Pick a video…** (a file, copied to
+    `_app/cover.<ext>`, works offline) or **YouTube link…**. The screensaver shows behind it if it can't load.
+  - **Nothing**: the window vanishes, from the taskbar too (the old behaviour). Starting the app again now brings
+    it back as well (before, the second start only "unminimized" the hidden window, so it could only be closed from
+    Task Manager).
+
+  Clicks and keys don't take the cover away (nobody else can click their way in); press the key again to come back,
+  optionally behind a plain "Notes" cover that you click away.
 - **Export to Excel** (Settings → Storage): your library as a workbook (`src-tauri/src/excel.rs`). The Library sheet has one row
   per item (number, name, category, kind, NSFW, rating, date added, size, length, collection, tags, views,
   appreciations, minutes looked, last viewed, source, file), with a pink header, filters, a frozen top row, banded rows,
@@ -756,7 +797,8 @@ of shipping a half-patched page.
   | `slideshow.js` | The slideshow |
   | `profile.js` | You, XP, badges, the stopwatch, Stats charts |
   | `lust.js` | Faces and the heart |
-  | `privacy.js` | Discreet names, the emergency key, Excel |
+  | `privacy.js` | Discreet names, the emergency key (screensaver, cat video), Excel |
+  | `drivesync.js` | Google Drive over the web (Settings → Storage) |
   | `coach.js` | The coach |
   | `share.js` | Share packs |
 - **The Rust side:**
@@ -765,6 +807,7 @@ of shipping a half-patched page.
   | --- | --- |
   | `main.rs` | The calls, the file server, the window, the emergency key |
   | `storage.rs` | Where the vault lives |
+  | `gdrive.rs` | Google Drive over the web: browser sign-in and two-way sync |
   | `web.rs` | Discover's requests and picture cache, the Reddit login |
   | `dupes.rs` | Duplicates |
   | `discreet.rs` | Discreet names |

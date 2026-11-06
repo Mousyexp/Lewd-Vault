@@ -35,6 +35,7 @@ mod discreet;
 mod dupes;
 mod excel;
 mod fastlane;
+mod gdrive;
 mod maint;
 mod pack;
 mod storage;
@@ -1439,6 +1440,14 @@ fn api(vault: State<'_, Arc<Vault>>, name: String, args: Vec<Value>) -> Res<Valu
             Ok(r)
         }
         "copyProgress" => Ok(storage::copy_progress(&vault)),
+        // Google Drive over the web, for PCs without Google Drive for desktop (gdrive.rs)
+        "driveStatus" => Ok(gdrive::status(&vault)),
+        "driveSetKey" => gdrive::set_key(&vault, &str_of(&a(0)), &str_of(&a(1))),
+        "driveSignIn" => gdrive::sign_in(vault.inner().clone()),
+        "driveSignOut" => gdrive::sign_out(&vault),
+        "driveSync" => gdrive::sync_start(vault.inner().clone()),
+        "driveCancel" => Ok(gdrive::cancel()),
+        "driveAuto" => gdrive::set_auto(&vault, a(0).as_bool() == Some(true)),
         // Discover (web.rs)
         "loadSources" => Ok(vault.web.load_sources().unwrap_or(Value::Null)),
         "saveSources" => vault.web.save_sources(&a(0)),
@@ -1701,21 +1710,90 @@ fn serve(vault: &Vault, req: &HttpRequest<Vec<u8>>) -> Response<Vec<u8>> {
 // ---------- the emergency key ----------
 const PANIC_KEY: &str = "Ctrl+Shift+Space";
 
-// Visible: the page is told (it pauses and mutes everything) and the window disappears, from the
-// taskbar too. Hidden: it comes back.
+// What the key does (Settings → Privacy → "The emergency key shows"):
+//   0 "screensaver" / 1 "video": the window stays where it is and the page covers itself with a
+//     screensaver or a (cat) video, full screen; press the key again to come back. The app never
+//     disappears, so it can't get "lost" in the background.
+//   2 "hide": the window disappears, from the taskbar too. Pressing the key again (or starting the
+//     app again) brings it back.
+static PANIC_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+static COVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static WAS_FULLSCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn panic_mode_of(mode: &str) -> u8 {
+    match mode { "video" => 1, "hide" => 2, _ => 0 }
+}
+
 fn panic_toggle(app: &tauri::AppHandle) {
+    use std::sync::atomic::Ordering::Relaxed;
     use tauri::Emitter;
     let Some(w) = app.get_webview_window("main") else { return };
-    let shown = w.is_visible().unwrap_or(true) && !w.is_minimized().unwrap_or(false);
-    if shown {
-        let _ = w.emit("panic", true);
-        let _ = w.hide();
-    } else {
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-        let _ = w.emit("panic", false);
+    let visible = w.is_visible().unwrap_or(true);
+    let minimized = w.is_minimized().unwrap_or(false);
+    let mode = PANIC_MODE.load(Relaxed);
+    if mode == 2 && !COVERED.load(Relaxed) {
+        // hide: the page is told (it pauses and mutes everything) and the window disappears
+        let shown = visible && !minimized;
+        if shown {
+            let _ = w.emit("panic", json!({ "on": true, "mode": "hide" }));
+            let _ = w.hide();
+        } else {
+            bring_back(&w);
+            let _ = w.emit("panic", json!({ "on": false, "mode": "hide" }));
+        }
+        return;
     }
+    // cover (also when the mode was changed while covered: this uncovers)
+    let covering = !COVERED.load(Relaxed);
+    COVERED.store(covering, Relaxed);
+    if covering {
+        let _ = w.emit("panic", json!({ "on": true, "mode": if mode == 1 { "video" } else { "screensaver" } }));
+        // a hidden or minimized window stays out of sight (it opens on the cover if someone restores it)
+        if visible && !minimized {
+            WAS_FULLSCREEN.store(w.is_fullscreen().unwrap_or(false), Relaxed);
+            let _ = w.set_fullscreen(true);
+        }
+    } else {
+        let _ = w.emit("panic", json!({ "on": false, "mode": "cover" }));
+        if !WAS_FULLSCREEN.swap(false, Relaxed) {
+            let _ = w.set_fullscreen(false);
+        }
+        bring_back(&w);
+    }
+}
+
+fn bring_back(w: &tauri::WebviewWindow) {
+    let _ = w.show();
+    let _ = w.unminimize();
+    let _ = w.set_focus();
+}
+
+// Settings → Privacy: "screensaver", "video" or "hide".
+#[tauri::command]
+fn set_panic_mode(mode: String) {
+    PANIC_MODE.store(panic_mode_of(&mode), std::sync::atomic::Ordering::Relaxed);
+}
+
+// Settings → Privacy → "Pick a video…": the video the cover plays, copied to _app/cover.<ext>.
+// Returns its file id (file-<base64 path>), or "" when the dialog was cancelled.
+#[tauri::command(async)]
+fn pick_cover_video(app: tauri::AppHandle, vault: State<'_, Arc<Vault>>) -> Res<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let Some(path) = app.dialog().file().set_title("A video to show when you press the emergency key")
+        .add_filter("Video", &["mp4", "webm", "m4v", "mov"]).blocking_pick_file().and_then(|f| f.into_path().ok()) else {
+        return Ok(String::new());
+    };
+    let ext = ext_of(&path.file_name().unwrap_or_default().to_string_lossy());
+    let ext = if ext.is_empty() { ".mp4".to_string() } else { ext };
+    let dir = vault.root.join(APP_NAME);
+    for old in fs::read_dir(&dir).into_iter().flatten().flatten() {
+        if old.file_name().to_string_lossy().starts_with("cover.") {
+            let _ = fs::remove_file(old.path());
+        }
+    }
+    let name = format!("cover{ext}");
+    fs::copy(&path, dir.join(&name)).map_err(|e| format!("Could not copy the video: {e}"))?;
+    Ok(format!("file-{}", b64(&format!("{APP_NAME}/{name}"))))
 }
 
 // Sets the key (e.g. "Ctrl+Shift+Space", "Alt+F12"); an empty one turns it off.
@@ -1826,9 +1904,10 @@ fn main() {
     // test copies (IMAGE_VAULT_DEBUG_PORT, with their own IMAGE_VAULT_DATA) run beside the real one
     if std::env::var("IMAGE_VAULT_DEBUG_PORT").is_err() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // (show too: after the emergency key in "hide" mode the window is hidden, not minimized,
+            // and starting the app again is the natural way to get it back)
             if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.set_focus();
+                bring_back(&w);
             }
         }));
     }
@@ -1842,12 +1921,12 @@ fn main() {
                 }
             })
             .build())
-        .manage({ fastlane::start(vault.clone()); vault })
+        .manage({ fastlane::start(vault.clone()); gdrive::start(vault.clone()); vault })
         .register_asynchronous_uri_scheme_protocol("vault", move |_ctx, request, responder| {
             let vault = for_files.clone();
             std::thread::spawn(move || responder.respond(serve(&vault, &request)));
         })
-        .invoke_handler(tauri::generate_handler![api, upload, window_ready, window_action, pick_folder, restart_app, set_panic_key, export_excel, export_pack, open_pack, maint::install_update])
+        .invoke_handler(tauri::generate_handler![api, upload, window_ready, window_action, pick_folder, restart_app, set_panic_key, set_panic_mode, pick_cover_video, export_excel, export_pack, open_pack, maint::install_update])
         .setup(move |app| {
             // the window starts hidden (no white flash) in the theme's background colour; the page
             // shows it once it has drawn itself (window_ready), or after 3 s whatever happens
@@ -1863,7 +1942,8 @@ fn main() {
                 Ok("high") => true,
                 _ => for_window.load_settings()["fastGpu"].as_bool() == Some(true),
             };
-            let mut args = String::from("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection");
+            // (autoplay: the emergency key's cover video starts with its sound, without a click first)
+            let mut args = String::from("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required");
             if fast_gpu {
                 args.push_str(" --force_high_performance_gpu");
             }
@@ -1873,6 +1953,7 @@ fn main() {
             window = window.additional_browser_args(&args);
             let window = window.build()?;
             let settings = for_window.load_settings();
+            set_panic_mode(settings["panicMode"].as_str().unwrap_or("screensaver").to_string());
             if settings["panicOn"].as_bool() != Some(false) {
                 let key = settings["panicKey"].as_str().filter(|k| !k.is_empty()).unwrap_or(PANIC_KEY).to_string();
                 if let Err(e) = set_panic_key(app.handle().clone(), key) {
