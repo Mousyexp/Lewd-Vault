@@ -114,13 +114,13 @@ fn dir(vault: &Vault) -> PathBuf {
     storage::local_dir(&vault.root, "drive")
 }
 fn load<T: for<'a> Deserialize<'a> + Default>(vault: &Vault, name: &str) -> T {
-    fs::read_to_string(dir(vault).join(name)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    super::crypt::read_to_string(&dir(vault).join(name)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 fn save<T: Serialize>(vault: &Vault, name: &str, v: &T) -> Res<()> {
     let d = dir(vault);
     fs::create_dir_all(&d).map_err(err)?;
     let tmp = d.join(format!("{name}.part"));
-    fs::write(&tmp, serde_json::to_vec(v).map_err(err)?).map_err(err)?;
+    super::crypt::write(&tmp, &serde_json::to_vec(v).map_err(err)?).map_err(err)?; // (encrypted when untraceable: the sign-in is in there)
     fs::rename(&tmp, d.join(name)).map_err(err)
 }
 
@@ -132,9 +132,23 @@ fn client(a: &Account) -> Option<(String, String)> {
     (!id.is_empty()).then(|| (id.to_string(), BUILT_IN_SECRET.unwrap_or("").trim().to_string()))
 }
 
+// The welcome screen's "Google Drive in your browser": the page offers the sign-in once, after the
+// restart into the new place.
+static ASK: AtomicBool = AtomicBool::new(false);
+pub fn ask_sign_in(on: bool) {
+    ASK.store(on, Ordering::Relaxed);
+}
+pub fn asked() -> Value {
+    if ASK.swap(false, Ordering::Relaxed) {
+        storage::edit_config(|v| { v.as_object_mut().map(|o| o.remove("driveSetup")); });
+    }
+    json!(true)
+}
+
 pub fn status(vault: &Vault) -> Value {
     let a: Account = load(vault, "account.json");
     let mut s = status_cell().lock().unwrap().clone();
+    s["askSignIn"] = json!(ASK.load(Ordering::Relaxed));
     s["hasKey"] = json!(client(&a).is_some());
     s["ownKey"] = json!(!a.client_id.trim().is_empty());
     s["builtIn"] = json!(BUILT_IN_ID.is_some_and(|k| !k.trim().is_empty()));
@@ -298,8 +312,9 @@ fn query_of(target: &str) -> HashMap<String, String> {
         .collect()
 }
 
+// (neutral words: the browser's history keeps this page's title)
 fn page(title: &str, text: &str) -> String {
-    let body = format!("<!doctype html><meta charset=utf-8><title>Lewd Vault</title><body style=\"font-family:Segoe UI,system-ui,sans-serif;background:#2a2226;color:#f7e8ec;display:grid;place-items:center;height:100vh;margin:0\"><div style=\"text-align:center\"><h1 style=\"font-weight:600\">{title}</h1><p>{text}</p></div>");
+    let body = format!("<!doctype html><meta charset=utf-8><title>{title}</title><body style=\"font-family:Segoe UI,system-ui,sans-serif;background:#2a2226;color:#f7e8ec;display:grid;place-items:center;height:100vh;margin:0\"><div style=\"text-align:center\"><h1 style=\"font-weight:600\">{title}</h1><p>{text}</p></div>");
     format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
 }
 
@@ -346,11 +361,11 @@ fn sign_in_flow(vault: &Vault) -> Res<()> {
             continue; // (the favicon, or something that isn't Google's answer)
         }
         if let Some(e) = q.get("error") {
-            let _ = conn.write_all(page("Not connected", "You can close this tab and go back to Lewd Vault.").as_bytes());
+            let _ = conn.write_all(page("Not signed in", "You can close this tab.").as_bytes());
             return Err(if e == "access_denied" { "Sign-in cancelled in the browser".into() } else { format!("Google said: {e}") });
         }
         let Some(code) = q.get("code").cloned() else { continue };
-        let _ = conn.write_all(page("Lewd Vault is connected 💖", "Google Drive sync is on. You can close this tab and go back to the app.").as_bytes());
+        let _ = conn.write_all(page("Signed in", "You can close this tab.").as_bytes());
         break code;
     };
 
@@ -485,16 +500,22 @@ fn ensure_root(vault: &Vault, a: &mut Account) -> Res<String> {
             Err(e) => return Err(e),
         }
     }
-    let q = format!("name = '{}' and mimeType = '{FOLDER_MIME}' and 'root' in parents and trashed = false", drive_q(ROOT_NAME));
+    let q = format!("name = '{}' and mimeType = '{FOLDER_MIME}' and 'root' in parents and trashed = false", drive_q(root_name()));
     let found: Value = call(vault, &|t| agent().get(FILES).query("q", &q).query("fields", "files(id)").query("orderBy", "createdTime")
         .set("Authorization", &bearer(t)).call())?.into_string().map_err(err).and_then(|t| serde_json::from_str::<Value>(&t).map_err(err))?;
     let id = match found["files"][0]["id"].as_str() {
         Some(id) => id.to_string(),
-        None => make_folder(vault, ROOT_NAME, "root")?,
+        None => make_folder(vault, root_name(), "root")?,
     };
     a.root_id = id.clone();
     save(vault, "account.json", a)?;
     Ok(id)
+}
+
+// An untraceable vault syncs to its own folder: its files are encrypted, a normal vault's aren't, and
+// the two must never mix.
+fn root_name() -> &'static str {
+    if super::crypt::untraceable() { "Lewd Vault (encrypted)" } else { ROOT_NAME }
 }
 
 fn make_folder(vault: &Vault, name: &str, parent: &str) -> Res<String> {
@@ -745,6 +766,17 @@ fn sync(vault: &Vault) -> Res<()> {
         m = Manifest { root_id: root.clone(), files: HashMap::new() };
     }
     let (remote, mut folders) = list_remote(vault, &root)?;
+    // an encrypted vault in Drive must have been made with the same password as this one
+    if let (Some(mine), Some(theirs)) = (super::crypt::check_bytes(), remote.get("_app/key.check")) {
+        let tmp = dir(vault).join("key.check.part");
+        fs::create_dir_all(dir(vault)).map_err(err)?;
+        download(vault, &theirs.id, &tmp)?;
+        let same = fs::read(&tmp).map(|b| b == mine).unwrap_or(false);
+        let _ = fs::remove_file(&tmp);
+        if !same {
+            return Err("The vault in your Google Drive was made with another password. Use the same password on every PC.".into());
+        }
+    }
     let local = local_files(&vault.root);
 
     let paths: BTreeSet<String> = local.keys().chain(remote.keys()).chain(m.files.keys()).cloned().collect();
@@ -818,6 +850,7 @@ fn sync(vault: &Vault) -> Res<()> {
                     let rr = r.unwrap();
                     let tmp = path.with_file_name(format!("{name}.drive.part"));
                     download(vault, &rr.id, &tmp)?;
+                    super::crypt::seal(&tmp).map_err(err)?; // (untraceable: nothing lands plain, whatever came)
                     if put_in_place(vault, &tmp, &path, seen)? {
                         let (size, mtime) = stat(&path).unwrap_or((rr.size, 0));
                         m.files.insert(p.clone(), Synced { id: rr.id.clone(), size, mtime, md5: rr.md5.clone() });
@@ -831,6 +864,7 @@ fn sync(vault: &Vault) -> Res<()> {
                     let rr = r.unwrap();
                     let tmp = path.with_file_name(format!("{name}.drive.part"));
                     download(vault, &rr.id, &tmp)?;
+                    super::crypt::seal(&tmp).map_err(err)?;
                     fs::rename(&tmp, conflict_path(&path)).map_err(err)?;
                     let (size, mtime) = seen.unwrap();
                     let (id, md5) = upload(vault, &path, &name, "", Some(&rr.id))?;
@@ -838,7 +872,7 @@ fn sync(vault: &Vault) -> Res<()> {
                     bump("conflicts");
                 }
                 Act::DelHere => {
-                    if trash::delete(&path).is_err() {
+                    if !super::crypt::trash(&path) {
                         let _ = fs::remove_file(&path);
                     }
                     m.files.remove(&p);

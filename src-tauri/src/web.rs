@@ -63,8 +63,10 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
+// (%LOCALAPPDATA%\Image Vault; in Untraceable mode inside the app's hidden folder, see storage.rs, and
+// everything written there is encrypted, see crypt.rs)
 fn base_dir() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("Image Vault")
+    super::storage::local_base()
 }
 fn sources_path() -> PathBuf {
     base_dir().join("sources.json")
@@ -105,7 +107,7 @@ impl Web {
     }
 
     // the domains your sources (Discover) and your own sites (Videos, Audio: "sites") are on
-    fn learn(&self, sources: &Value) {
+    pub(crate) fn learn(&self, sources: &Value) {
         let mut list = sources["sources"].as_array().cloned().unwrap_or_default();
         list.extend(sources["sites"].as_array().cloned().unwrap_or_default());
         *self.domains.lock().unwrap() = list.iter().filter_map(|s| s["base"].as_str().and_then(domain_of)).collect();
@@ -123,12 +125,12 @@ impl Web {
     }
 
     pub fn load_sources(&self) -> Option<Value> {
-        fs::read_to_string(sources_path()).ok().and_then(|t| serde_json::from_str(&t).ok())
+        super::crypt::read_to_string(&sources_path()).ok().and_then(|t| serde_json::from_str(&t).ok())
     }
 
     pub fn save_sources(&self, v: &Value) -> Res<Value> {
         fs::create_dir_all(base_dir()).map_err(err)?;
-        fs::write(sources_path(), v.to_string()).map_err(err)?;
+        super::crypt::write(&sources_path(), v.to_string().as_bytes()).map_err(err)?;
         self.learn(v);
         Ok(Value::Bool(true))
     }
@@ -241,7 +243,7 @@ impl Web {
         let dir = base_dir().join("web");
         let key = md5_hex(url.as_bytes());
         let (body_path, type_path) = (dir.join(format!("{key}.bin")), dir.join(format!("{key}.type")));
-        if let (Ok(b), Ok(t)) = (fs::read(&body_path), fs::read_to_string(&type_path)) {
+        if let (Ok(b), Ok(t)) = (super::crypt::read(&body_path), super::crypt::read_to_string(&type_path)) {
             return Ok((b, t));
         }
         let r = Self::answer(self.request("GET", url, &Value::Null).call())?;
@@ -249,8 +251,8 @@ impl Web {
         let mut bytes = Vec::new();
         r.into_reader().take(MAX_BYTES).read_to_end(&mut bytes).map_err(err)?;
         if fs::create_dir_all(&dir).is_ok() {
-            let _ = fs::write(&body_path, &bytes);
-            let _ = fs::write(&type_path, &kind);
+            let _ = super::crypt::write(&body_path, &bytes);
+            let _ = super::crypt::write(&type_path, kind.as_bytes());
             if self.writes.fetch_add(1, Ordering::Relaxed) % 200 == 199 {
                 trim(&dir);
             }
@@ -302,7 +304,7 @@ impl Web {
                 if let Some(n) = r.header("content-length").and_then(|v| v.parse::<u64>().ok()) {
                     d.total.store(n, Ordering::Relaxed);
                 }
-                let mut out = fs::File::create(&path).map_err(err)?;
+                let mut out = super::crypt::Writer::create(&path).map_err(err)?;
                 let mut reader = r.into_reader().take(MAX_DOWNLOAD);
                 let mut buf = vec![0u8; 512 * 1024];
                 loop {

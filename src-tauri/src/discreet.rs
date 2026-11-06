@@ -23,7 +23,7 @@ pub struct Moving {
 }
 
 pub fn load(vault: &Vault) {
-    let on = fs::read_to_string(vault.app_dir("kv").join("storage.json")).ok()
+    let on = super::crypt::read_to_string(&vault.app_dir("kv").join("storage.json")).ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v["discreet"].as_bool()).unwrap_or(false);
     DISCREET.store(on, Ordering::Relaxed);
 }
@@ -62,7 +62,7 @@ fn run(vault: &Vault, on: bool) -> Res<u64> {
     let was = DISCREET.swap(on, Ordering::Relaxed);
     let kv = vault.app_dir("kv");
     fs::create_dir_all(&kv).map_err(err)?;
-    fs::write(kv.join("storage.json"), json!({ "discreet": on }).to_string()).map_err(err)?;
+    super::crypt::write(&kv.join("storage.json"), json!({ "discreet": on }).to_string().as_bytes()).map_err(err)?;
     let (items, _) = vault.load_index()?;
     let items = (*items).clone();
     vault.moving.total.store(items.len() as u64, Ordering::Relaxed);

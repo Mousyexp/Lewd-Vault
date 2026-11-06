@@ -1019,7 +1019,9 @@
     dropbox: '<svg viewBox="0 0 64 56"><path d="M16 0L0 10.2l16 10.2 16-10.2zM48 0L32 10.2l16 10.2 16-10.2zM0 30.6l16 10.2 16-10.2-16-10.2zM48 20.4L32 30.6l16 10.2 16-10.2zM16 44.2L32 54.4l16-10.2-16-10.2z" fill="#0061fe"/></svg>',
     icloud: '<svg viewBox="0 0 64 40"><defs><linearGradient id="icg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7cc4ff"/><stop offset="1" stop-color="#2f8bea"/></linearGradient></defs><path d="M50 40H15C6.7 40 0 33.6 0 25.5 0 18 5.7 11.9 13 11.1 15.8 4.6 22.3 0 29.9 0c8.9 0 16.3 6.2 18.1 14.5C57 15 64 21.4 64 29.5 64 35.3 57.7 40 50 40z" fill="url(#icg)"/></svg>',
     local: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="19" height="13" rx="2.5"/><path d="M8 20.5h8M12 16.5v4"/></svg>',
-    custom: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2.5h6.5A2.5 2.5 0 0 1 21 10v7.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/></svg>'
+    custom: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2.5h6.5A2.5 2.5 0 0 1 21 10v7.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/></svg>',
+    untraceable: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.8 4.5 5.6v5.6c0 4.6 3.1 8.4 7.5 9.9 4.4-1.5 7.5-5.3 7.5-9.9V5.6z"/><rect x="8.6" y="10.6" width="6.8" height="5.4" rx="1.3"/><path d="M10.3 10.6V9.2a1.7 1.7 0 0 1 3.4 0v1.4"/></svg>',
+    gdriveweb: '<svg viewBox="0 0 87.3 75"><path d="M29.1 0h29.1l29.1 50H58.2z" fill="#f4b400"/><path d="M29.1 0L0 50l14.5 25 29.1-50z" fill="#0f9d58"/><path d="M14.5 75h58.2l14.6-25H29.1z" fill="#4285f4"/></svg>'
   };
   const welcome = make('div', 'welcome hidden');
   welcome.id = 'welcome';
@@ -1070,7 +1072,8 @@
       icon.innerHTML = SERVICE_ICONS[o.id] || SERVICE_ICONS.custom;
       const name = make('span', 'wl-opt-name', o.name);
       const line = make('span', 'wl-opt-line');
-      if (!o.found) line.textContent = 'Not on this PC';
+      if (o.id === 'untraceable') line.textContent = !o.found ? 'Needs the portable app' : o.current ? 'Encrypted, hidden next to the app' : o.exists ? 'A locked vault is there' : 'Encrypted, no traces on this PC';
+      else if (!o.found) line.textContent = o.id === 'gdrive' ? 'Drive app not on this PC' : 'Not on this PC';
       else if (o.items) line.textContent = `${fmtN(o.items)} ${o.items === 1 ? 'item' : 'items'} there`;
       else line.textContent = o.id === 'local' ? 'Next to the app' : 'Ready';
       card.append(icon, name, line);
@@ -1080,10 +1083,21 @@
         get.onclick = e => { e.stopPropagation(); api('openDownload', o.id).catch(err => toast(errMsg(err), 'err')); };
         card.append(get);
       }
-      card.title = o.folder || '';
-      card.onclick = () => { if (o.found) confirmOption(o); else if (o.download) api('openDownload', o.id).catch(() => {}); };
+      card.title = o.why || o.folder || '';
+      card.onclick = () => { if (o.found) confirmOption(o); else if (o.why) toast(o.why, 'err'); else if (o.download) api('openDownload', o.id).catch(() => {}); };
+      if (o.id === 'untraceable') card.classList.add('wl-untraceable');
       return card;
     });
+    // Google Drive without its app (it needs an administrator): the vault on this PC or Untraceable,
+    // synced through a sign-in in the browser (drivesync.js, gdrive.rs)
+    const web = make('button', 'wl-opt');
+    web.type = 'button';
+    const wi = make('span', 'wl-opt-icon s-gdrive');
+    wi.innerHTML = SERVICE_ICONS.gdriveweb;
+    web.append(wi, make('span', 'wl-opt-name', 'Google Drive in your browser'), make('span', 'wl-opt-line', 'No Drive app or admin needed'));
+    web.onclick = () => confirmDriveWeb();
+    const at = cards.findIndex(c => c.classList.contains('s-gdrive') || c.querySelector('.s-gdrive'));
+    cards.splice(at + 1, 0, web);
     const other = make('button', 'wl-opt');
     other.type = 'button';
     const oi = make('span', 'wl-opt-icon s-custom');
@@ -1096,7 +1110,38 @@
     wl('.wl-grid').replaceChildren(...cards.filter(c => !c.classList.contains('custom')), other);
   }
 
-  function confirmOption(o) {
+  // "Google Drive in your browser": where the vault itself lives, then the sign-in after the restart
+  function confirmDriveWeb() {
+    const box = wl('.wl-confirm');
+    box.replaceChildren();
+    const head = make('div', 'wl-confirm-head');
+    const icon = make('span', 'wl-opt-icon s-gdrive');
+    icon.innerHTML = SERVICE_ICONS.gdriveweb;
+    head.append(icon, make('h2', '', 'Google Drive in your browser'));
+    box.append(head, make('p', 'wl-note', 'For PCs where Google Drive\'s app can\'t be installed (it needs an administrator). Your vault syncs with a folder in your Drive; you sign in once in your web browser, right after this. Where should the vault itself be kept on this PC?'));
+    const local = wlData.options.find(x => x.id === 'local'), untr = wlData.options.find(x => x.id === 'untraceable');
+    const pick = make('div', 'wl-choice');
+    const choice = (o, title, sub) => {
+      const b = make('button', 'wl-pick');
+      b.type = 'button';
+      b.append(make('b', '', title), make('small', '', sub));
+      b.disabled = !o || !o.found;
+      if (o && o.why) b.title = o.why;
+      b.onclick = () => confirmOption(o, { drive: true });
+      return b;
+    };
+    pick.append(choice(local, 'On this PC', 'A normal folder, fastest'), choice(untr, 'Untraceable', untr && untr.found ? 'Encrypted next to the app, nothing else on this PC' : (untr && untr.why) || ''));
+    const actions = make('div', 'wl-actions');
+    const back = make('button', 'btn', 'Back');
+    back.type = 'button';
+    back.onclick = () => step('wl-choose');
+    actions.append(back);
+    box.append(pick, actions);
+    step('wl-confirm');
+  }
+
+  function confirmOption(o, extra = {}) {
+    if (o.id === 'untraceable') return confirmUntraceable(o, extra);
     const box = wl('.wl-confirm');
     box.replaceChildren();
     const head = make('div', 'wl-confirm-head');
@@ -1120,20 +1165,95 @@
     } else if (o.id !== 'local' && o.id !== 'custom') {
       box.append(make('p', 'wl-note', `${o.name} will upload everything you add and keep it in sync on your other devices.`));
     }
+    if (extra.drive) box.append(make('p', 'wl-note', 'After this, Lewd Vault restarts and you sign in to Google Drive in your web browser.'));
+    if (wlData.untraceable && !o.current) box.append(make('p', 'wl-note wl-warn', 'Your vault is untraceable now. Here it will be kept unencrypted again.'));
     const actions = make('div', 'wl-actions');
     const back = make('button', 'btn', 'Back');
     const go = make('button', 'btn primary', o.current ? 'Keep it here' : o.items ? 'Open that vault' : 'Create my vault');
     back.type = go.type = 'button';
     back.onclick = () => step('wl-choose');
-    go.onclick = () => useOption(o, copy ? copy.querySelector('input:checked').value === '1' : false);
+    go.onclick = () => useOption(o, copy ? copy.querySelector('input:checked').value === '1' : false, { driveSetup: !!extra.drive });
     actions.append(back, go);
     box.append(actions);
     step('wl-confirm');
   }
 
-  async function useOption(o, copy) {
+  // Untraceable (crypt.rs): a password, what to bring along, what to clear away
+  function confirmUntraceable(o, extra) {
+    const box = wl('.wl-confirm');
+    box.replaceChildren();
+    const head = make('div', 'wl-confirm-head');
+    const icon = make('span', 'wl-opt-icon s-untraceable');
+    icon.innerHTML = SERVICE_ICONS.untraceable;
+    head.append(icon, make('h2', '', o.current ? 'Untraceable' : 'Make it untraceable'));
+    box.append(head);
+    if (o.current) {
+      box.append(make('p', 'wl-note', 'Your vault is untraceable already: encrypted in a hidden folder next to the app.'));
+    } else {
+      const fresh = !o.exists;
+      box.append(make('p', 'wl-note', fresh
+        ? 'For a PC that isn\'t only yours. Your vault is kept encrypted in a hidden folder next to the app, and nothing else is stored anywhere on this PC: no thumbnails, no caches, no browser history. Without the password the files can\'t be opened, found by Windows Search or previewed. If you forget it, nothing can bring the vault back.'
+        : 'There\'s an untraceable vault next to the app already. Its password opens it.'));
+      const pw = make('input'); Object.assign(pw, { type: 'password', placeholder: fresh ? 'Password (at least 6 characters)' : 'Its password', autocomplete: 'off' });
+      const pw2 = make('input'); Object.assign(pw2, { type: 'password', placeholder: 'The same again', autocomplete: 'off' });
+      const fields = make('div', 'wl-pw');
+      fields.append(pw);
+      if (fresh) fields.append(pw2);
+      box.append(fields);
+      const here = wlData.currentItems || 0;
+      let copy = null, del = null;
+      if (fresh && here) {
+        copy = make('div', 'wl-choice');
+        copy.innerHTML = `<label><input type="radio" name="wlcopy" value="1" checked> <span><b>Move my ${fmtN(here)} items in, encrypted</b><small>They're copied in and encrypted on the way.</small></span></label>
+          <label><input type="radio" name="wlcopy" value="0"> <span><b>Start with an empty vault</b><small>Your current library stays where it is.</small></span></label>`;
+        box.append(copy);
+        del = make('label', 'wl-check');
+        const cb = make('input'); cb.type = 'checkbox';
+        del.append(cb, make('span', '', 'Then delete the unencrypted library (permanently, not to the Recycle Bin; from the cloud too if it\'s a synced folder)'));
+        box.append(del);
+      }
+      const scrub = make('label', 'wl-check');
+      const sc = make('input'); sc.type = 'checkbox'; sc.checked = true;
+      scrub.append(sc, make('span', '', 'Clear what Lewd Vault kept on this PC before (thumbnail and web caches, the built-in browser\'s data)'));
+      box.append(scrub);
+      box.append(make('p', 'wl-note wl-tip', 'Tip: rename "Lewd Vault.exe" and its folder to something dull (say "Notes"): Windows remembers the names of programs that ran.'));
+      if (extra.drive) box.append(make('p', 'wl-note', 'After this, Lewd Vault restarts and you sign in to Google Drive in your web browser. In Drive, the vault stays encrypted too.'));
+      const actions = make('div', 'wl-actions');
+      const back = make('button', 'btn', 'Back');
+      const go = make('button', 'btn primary', fresh ? 'Make it untraceable' : 'Open that vault');
+      back.type = go.type = 'button';
+      back.onclick = () => step('wl-choose');
+      go.onclick = () => {
+        if (fresh && pw.value.length < 6) { toast('Use a password of at least 6 characters', 'err'); pw.focus(); return; }
+        if (fresh && pw.value !== pw2.value) { toast('The two passwords are different', 'err'); pw2.focus(); return; }
+        if (!pw.value) { pw.focus(); return; }
+        const moving = copy ? copy.querySelector('input:checked').value === '1' : false;
+        useOption(o, moving, { untraceable: true, password: pw.value, scrub: sc.checked, deleteOld: moving && !!(del && del.querySelector('input').checked), driveSetup: !!extra.drive });
+      };
+      actions.append(back, go);
+      box.append(actions);
+      step('wl-confirm');
+      setTimeout(() => pw.focus(), 30);
+      return;
+    }
+    const actions = make('div', 'wl-actions');
+    const back = make('button', 'btn', 'Back');
+    back.type = 'button';
+    back.onclick = () => step('wl-choose');
+    actions.append(back);
+    if (extra.drive) {
+      const go = make('button', 'btn primary', 'Sign in to Google Drive');
+      go.type = 'button';
+      go.onclick = () => useOption(o, false, { driveSetup: true });
+      actions.append(go);
+    }
+    box.append(actions);
+    step('wl-confirm');
+  }
+
+  async function useOption(o, copy, opts = {}) {
     step('wl-busy');
-    wl('.wl-busy-text').textContent = copy ? 'Copying your library…' : 'Setting up your vault…';
+    wl('.wl-busy-text').textContent = copy ? (opts.untraceable ? 'Encrypting your library…' : 'Copying your library…') : 'Setting up your vault…';
     const fill = wl('.wl-bar-fill'), sub = wl('.wl-busy-sub');
     fill.style.width = copy ? '0%' : '60%';
     sub.textContent = '';
@@ -1142,7 +1262,7 @@
       if (p && p.total) { fill.style.width = (p.done / p.total * 100).toFixed(1) + '%'; sub.textContent = `${fmtBytes(p.done)} of ${fmtBytes(p.total)}`; }
     }, 300) : null;
     try {
-      const r = await api('useStorage', o.folder, copy);
+      const r = await api('useStorage', o.folder, copy, opts);
       clearInterval(poll);
       fill.style.width = '100%';
       if (!r.restart) { closeWelcome(); return; }

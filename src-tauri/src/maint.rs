@@ -149,7 +149,7 @@ pub fn health_fix(vault: &Vault, what: &str) -> Res<Value> {
             let mut n = 0;
             for o in report["orphanClips"].as_array().cloned().unwrap_or_default() {
                 if let Some(name) = o["name"].as_str() {
-                    if trash::delete(dir.join(name)).is_ok() {
+                    if super::crypt::trash(&dir.join(name)) {
                         n += 1;
                     }
                 }

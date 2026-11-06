@@ -26,6 +26,37 @@ patch(`const inAppsScript = !!(window.google && google.script && google.script.r
 const inTauri = !!(window.__TAURI__ && window.__TAURI__.core);
 const inAppsScript = inTauri || !!(window.google && google.script && google.script.run);
 const tauriInvoke = inTauri ? window.__TAURI__.core.invoke : null;
+// Untraceable mode (src-tauri/src/crypt.rs): the vault is encrypted, and opens with its password
+// before anything is read. Resolves once it's open (at once in the other modes).
+function vaultUnlock() {
+  return tauriInvoke('api', { name: 'lockState', args: [] }).then(st => {
+    if (st && st.untraceable) document.title = 'Notes'; // (the page's title can show as the window's)
+    if (!st || !st.locked) return;
+    return new Promise(done => {
+      const show = () => {
+        const box = document.createElement('div');
+        box.className = 'ul-lock';
+        box.innerHTML = '<form class="ul-card"><span class="ul-icon"></span><b>Enter your password</b>' +
+          '<input type="password" autocomplete="off" spellcheck="false" aria-label="Password">' +
+          '<button class="btn primary" type="submit">Open</button><span class="ul-err"></span></form>';
+        const form = box.querySelector('form'), input = box.querySelector('input'), go = box.querySelector('button'), msg = box.querySelector('.ul-err');
+        form.onsubmit = async e => {
+          e.preventDefault();
+          if (!input.value) return;
+          go.disabled = input.disabled = true; go.textContent = 'Opening…'; msg.textContent = '';
+          try { await tauriInvoke('unlock', { password: input.value }); box.remove(); done(); }
+          catch (err) {
+            msg.textContent = String(err && err.message || err);
+            go.disabled = input.disabled = false; go.textContent = 'Open'; input.value = ''; input.focus();
+          }
+        };
+        document.body.append(box);
+        setTimeout(() => input.focus(), 60);
+      };
+      if (document.body) show(); else addEventListener('DOMContentLoaded', show);
+    });
+  }).catch(() => {});
+}
 // files are served by the app's vault:// protocol (with byte ranges); WebView2 spells it http://vault.localhost/
 const vaultUrl = id => 'http://vault.localhost/' + encodeURIComponent(id);
 async function localFetch(id, init) {
@@ -41,6 +72,9 @@ var makeClip = null, forYouKey = () => 0, isOriginal = () => false;
 var libraryOk = () => true;
 // and slideshow.js: the slides' motion, and full screen for the whole monitor
 var slideMotion = null, showFullscreen = on => { if (on === false || (on === undefined && document.fullscreenElement)) { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } else $('show').requestFullscreen().catch(() => {}); };`);
+
+patch(`const setupReady = (bootSetup ? Promise.resolve(bootSetup) : api('getSetup')).then(`,
+      `const setupReady = (bootSetup ? Promise.resolve(bootSetup) : inTauri ? vaultUnlock().then(() => api('getSetup')) : api('getSetup')).then(`);
 
 patch(`function api(fn, ...args) {
 `, `function api(fn, ...args) {

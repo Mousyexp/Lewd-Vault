@@ -67,7 +67,7 @@ fn find(vault: &Vault) -> Res<Vec<Vec<String>>> {
     let (items, _) = vault.load_index()?;
     let items: Vec<_> = items.iter().filter(|i| !i.thumb.is_empty()).cloned().collect();
     let cache_path = storage::local_dir(&vault.root, "cache").join("dupes.json");
-    let known: HashMap<String, u64> = fs::read_to_string(&cache_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let known: HashMap<String, u64> = super::crypt::read_to_string(&cache_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     vault.dupes.total.store(items.len() as u64, Ordering::Relaxed);
     vault.dupes.done.store(0, Ordering::Relaxed);
     let hashes: Mutex<HashMap<String, u64>> = Mutex::new(HashMap::new());
@@ -89,7 +89,7 @@ fn find(vault: &Vault) -> Res<Vec<Vec<String>>> {
     let hashes = hashes.into_inner().unwrap();
     if let Some(dir) = cache_path.parent() {
         let _ = fs::create_dir_all(dir);
-        let _ = fs::write(&cache_path, serde_json::to_string(&hashes).unwrap_or_default());
+        let _ = super::crypt::write(&cache_path, serde_json::to_string(&hashes).unwrap_or_default().as_bytes());
     }
     // pairs close enough, in the same family (pictures with pictures, moving with moving) and of
     // about the same shape, joined into groups

@@ -24,6 +24,8 @@ zip = { version = "2", default-features = false, features = ["deflate"] } # (def
 ureq = "2"
 sha2 = "0.10" # (Google sign-in, gdrive.rs: the PKCE challenge)
 getrandom = "0.2"
+chacha20 = "0.9" # (Untraceable mode, crypt.rs: the files encrypted)
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 image = { version = "0.25", default-features = false, features = ["webp", "jpeg", "png", "gif"] }
 
 [profile.release]

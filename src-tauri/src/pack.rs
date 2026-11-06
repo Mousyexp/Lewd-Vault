@@ -32,7 +32,7 @@ pub fn export(vault: &Vault, ids: &[String], card_png: &[u8], title: &str, path:
         let ext = src.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_else(|| "bin".into());
         let name = format!("files/{:04}.{ext}", k + 1);
         zip.start_file(name.as_str(), opts).map_err(err)?;
-        let mut f = fs::File::open(&src).map_err(err)?;
+        let mut f = super::crypt::Reader::open(&src).map_err(err)?; // (an untraceable vault's files go out plain: the pack is for sharing)
         std::io::copy(&mut f, &mut zip).map_err(err)?;
         list.push(json!({
             "file": name, "name": i.name, "category": i.category, "nsfw": i.nsfw, "quality": i.quality, "tags": i.tags,
@@ -71,7 +71,7 @@ pub fn open(vault: &Vault, path: &Path) -> Res<Value> {
         let ext: String = Path::new(inner).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default().chars().filter(|c| c.is_ascii_alphanumeric()).take(5).collect();
         let name = format!("pack-{token}-{k:04}.{ext}");
         let mut entry = match zip.by_name(inner) { Ok(e) => e, Err(_) => continue };
-        let mut f = fs::File::create(dir.join(&name)).map_err(err)?;
+        let mut f = super::crypt::Writer::create(&dir.join(&name)).map_err(err)?;
         std::io::copy(&mut entry, &mut f).map_err(err)?;
         let mut v = it.clone();
         v["id"] = json!(format!("streams-{}", super::b64(&name)));
@@ -80,7 +80,7 @@ pub fn open(vault: &Vault, path: &Path) -> Res<Value> {
     let card = match zip.by_name("card.png") {
         Ok(mut c) => {
             let name = format!("pack-{token}-card.png");
-            let mut f = fs::File::create(dir.join(&name)).map_err(err)?;
+            let mut f = super::crypt::Writer::create(&dir.join(&name)).map_err(err)?;
             std::io::copy(&mut c, &mut f).map_err(err)?;
             json!(format!("streams-{}", super::b64(&name)))
         }

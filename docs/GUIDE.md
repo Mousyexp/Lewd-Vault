@@ -80,10 +80,42 @@ To change it later, go to **Settings → Storage → Change where it lives…**.
 - **Two computers:** use the vault on one computer at a time. The cloud service would make conflict
   copies of `index.csv` if two wrote it at once.
 
+### Untraceable (encrypted, no traces on the PC)
+
+For a PC that isn't only yours, such as a work laptop. Pick **Untraceable** on the welcome screen
+(or **Settings → Storage → Change where it lives…**), choose a password, and the app keeps the vault
+in a hidden `data.temp` folder next to `Lewd Vault.exe` (`src-tauri/src/crypt.rs`, `storage.rs`):
+
+- **Every file is encrypted** (ChaCha20, with a key made from your password by PBKDF2-SHA256): the
+  pictures, videos, thumbnails, `index.csv`, settings, everything. Without the password they're
+  noise: Explorer, Windows Search and photo apps can't show, preview or index them. Files are
+  decrypted only in memory, as the app reads them (seeking in videos included).
+- **Nothing goes anywhere else on the PC:** the thumbnail and web caches, unfinished uploads,
+  Discover's sources and the Google Drive sign-in stay in `data.temp` (encrypted), and the built-in
+  browser engine runs in private mode with its data folder in `data.temp` too. Deleted items go to
+  the vault's own `_trash`, not the Recycle Bin. The choice itself is only kept next to the app.
+  Discreet (number-only) file names are switched on, the window is called "Notes" on the taskbar,
+  and "Open in another app" is turned off (it would need a decrypted copy on disk).
+- **The password** is asked on a plain grey screen every time the app starts. Forget it and the vault
+  can't be recovered.
+- **Moving in:** your current library can be copied in, encrypted on the way. Optionally the old,
+  unencrypted folder is then deleted for good, and what the app kept on this PC before (caches, the
+  browser engine's data in `%LOCALAPPDATA%`, the `%APPDATA%` config) is cleared at the next start.
+- **Needs the portable version** (`Lewd Vault Portable.zip`), in a folder you can write to; the
+  installed app lives in Program Files, where it can't keep a vault next to itself.
+- **With Google Drive in your browser**, an untraceable vault syncs to its own Drive folder,
+  "Lewd Vault (encrypted)", and stays encrypted there. Use the same password on every PC (the app
+  checks, and stops syncing on a mismatch).
+- **What it can't hide:** that a program ran (Windows keeps the names of programs that ran, so rename
+  `Lewd Vault.exe` and its folder to something dull), the size of `data.temp`, and anything the
+  Windows account's administrators or monitoring software record (screenshots, network logs). It
+  hides the files from anyone looking at the disk; it isn't protection against your employer's IT.
+
 ### Google Drive over the web (no Drive app needed)
 
-Google Drive for desktop needs an administrator to install. On a PC without it, keep the vault on
-**This PC** (or any folder) and turn on **Settings → Storage → Google Drive over the web**
+Google Drive for desktop needs an administrator to install. On a PC without it, pick **Google Drive
+in your browser** on the welcome screen (the vault itself on **This PC** or **Untraceable**, then you
+sign in), or turn it on later in **Settings → Storage → Google Drive over the web**
 (`ui/drivesync.js`, `src-tauri/src/gdrive.rs`):
 
 1. **A Google key.** Google only lets an app into Drive with an "OAuth client". A release build can
@@ -808,6 +840,7 @@ of shipping a half-patched page.
   | `main.rs` | The calls, the file server, the window, the emergency key |
   | `storage.rs` | Where the vault lives |
   | `gdrive.rs` | Google Drive over the web: browser sign-in and two-way sync |
+  | `crypt.rs` | Untraceable mode: the files encrypted, the password |
   | `web.rs` | Discover's requests and picture cache, the Reddit login |
   | `dupes.rs` | Duplicates |
   | `discreet.rs` | Discreet names |

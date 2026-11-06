@@ -25,6 +25,15 @@
 
   async function refresh() {
     try { st = await api('driveStatus'); } catch (e) { return; }
+    // chosen on the welcome screen ("Google Drive in your browser"): the sign-in, once
+    if (st.askSignIn) {
+      api('driveAsked').catch(() => {});
+      st.askSignIn = false;
+      if (!st.connected) {
+        if (st.hasKey) signIn();
+        else { toast('One more step: a Google key, then sign in', 'ok'); keySheet(); }
+      }
+    }
     // a sync finished: say what happened, and show what came from Drive
     if (st.finished && st.finished !== lastFinished) {
       const first = lastFinished === null;
@@ -130,10 +139,6 @@
       setTimeout(() => id.focus(), 30);
     });
   }
-
-  // the welcome screen: point PCs without the Drive app here
-  const hint = document.querySelector('#welcome .wl-choose .wl-hint');
-  if (hint) hint.after(make('p', 'wl-hint', 'No Google Drive app on this PC (it needs an administrator)? Pick This PC, then Settings → Storage → Google Drive over the web.'));
 
   setupReady.then(() => setTimeout(refresh, 500));
   // back to the app: catch up on what the automatic sync did meanwhile

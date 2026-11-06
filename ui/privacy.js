@@ -25,6 +25,8 @@
   const savedLocal = (() => { try { return JSON.parse(localStorage.getItem('imageVault.settings')) || {}; } catch (e) { return {}; } })();
   settings.panicOn = savedLocal.panicOn !== false;
   settings.panicCover = savedLocal.panicCover === true;
+  // (the page fills in defaults before this file adds its settings: this one's start value by hand)
+  settings.panicMode = ['screensaver', 'video', 'hide'].includes(savedLocal.panicMode) ? savedLocal.panicMode : 'screensaver';
   settings.panicKey = typeof savedLocal.panicKey === 'string' ? savedLocal.panicKey : DEFAULT_KEY;
   settings.coverVideo = typeof savedLocal.coverVideo === 'string' ? savedLocal.coverVideo : '';
   setupReady.then(s => {
@@ -273,7 +275,15 @@
     try { cb.checked = localStorage.getItem('imageVault.discreetChoice') !== '0'; } catch (e) { cb.checked = true; }
     cb.onchange = () => { try { localStorage.setItem('imageVault.discreetChoice', cb.checked ? '1' : '0'); } catch (e) {} };
     lab.append(cb, make('span', '', 'Discreet names: files in one neutral folder, named by number only'));
-    box.append(lab, keyRow('welcome'));
+    // and what the key shows (Settings → Privacy has the same)
+    const modeRow = make('div', 'pv-keyrow pv-moderow');
+    const mode = make('select');
+    for (const [v, l] of [['screensaver', 'A screensaver'], ['video', 'A cat video'], ['hide', 'Nothing (the app disappears)']]) mode.add(new Option(l, v));
+    setupReady.then(() => { mode.value = S('panicMode'); });
+    mode.onchange = () => { settings.panicMode = mode.value; saveSettingsSoon(); };
+    mode.value = S('panicMode');
+    modeRow.append(make('span', 'pv-keylabel', 'It shows'), mode);
+    box.append(lab, keyRow('welcome'), modeRow);
     const pointer = card.querySelector('.wl-pointer');
     (pointer || card.querySelector('.wl-step.wl-choose')).after(box);
   }

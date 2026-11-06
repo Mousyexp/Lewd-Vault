@@ -32,6 +32,7 @@ use tauri::http::{response::Builder as ResponseBuilder, Request as HttpRequest, 
 use tauri::{Manager, State};
 
 mod discreet;
+mod crypt;
 mod dupes;
 mod excel;
 mod fastlane;
@@ -397,7 +398,7 @@ fn is_conflict_copy(name: &str, base: &str) -> bool {
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Res<()> {
     let tmp = path.with_extension(format!("{}.part", path.extension().and_then(|e| e.to_str()).unwrap_or("")));
-    fs::write(&tmp, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    crypt::write(&tmp, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         format!("Could not write {} (is it open in another program?): {e}", path.display())
@@ -430,15 +431,22 @@ impl Vault {
         let v = Vault { root, lock: Mutex::new(()), cache: Mutex::new(None), packs: Mutex::new(HashMap::new()),
                       resizing: (Mutex::new(0), std::sync::Condvar::new()),
                       first_run: first_run.into(), copy: Default::default(), web: web::Web::new(), dupes: Default::default(), moving: Default::default() };
-        discreet::load(&v);
-        let _ = fs::remove_dir_all(v.incoming_dir()); // pieces of uploads cut short last time
-        for f in APP_FOLDERS {
-            let _ = fs::create_dir_all(v.app_dir(f));
+        // (an untraceable vault waits for its password: see unlock)
+        if !crypt::locked() {
+            v.init();
         }
-        let _ = v.read_text(INDEX_NAME, &to_csv(&[]));
-        let _ = v.read_text(VIEWS_NAME, &views_csv(&[]));
-        v.backup_daily();
         v
+    }
+
+    fn init(&self) {
+        discreet::load(self);
+        let _ = fs::remove_dir_all(self.incoming_dir()); // pieces of uploads cut short last time
+        for f in APP_FOLDERS {
+            let _ = fs::create_dir_all(self.app_dir(f));
+        }
+        let _ = self.read_text(INDEX_NAME, &to_csv(&[]));
+        let _ = self.read_text(VIEWS_NAME, &views_csv(&[]));
+        self.backup_daily();
     }
 
     // unfinished uploads: on this PC, not in the vault (which a cloud service may be syncing)
@@ -468,7 +476,7 @@ impl Vault {
             fs::create_dir_all(&self.root).map_err(err)?;
             write_atomic(&p, empty.as_bytes())?;
         }
-        let bytes = fs::read(&p).map_err(err)?;
+        let bytes = crypt::read(&p).map_err(err)?;
         Ok((String::from_utf8_lossy(&bytes).into_owned(), md5_hex(&bytes)))
     }
 
@@ -533,7 +541,7 @@ impl Vault {
         self.backup_daily();
         let (mut added, mut counts, mut files) = (0usize, 0usize, Vec::new());
         for (path, is_index) in copies {
-            let Ok(bytes) = fs::read(&path) else { continue }; // (still being synced: next time)
+            let Ok(bytes) = crypt::read(&path) else { continue }; // (still being synced: next time)
             let text = String::from_utf8_lossy(&bytes);
             if is_index {
                 let (ours, _) = self.load_index()?;
@@ -679,10 +687,13 @@ impl Vault {
         let size = slices.iter().map(|(o, l)| o + l).max()?;
         for f in fs::read_dir(self.app_dir("thumbs")).ok()?.flatten() {
             let path = f.path();
-            if f.metadata().map(|m| m.len()).ok() != Some(size) || path.extension().and_then(|e| e.to_str()) != Some("bin") {
+            if path.extension().and_then(|e| e.to_str()) != Some("bin") {
                 continue;
             }
-            let Ok(mut file) = fs::File::open(&path) else { continue };
+            let Ok(mut file) = crypt::Reader::open(&path) else { continue };
+            if file.len() != size {
+                continue;
+            }
             let webp = slices.iter().take(20).all(|(o, _)| {
                 let mut head = [0u8; 4];
                 file.seek(SeekFrom::Start(*o)).and_then(|_| file.read_exact(&mut head)).is_ok() && &head == b"RIFF"
@@ -780,7 +791,7 @@ impl Vault {
     }
 
     fn load_settings(&self) -> Value {
-        fs::read_to_string(self.app_dir("settings.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}))
+        crypt::read_to_string(&self.app_dir("settings.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}))
     }
 
     fn get_setup(&self) -> Res<Value> {
@@ -792,7 +803,8 @@ impl Vault {
             "folders": { "clips": "app-clips", "thumbs": "app-thumbs", "streams": "app-streams" },
             "dataFolder": self.root.display().to_string(),
             "firstRun": self.first_run.load(std::sync::atomic::Ordering::Relaxed),
-            "discreet": DISCREET.load(std::sync::atomic::Ordering::Relaxed), "discreetChosen": discreet::chosen(self)
+            "discreet": DISCREET.load(std::sync::atomic::Ordering::Relaxed), "discreetChosen": discreet::chosen(self),
+            "untraceable": crypt::untraceable()
         }))
     }
 
@@ -806,7 +818,7 @@ impl Vault {
     // carries on from the highest number in the index.
     fn reserve_locked(&self, count: u64) -> Res<Vec<String>> {
         let state_path = self.app_dir("state.json");
-        let mut state: Value = fs::read_to_string(&state_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
+        let mut state: Value = crypt::read_to_string(&state_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
         let mut n = state["nextUid"].as_u64().unwrap_or(0);
         if n == 0 {
             let (items, _) = self.load_index()?;
@@ -940,7 +952,7 @@ impl Vault {
             if waste * 4 <= size || waste < 256 * 1024 || fresh(&path) {
                 continue;
             }
-            let Ok(bytes) = fs::read(&path) else { continue };
+            let Ok(bytes) = crypt::read(&path) else { continue };
             if slices.iter().any(|&(_, o, l)| o + l > bytes.len() as u64) {
                 continue; // (not the file the index means)
             }
@@ -964,7 +976,7 @@ impl Vault {
         let md5 = if changed { self.write_index(&items)? } else { prev.clone() };
         for p in old_files {
             self.packs.lock().unwrap().retain(|_, v| *v != p);
-            if trash::delete(&p).is_err() {
+            if !crypt::trash(&p) {
                 let _ = fs::remove_file(&p);
             }
         }
@@ -977,7 +989,7 @@ impl Vault {
                     continue;
                 }
                 let size = f.metadata().map(|m| m.len()).unwrap_or(0);
-                if trash::delete(&path).is_ok() {
+                if crypt::trash(&path) {
                     freed += size;
                     trashed += 1;
                 }
@@ -1152,8 +1164,9 @@ impl Vault {
             json!({ "count": ids.len(), "prev": prev, "md5": md5, "viewsPrev": views_prev, "viewsMd5": views_md5 })
         };
         for p in paths.into_iter().filter(|p| p.exists()) {
-            // the Recycle Bin, or (a cloud drive may not have one) the vault's own _trash folder
-            if trash::delete(&p).is_err() {
+            // the Recycle Bin, or (a cloud drive may not have one; untraceable: the bin is a trace) the
+            // vault's own _trash folder
+            if crypt::untraceable() || trash::delete(&p).is_err() {
                 let bin = self.root.join("_trash");
                 let _ = fs::create_dir_all(&bin);
                 let to = bin.join(p.file_name().unwrap_or_default());
@@ -1181,7 +1194,7 @@ impl Vault {
         fs::create_dir_all(&dir).map_err(err)?;
         let copy = dir.join(format!("original {name}"));
         fs::copy(&from, &copy).map_err(|e| format!("Could not back up {name}: {e}"))?;
-        if trash::delete(&copy).is_err() {
+        if crypt::untraceable() || trash::delete(&copy).is_err() {
             let bin = self.root.join("_trash");
             fs::create_dir_all(&bin).map_err(err)?;
             let to = bin.join(copy.file_name().unwrap_or_default());
@@ -1217,12 +1230,12 @@ impl Vault {
         let parts: Vec<&str> = thumb.rsplitn(3, ':').collect();
         if let [len, off, pack] = parts[..] {
             let (off, len): (u64, usize) = (off.parse().map_err(err)?, len.parse().map_err(err)?);
-            let mut f = fs::File::open(self.resolve(pack)?).map_err(err)?;
+            let mut f = crypt::Reader::open(&self.resolve(pack)?).map_err(err)?;
             let mut buf = vec![0u8; len];
             f.seek(SeekFrom::Start(off)).and_then(|_| f.read_exact(&mut buf)).map_err(err)?;
             return Ok(buf);
         }
-        fs::read(self.resolve(thumb)?).map_err(err)
+        crypt::read(&self.resolve(thumb)?).map_err(err)
     }
 
     // The thumbnail at most `width` px wide, for the Library's cards. Thumbnails are made 900 x 1200
@@ -1231,7 +1244,7 @@ impl Vault {
     fn grid_thumb(&self, thumb: &str, width: u32) -> Res<(Vec<u8>, &'static str)> {
         let key = format!("{:x}", md5::compute(thumb.as_bytes()));
         let path = storage::local_dir(&self.root, "cache").join(format!("w{width}")).join(format!("{key}.jpg"));
-        if let Ok(bytes) = fs::read(&path) {
+        if let Ok(bytes) = crypt::read(&path) {
             return Ok((bytes, "image/jpeg"));
         }
         let source = self.thumb_bytes(thumb)?;
@@ -1271,6 +1284,10 @@ impl Vault {
 
     // Opens the file with its default program (Photos, Media Player, VLC...).
     fn open_file(&self, id: &str) -> Res<Value> {
+        if crypt::untraceable() {
+            // (another app would need a decrypted copy on the disk: exactly what this mode avoids)
+            return Err("Opening in another app isn't possible in Untraceable mode".into());
+        }
         let path = self.resolve(id)?;
         #[cfg(windows)]
         {
@@ -1297,7 +1314,11 @@ impl Vault {
 fn api(vault: State<'_, Arc<Vault>>, name: String, args: Vec<Value>) -> Res<Value> {
     let a = |k: usize| args.get(k).cloned().unwrap_or(Value::Null);
     let strings = |v: Value| arr(&v).iter().map(str_of).collect::<Vec<_>>();
+    if crypt::locked() && !matches!(name.as_str(), "lockState" | "appVersion") {
+        return Err("Locked: enter your password first".into());
+    }
     match name.as_str() {
+        "lockState" => Ok(json!({ "untraceable": crypt::untraceable(), "locked": crypt::locked() })),
         "getSetup" => vault.get_setup(),
         "getToken" => Ok(json!("local")),
         "listCategories" => Ok(json!(vault.list_categories()?)),
@@ -1364,7 +1385,7 @@ fn api(vault: State<'_, Arc<Vault>>, name: String, args: Vec<Value>) -> Res<Valu
         }
         "kvGet" => {
             let path = vault.kv_path(&str_of(&a(0)))?;
-            Ok(fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null))
+            Ok(crypt::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null))
         }
         "kvSet" => {
             let path = vault.kv_path(&str_of(&a(0)))?;
@@ -1435,7 +1456,8 @@ fn api(vault: State<'_, Arc<Vault>>, name: String, args: Vec<Value>) -> Res<Valu
         "storageOptions" => Ok(storage::options(&vault.root)),
         "storageForPicked" => Ok(storage::for_picked(Path::new(&str_of(&a(0))), &vault.root)),
         "useStorage" => {
-            let r = storage::use_folder(&vault, Path::new(&str_of(&a(0))), a(1) == json!(true))?;
+            // (a(2): { untraceable, password, scrub, deleteOld } for the Untraceable choice)
+            let r = storage::use_folder(&vault, Path::new(&str_of(&a(0))), a(1) == json!(true), &a(2))?;
             vault.first_run.store(false, std::sync::atomic::Ordering::Relaxed);
             Ok(r)
         }
@@ -1447,6 +1469,7 @@ fn api(vault: State<'_, Arc<Vault>>, name: String, args: Vec<Value>) -> Res<Valu
         "driveSignOut" => gdrive::sign_out(&vault),
         "driveSync" => gdrive::sync_start(vault.inner().clone()),
         "driveCancel" => Ok(gdrive::cancel()),
+        "driveAsked" => Ok(gdrive::asked()),
         "driveAuto" => gdrive::set_auto(&vault, a(0).as_bool() == Some(true)),
         // Discover (web.rs)
         "loadSources" => Ok(vault.web.load_sources().unwrap_or(Value::Null)),
@@ -1556,20 +1579,11 @@ fn upload_part(vault: &Vault, token: &str) -> Res<PathBuf> {
 // for a given place in the file (a video being rewritten writes its index last, at the front);
 // without it, pieces follow each other.
 fn write_piece(vault: &Vault, token: &str, first: bool, pos: Option<u64>, body: &mut dyn Read) -> Res<()> {
-    use std::io::{Seek, SeekFrom};
     let part = upload_part(vault, token)?;
     if first {
         let _ = fs::remove_file(&part);
     }
-    let mut f = if let Some(pos) = pos {
-        let mut f = fs::OpenOptions::new().create(true).write(true).truncate(false).open(&part).map_err(err)?;
-        f.seek(SeekFrom::Start(pos)).map_err(err)?;
-        f
-    } else {
-        fs::OpenOptions::new().create(true).append(true).open(&part).map_err(err)?
-    };
-    std::io::copy(body, &mut f).map_err(err)?;
-    Ok(())
+    crypt::write_piece(&part, first, pos, body).map_err(err)
 }
 
 fn finish_piece(vault: &Vault, token: &str, name: &str, parent: &str) -> Res<String> {
@@ -1679,11 +1693,11 @@ fn serve(vault: &Vault, req: &HttpRequest<Vec<u8>>) -> Response<Vec<u8>> {
             Err(e) => return fail(404, e),
         },
     };
-    let mut file = match fs::File::open(&path) {
+    let mut file = match crypt::Reader::open(&path) {
         Ok(f) => f,
         Err(e) => return fail(404, format!("{}: {e}", path.display())),
     };
-    let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let size = file.len();
     let wanted = req.headers().get("range").and_then(|v| v.to_str().ok());
     let (start, end) = match wanted.map(|v| parse_range(v, size)) {
         // a ranged answer is at most RANGE_PIECE long: a video player asks for "from here to the end"
@@ -1768,6 +1782,54 @@ fn bring_back(w: &tauri::WebviewWindow) {
     let _ = w.set_focus();
 }
 
+// Untraceable mode (crypt.rs): the password, from the page's lock screen. Wrong: an error; right:
+// the vault opens, and what waited for its settings (the emergency key) is set up.
+#[tauri::command(async)]
+fn unlock(app: tauri::AppHandle, vault: State<'_, Arc<Vault>>, password: String) -> Res<bool> {
+    if !crypt::locked() {
+        return Ok(true);
+    }
+    if password.is_empty() {
+        return Err("Type your password".into());
+    }
+    let key = crypt::derive(&password);
+    let check = vault.app_dir("key.check");
+    match fs::read(&check) {
+        Ok(bytes) => {
+            if !crypt::check_ok(&key, &bytes) {
+                return Err("Wrong password".into());
+            }
+            crypt::set_key(Some(key));
+        }
+        Err(_) => {
+            // a new vault, or its check file went missing: a vault already there must open with it
+            crypt::set_key(Some(key));
+            let index = vault.root.join(INDEX_NAME);
+            if index.exists() && !crypt::read(&index).map(|b| b.starts_with(HEADERS[0].as_bytes())).unwrap_or(false) {
+                crypt::set_key(None);
+                return Err("Wrong password".into());
+            }
+            fs::create_dir_all(check.parent().unwrap()).map_err(err)?;
+            fs::write(&check, crypt::check_bytes_for(&key)).map_err(err)?;
+        }
+    }
+    vault.init();
+    if let Some(v) = vault.web.load_sources() {
+        vault.web.learn(&v); // (read before the password: nothing then)
+    }
+    let settings = vault.load_settings();
+    set_panic_mode(settings["panicMode"].as_str().unwrap_or("screensaver").to_string());
+    if settings["panicOn"].as_bool() != Some(false) {
+        let k = settings["panicKey"].as_str().filter(|k| !k.is_empty()).unwrap_or(PANIC_KEY).to_string();
+        let _ = set_panic_key(app, k);
+    }
+    // number-only names too: the file names give nothing away either
+    if !DISCREET.load(std::sync::atomic::Ordering::Relaxed) {
+        let _ = discreet::start(vault.inner().clone(), true);
+    }
+    Ok(true)
+}
+
 // Settings → Privacy: "screensaver", "video" or "hide".
 #[tauri::command]
 fn set_panic_mode(mode: String) {
@@ -1792,7 +1854,7 @@ fn pick_cover_video(app: tauri::AppHandle, vault: State<'_, Arc<Vault>>) -> Res<
         }
     }
     let name = format!("cover{ext}");
-    fs::copy(&path, dir.join(&name)).map_err(|e| format!("Could not copy the video: {e}"))?;
+    crypt::copy(&path, &dir.join(&name), crypt::current_key().as_ref()).map_err(|e| format!("Could not copy the video: {e}"))?;
     Ok(format!("file-{}", b64(&format!("{APP_NAME}/{name}"))))
 }
 
@@ -1896,6 +1958,8 @@ fn theme_background(theme: &str) -> tauri::window::Color {
 fn main() {
     // where the vault lives: chosen on the welcome screen, see storage.rs
     let start = storage::start();
+    crypt::set_untraceable(start.untraceable);
+    gdrive::ask_sign_in(start.drive_setup);
     let vault = Arc::new(Vault::new(start.root, start.first_run));
     let for_files = vault.clone();
     let for_window = vault.clone();
@@ -1926,13 +1990,19 @@ fn main() {
             let vault = for_files.clone();
             std::thread::spawn(move || responder.respond(serve(&vault, &request)));
         })
-        .invoke_handler(tauri::generate_handler![api, upload, window_ready, window_action, pick_folder, restart_app, set_panic_key, set_panic_mode, pick_cover_video, export_excel, export_pack, open_pack, maint::install_update])
+        .invoke_handler(tauri::generate_handler![api, upload, window_ready, window_action, pick_folder, restart_app, set_panic_key, set_panic_mode, pick_cover_video, unlock, export_excel, export_pack, open_pack, maint::install_update])
         .setup(move |app| {
             // the window starts hidden (no white flash) in the theme's background colour; the page
             // shows it once it has drawn itself (window_ready), or after 3 s whatever happens
             let theme = for_window.load_settings()["theme"].as_str().unwrap_or("rose").to_string();
             let mut window = tauri::WebviewWindowBuilder::from_config(app.handle(), &app.config().app.windows[0])?
                 .background_color(theme_background(&theme));
+            // Untraceable: the browser engine keeps nothing (private mode), and what it must have on
+            // disk goes inside the app's hidden folder instead of %LOCALAPPDATA%
+            if crypt::untraceable() {
+                // (and a dull name on the taskbar and in Alt+Tab)
+                window = window.incognito(true).data_directory(storage::hidden_dir().join("web")).title("Notes");
+            }
             // WebView2's own defaults, plus (Settings → Library → "Use the faster graphics card", off by
             // default) drawing with the NVIDIA/AMD card when the PC has two. Measured on this laptop it made
             // no difference to scrolling and costs battery, hence off; IMAGE_VAULT_GPU=low|high overrides it.
@@ -1998,6 +2068,38 @@ mod tests {
         assert_eq!(parse_range("bytes=-10", 1000), Some((990, 1000)));
         assert_eq!(parse_range("bytes=990-5000", 1000), Some((990, 1000)));
         assert_eq!(parse_range("bytes=1000-", 1000), None);
+    }
+
+    // an encrypted (untraceable) vault: nothing readable on disk, everything readable through the app
+    #[test]
+    fn encrypted_vault() {
+        let dir = std::env::temp_dir().join(format!("lv-enc-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        crypt::set_key(Some(crypt::derive("correct horse")));
+        let vault = Vault::new(dir.clone(), false);
+        let index = fs::read(dir.join(INDEX_NAME)).unwrap();
+        assert!(index.starts_with(b"LVX1") && !index.windows(4).any(|w| w == b"uid,"));
+        let picture: Vec<u8> = b"RIFF....WEBP".iter().copied().chain((0..50_000u32).map(|i| (i % 253) as u8)).collect();
+        let id = vault.save_upload("000001_x.webp", &vault.category_folder("Photos").unwrap(), &picture).unwrap();
+        let on_disk = fs::read(dir.join("Photos").join("000001_x.webp")).unwrap();
+        assert!(on_disk.starts_with(b"LVX1") && !on_disk.windows(4).any(|w| w == b"WEBP"));
+        // the page reads it decrypted, byte ranges too
+        let req = tauri::http::Request::builder().uri(format!("http://vault.localhost/{}", utf8_percent_encode(&id, NON_ALPHANUMERIC)))
+            .header("range", "bytes=8-40007").body(Vec::new()).unwrap();
+        let res = serve(&vault, &req);
+        assert_eq!(res.status(), 206);
+        assert_eq!(res.body().as_slice(), &picture[8..40008]);
+        // uploads in pieces, settings, the index
+        write_piece(&vault, "tok12345", true, None, &mut &picture[..30_000]).unwrap();
+        write_piece(&vault, "tok12345", false, None, &mut &picture[30_000..]).unwrap();
+        let id2 = finish_piece(&vault, "tok12345", "000002_y.webp", &vault.category_folder("Photos").unwrap()).unwrap();
+        assert_eq!(crypt::read(&vault.resolve(&id2).unwrap()).unwrap(), picture);
+        vault.save_settings(&json!({ "theme": "berry" })).unwrap();
+        assert_eq!(vault.load_settings()["theme"], "berry");
+        assert!(fs::read(vault.app_dir("settings.json")).unwrap().starts_with(b"LVX1"));
+        crypt::set_key(None);
+        assert!(crypt::read(&dir.join(INDEX_NAME)).is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

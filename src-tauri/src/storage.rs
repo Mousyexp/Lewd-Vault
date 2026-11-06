@@ -7,6 +7,11 @@
 // The choice is kept in "Image Vault.config.json" next to the .exe (portable), or, when that folder
 // can't be written, in %APPDATA%\Image Vault. IMAGE_VAULT_DATA still overrides everything (testing),
 // IMAGE_VAULT_CONFIG points the config file elsewhere.
+//
+// Untraceable (crypt.rs): the vault in a hidden "data.temp" folder next to the .exe, encrypted, with
+// everything this PC would otherwise keep elsewhere (caches, the browser engine's data) in there too;
+// its choice only ever next to the .exe. Choosing it can also clear what the app left on this PC
+// before ("scrub", done at the next start, when nothing holds those folders open).
 
 use super::{err, md5_hex, parse_rows, Res, Vault, INDEX_NAME};
 use serde_json::{json, Value};
@@ -17,6 +22,29 @@ use std::sync::Mutex;
 
 pub const CLOUD_FOLDER: &str = "Image Vault Desktop";
 const LOCAL_FOLDER: &str = "Image Vault data";
+pub const HIDDEN: &str = "data.temp";
+
+/// Untraceable mode's folder, next to the app.
+pub fn hidden_dir() -> PathBuf {
+    exe_dir().join(HIDDEN)
+}
+/// Where this PC keeps the app's own things (caches, Discover's sources, the Drive sign-in).
+pub fn local_base() -> PathBuf {
+    if crate::crypt::untraceable() {
+        return hidden_dir().join("local");
+    }
+    env_path("LOCALAPPDATA").unwrap_or_else(std::env::temp_dir).join("Image Vault")
+}
+/// Hidden and "system", so Explorer doesn't show it even with hidden files shown.
+fn hide(p: &Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("attrib").args(["+h", "+s"]).arg(p).creation_flags(0x0800_0000).status();
+    }
+    #[cfg(not(windows))]
+    let _ = p;
+}
 
 pub(crate) fn exe_dir() -> PathBuf {
     std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default()
@@ -57,30 +85,94 @@ fn config_paths() -> Vec<PathBuf> {
 pub struct Start {
     pub root: PathBuf,
     pub first_run: bool,
+    pub untraceable: bool,
+    pub drive_setup: bool, // chosen with "Google Drive in your browser": the page offers the sign-in
 }
 pub fn start() -> Start {
     if let Some(root) = env_path("IMAGE_VAULT_DATA") {
-        return Start { root, first_run: false };
+        return Start { root, first_run: false, untraceable: false, drive_setup: false };
     }
     for p in config_paths() {
-        let folder = fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .and_then(|v| v["dataFolder"].as_str().map(PathBuf::from));
-        if let Some(root) = folder {
-            return Start { root, first_run: false };
+        let Some(v) = fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { continue };
+        let Some(root) = v["dataFolder"].as_str().map(PathBuf::from) else { continue };
+        let untraceable = v["untraceable"] == json!(true);
+        let scrub: Vec<PathBuf> = v["scrub"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(PathBuf::from)).collect();
+        if !scrub.is_empty() {
+            std::thread::spawn(move || clear_traces(scrub));
         }
+        return Start { root, first_run: false, untraceable, drive_setup: v["driveSetup"] == json!(true) };
     }
-    Start { root: local_home().join(LOCAL_FOLDER), first_run: true }
+    Start { root: local_home().join(LOCAL_FOLDER), first_run: true, untraceable: false, drive_setup: false }
 }
 
-fn save_config(root: &Path) -> Res<()> {
-    let text = json!({ "dataFolder": root.display().to_string() }).to_string();
-    let mut last = String::from("no place to keep the setting");
+/// A folder that may be removed wholesale: not a drive or the user folder, not one holding the app.
+fn removable(p: &Path) -> bool {
+    p.components().count() >= 3 && !exe_dir().starts_with(p) && env_path("USERPROFILE").map_or(true, |h| !h.starts_with(p))
+}
+/// The "scrub" a switch to Untraceable asked for: retried for a minute (the last copy of the app and
+/// its browser engine may still be closing), then taken off the config.
+fn clear_traces(mut list: Vec<PathBuf>) {
+    for _ in 0..20 {
+        list.retain(|p| p.exists() && removable(p) && fs::remove_dir_all(p).is_err());
+        if list.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
+    edit_config(|v| {
+        if list.is_empty() {
+            v.as_object_mut().map(|o| o.remove("scrub"));
+        } else {
+            v["scrub"] = json!(list.iter().map(|p| p.display().to_string()).collect::<Vec<_>>());
+        }
+    });
+}
+
+/// Changes the config in use where it is (its other settings stay).
+pub fn edit_config(change: impl FnOnce(&mut Value)) {
     for p in config_paths() {
+        let Some(mut v) = fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { continue };
+        change(&mut v);
+        let hidden = v["untraceable"] == json!(true);
+        if hidden {
+            let _ = fs::remove_file(&p);
+        }
+        if fs::write(&p, v.to_string()).is_ok() && hidden {
+            hide(&p);
+        }
+        return;
+    }
+}
+
+fn save_config(root: &Path, untraceable: bool, scrub: &[PathBuf], drive_setup: bool) -> Res<()> {
+    let mut v = json!({ "dataFolder": root.display().to_string() });
+    if drive_setup {
+        v["driveSetup"] = json!(true);
+    }
+    if untraceable {
+        v["untraceable"] = json!(true);
+    }
+    if !scrub.is_empty() {
+        v["scrub"] = json!(scrub.iter().map(|p| p.display().to_string()).collect::<Vec<_>>());
+    }
+    let text = v.to_string();
+    let mut last = String::from("no place to keep the setting");
+    // (untraceable: only ever next to the app)
+    let paths = if untraceable && env_path("IMAGE_VAULT_CONFIG").is_none() { vec![exe_dir().join("Image Vault.config.json")] } else { config_paths() };
+    for p in paths {
         if let Some(dir) = p.parent() {
             let _ = fs::create_dir_all(dir);
         }
+        if untraceable {
+            let _ = fs::remove_file(&p); // (a hidden file can't be overwritten on Windows)
+        }
         match fs::write(&p, &text) {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                if untraceable {
+                    hide(&p);
+                }
+                return Ok(());
+            }
             Err(e) => last = format!("{}: {e}", p.display()),
         }
     }
@@ -130,7 +222,7 @@ pub const DOWNLOADS: [(&str, &str); 4] = [
 
 /// How many items the vault in `folder` has, if there is one.
 pub fn count_items(folder: &Path) -> Option<usize> {
-    let text = fs::read_to_string(folder.join(INDEX_NAME)).ok()?;
+    let text = crate::crypt::read_to_string(&folder.join(INDEX_NAME)).ok()?; // (an untraceable vault: only when it's the open one)
     Some(parse_rows(&text).1.len())
 }
 
@@ -148,6 +240,7 @@ fn option(id: &str, name: &str, base: Option<PathBuf>, folder: Option<PathBuf>, 
         "folder": folder.as_ref().map(|f| f.display().to_string()),
         "items": items,
         "current": folder.as_deref().map_or(false, |f| same(f, current)),
+        "exists": folder.as_deref().map_or(false, |f| f.join(INDEX_NAME).exists()),
         "download": DOWNLOADS.iter().find(|(k, _)| *k == id).map(|(_, u)| *u)
     })
 }
@@ -162,11 +255,19 @@ pub fn options(current: &Path) -> Value {
         option("icloud", "iCloud Drive", icloud(), None, current),
         option("local", "This PC", Some(local_home()), Some(local.clone()), current),
     ];
+    // Untraceable: next to the app, so only where the app's folder can be written (the portable copy)
+    let mut untr = option("untraceable", "Untraceable", Some(exe_dir()), Some(hidden_dir().join("vault")), current);
+    if !exe_dir_writable() {
+        untr["found"] = json!(false);
+        untr["why"] = json!("Needs the portable version (Lewd Vault Portable.zip), in a folder you can write to");
+    }
+    list.push(untr);
     // a folder chosen earlier that's none of these
     if !list.iter().any(|o| o["current"] == json!(true)) {
         list.push(option("custom", "Your folder", current.parent().map(Path::to_path_buf), Some(current.to_path_buf()), current));
     }
-    json!({ "options": list, "current": current.display().to_string(), "currentItems": count_items(current).unwrap_or(0) })
+    json!({ "options": list, "current": current.display().to_string(), "currentItems": count_items(current).unwrap_or(0),
+            "untraceable": crate::crypt::untraceable() })
 }
 
 /// What a folder picked with "Another folder…" would hold the vault as: the folder itself when it
@@ -203,7 +304,7 @@ fn files(dir: &Path, root: &Path, out: &mut Vec<(PathBuf, u64)>) {
     }
 }
 
-fn copy_library(from: &Path, to: &Path, state: &CopyState) -> Res<()> {
+fn copy_library(from: &Path, to: &Path, state: &CopyState, encrypt: Option<&[u8; 32]>) -> Res<()> {
     let mut list = Vec::new();
     files(from, from, &mut list);
     state.total.store(list.iter().map(|(_, n)| n).sum(), Ordering::Relaxed);
@@ -213,30 +314,82 @@ fn copy_library(from: &Path, to: &Path, state: &CopyState) -> Res<()> {
         if let Some(dir) = dest.parent() {
             fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
-        fs::copy(&p, &dest).map_err(|e| format!("Could not copy {}: {e}", p.display()))?;
+        // (read decrypted when it comes from an untraceable vault; encrypted when it goes into one)
+        crate::crypt::copy(&p, &dest, encrypt).map_err(|e| format!("Could not copy {}: {e}", p.display()))?;
         state.done.fetch_add(n, Ordering::Relaxed);
     }
     Ok(())
 }
 
 /// Use `target` from now on. When it has no vault yet and `copy` is set, the current library is
-/// copied there first (the old folder is left as it was, as a backup). Returns whether the app
-/// has to restart to open it.
-pub fn use_folder(vault: &Vault, target: &Path, copy: bool) -> Res<Value> {
+/// copied there first (the old folder is left as it was, as a backup, unless Untraceable was asked
+/// to delete it). Returns whether the app has to restart to open it.
+/// `opts` (the Untraceable choice): { untraceable, password, scrub, deleteOld }.
+pub fn use_folder(vault: &Vault, target: &Path, copy: bool, opts: &Value) -> Res<Value> {
+    let untraceable = opts["untraceable"] == json!(true);
+    let drive_setup = opts["driveSetup"] == json!(true);
     if same(target, &vault.root) {
-        save_config(target)?;
-        return Ok(json!({ "restart": false }));
+        save_config(target, crate::crypt::untraceable(), &[], drive_setup)?;
+        return Ok(json!({ "restart": drive_setup }));
+    }
+    let mut key = None;
+    if untraceable {
+        if !exe_dir_writable() {
+            return Err("Untraceable keeps the vault next to the app, and this folder can't be written (installed in Program Files?). Use the portable version, Lewd Vault Portable.zip, unzipped somewhere you can write to.".into());
+        }
+        let pw = opts["password"].as_str().unwrap_or("");
+        if pw.chars().count() < 6 {
+            return Err("Use a password of at least 6 characters.".into());
+        }
+        let k = crate::crypt::derive(pw);
+        if let Ok(b) = fs::read(target.join("_app").join("key.check")) {
+            if !crate::crypt::check_ok(&k, &b) {
+                return Err("There's already an untraceable vault here, with another password.".into());
+            }
+        }
+        key = Some(k);
     }
     fs::create_dir_all(target).map_err(|e| format!("Could not make {}: {e}", target.display()))?;
-    let has_vault = count_items(target).is_some();
+    if untraceable {
+        hide(&hidden_dir());
+    }
+    let has_vault = target.join(INDEX_NAME).exists();
+    let mut copied = false;
     if copy && !has_vault && count_items(&vault.root).unwrap_or(0) > 0 {
         *vault.copy.status.lock().unwrap() = "copying".into();
-        if let Err(e) = copy_library(&vault.root, target, &vault.copy) {
+        if let Err(e) = copy_library(&vault.root, target, &vault.copy, key.as_ref()) {
             *vault.copy.status.lock().unwrap() = e.clone();
             return Err(e);
         }
+        copied = true;
     }
-    save_config(target)?;
+    // a new place without a vault still takes this one's settings (theme, the emergency key...)
+    let settings = vault.app_dir("settings.json");
+    if !has_vault && !copied && settings.exists() {
+        let to = target.join("_app").join("settings.json");
+        if fs::create_dir_all(to.parent().unwrap()).is_ok() {
+            let _ = crate::crypt::copy(&settings, &to, key.as_ref());
+        }
+    }
+    let mut scrub = Vec::new();
+    if let Some(k) = key {
+        let check = target.join("_app").join("key.check");
+        if !check.exists() {
+            fs::create_dir_all(check.parent().unwrap()).map_err(err)?;
+            fs::write(&check, crate::crypt::check_bytes_for(&k)).map_err(err)?;
+        }
+        if opts["scrub"] == json!(true) {
+            // what the app kept on this PC in the normal modes: caches, Discover's sources, the Drive
+            // sign-in, the browser engine's data (with its cache of pictures), the other config
+            scrub.extend(env_path("LOCALAPPDATA").map(|l| l.join("Image Vault")));
+            scrub.extend(env_path("LOCALAPPDATA").map(|l| l.join("local.imagevault.desktop")));
+            scrub.extend(appdata_config().and_then(|c| c.parent().map(Path::to_path_buf)));
+        }
+        if opts["deleteOld"] == json!(true) && copied && !crate::crypt::untraceable() && removable(&vault.root) {
+            scrub.push(vault.root.clone());
+        }
+    }
+    save_config(target, untraceable, &scrub, drive_setup)?;
     *vault.copy.status.lock().unwrap() = "done".into();
     Ok(json!({ "restart": true }))
 }
@@ -251,7 +404,7 @@ pub fn copy_progress(vault: &Vault) -> Value {
 /// Where this PC keeps what's made again anyway (card-size thumbnails, unfinished uploads): never
 /// inside the vault, so a cloud service doesn't sync it.
 pub fn local_dir(root: &Path, what: &str) -> PathBuf {
-    let base = env_path("LOCALAPPDATA").unwrap_or_else(std::env::temp_dir).join("Image Vault");
+    let base = local_base();
     let key = &md5_hex(root.display().to_string().as_bytes())[..12];
     base.join(what).join(key)
 }
