@@ -84,7 +84,10 @@ To change it later, go to **Settings → Storage → Change where it lives…**.
 
 For a PC that isn't only yours, such as a work laptop. Pick **Untraceable** on the welcome screen
 (or **Settings → Storage → Change where it lives…**), choose a password, and the app keeps the vault
-in a hidden `data.temp` folder next to `Lewd Vault.exe` (`src-tauri/src/crypt.rs`, `storage.rs`):
+in a hidden `data.temp` folder (`src-tauri/src/crypt.rs`, `storage.rs`): next to `Lewd Vault.exe` for
+the portable copy, in **Documents** for the installed one (it can't write into Program Files), or any
+place picked with **Another place…**. A folder a cloud service uploads (OneDrive often backs up
+Documents on work PCs) gets a warning: the files stay encrypted, but they'd be in that cloud too.
 
 - **Every file is encrypted** (ChaCha20, with a key made from your password by PBKDF2-SHA256): the
   pictures, videos, thumbnails, `index.csv`, settings, everything. Without the password they're
@@ -93,16 +96,17 @@ in a hidden `data.temp` folder next to `Lewd Vault.exe` (`src-tauri/src/crypt.rs
 - **Nothing goes anywhere else on the PC:** the thumbnail and web caches, unfinished uploads,
   Discover's sources and the Google Drive sign-in stay in `data.temp` (encrypted), and the built-in
   browser engine runs in private mode with its data folder in `data.temp` too. Deleted items go to
-  the vault's own `_trash`, not the Recycle Bin. The choice itself is only kept next to the app.
+  the vault's own `_trash`, not the Recycle Bin. The choice itself is kept next to the app
+  (portable) or in `%APPDATA%\Image Vault\config.json` (installed), hidden.
   Discreet (number-only) file names are switched on, the window is called "Notes" on the taskbar,
   and "Open in another app" is turned off (it would need a decrypted copy on disk).
 - **The password** is asked on a plain grey screen every time the app starts. Forget it and the vault
   can't be recovered.
 - **Moving in:** your current library can be copied in, encrypted on the way. Optionally the old,
   unencrypted folder is then deleted for good, and what the app kept on this PC before (caches, the
-  browser engine's data in `%LOCALAPPDATA%`, the `%APPDATA%` config) is cleared at the next start.
-- **Needs the portable version** (`Lewd Vault Portable.zip`), in a folder you can write to; the
-  installed app lives in Program Files, where it can't keep a vault next to itself.
+  browser engine's data in `%LOCALAPPDATA%`, the `%APPDATA%` config when the app keeps its own next to itself) is cleared at the next start.
+- **Installer or portable:** both can do it. The portable zip leaves less behind: the installer shows
+  in the Start menu and in Settings → Apps, and keeps its config in `%APPDATA%`.
 - **With Google Drive in your browser**, an untraceable vault syncs to its own Drive folder,
   "Lewd Vault (encrypted)", and stays encrypted there. Use the same password on every PC (the app
   checks, and stops syncing on a mismatch).

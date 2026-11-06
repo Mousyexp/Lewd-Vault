@@ -1072,7 +1072,7 @@
       icon.innerHTML = SERVICE_ICONS[o.id] || SERVICE_ICONS.custom;
       const name = make('span', 'wl-opt-name', o.name);
       const line = make('span', 'wl-opt-line');
-      if (o.id === 'untraceable') line.textContent = !o.found ? 'Needs the portable app' : o.current ? 'Encrypted, hidden next to the app' : o.exists ? 'A locked vault is there' : 'Encrypted, no traces on this PC';
+      if (o.id === 'untraceable') line.textContent = !o.found ? 'Needs the portable app' : o.current ? 'Encrypted and hidden' : o.exists ? 'A locked vault is there' : 'Encrypted, no traces on this PC';
       else if (!o.found) line.textContent = o.id === 'gdrive' ? 'Drive app not on this PC' : 'Not on this PC';
       else if (o.items) line.textContent = `${fmtN(o.items)} ${o.items === 1 ? 'item' : 'items'} there`;
       else line.textContent = o.id === 'local' ? 'Next to the app' : 'Ready';
@@ -1130,7 +1130,7 @@
       b.onclick = () => confirmOption(o, { drive: true });
       return b;
     };
-    pick.append(choice(local, 'On this PC', 'A normal folder, fastest'), choice(untr, 'Untraceable', untr && untr.found ? 'Encrypted next to the app, nothing else on this PC' : (untr && untr.why) || ''));
+    pick.append(choice(local, 'On this PC', 'A normal folder, fastest'), choice(untr, 'Untraceable', 'Encrypted and hidden, nothing else on this PC'));
     const actions = make('div', 'wl-actions');
     const back = make('button', 'btn', 'Back');
     back.type = 'button';
@@ -1188,14 +1188,29 @@
     head.append(icon, make('h2', '', o.current ? 'Untraceable' : 'Make it untraceable'));
     box.append(head);
     if (o.current) {
-      box.append(make('p', 'wl-note', 'Your vault is untraceable already: encrypted in a hidden folder next to the app.'));
+      box.append(make('p', 'wl-note', 'Your vault is untraceable already: encrypted in a hidden folder.'));
+      const where = make('p', 'wl-where');
+      where.append('Kept in: ', make('code', '', o.folder));
+      box.append(where);
     } else {
       const fresh = !o.exists;
       box.append(make('p', 'wl-note', fresh
-        ? 'For a PC that isn\'t only yours. Your vault is kept encrypted in a hidden folder next to the app, and nothing else is stored anywhere on this PC: no thumbnails, no caches, no browser history. Without the password the files can\'t be opened, found by Windows Search or previewed. If you forget it, nothing can bring the vault back.'
-        : 'There\'s an untraceable vault next to the app already. Its password opens it.'));
+        ? 'For a PC that isn\'t only yours. Your vault is kept encrypted in a hidden folder, and nothing else is stored anywhere on this PC: no thumbnails, no caches, no browser history. Without the password the files can\'t be opened, found by Windows Search or previewed. If you forget it, nothing can bring the vault back.'
+        : 'There\'s an untraceable vault here already. Its password opens it.'));
       const pw = make('input'); Object.assign(pw, { type: 'password', placeholder: fresh ? 'Password (at least 6 characters)' : 'Its password', autocomplete: 'off' });
       const pw2 = make('input'); Object.assign(pw2, { type: 'password', placeholder: 'The same again', autocomplete: 'off' });
+      // where: next to the app (portable), Documents (installed), or another place
+      const where = make('p', 'wl-where');
+      where.append('Kept in: ', make('code', '', o.folder));
+      const other = make('button', 'linkish', 'Another place…');
+      other.type = 'button';
+      other.onclick = async () => {
+        const picked = await tauriInvoke('pick_folder').catch(() => null);
+        if (picked) confirmUntraceable(await api('untraceableForPicked', picked), extra);
+      };
+      where.append(' ', other);
+      box.append(where);
+      if (o.synced) box.append(make('p', 'wl-note wl-warn', 'This folder is uploaded by a cloud service (OneDrive often backs up Documents on work PCs). The files stay encrypted, but they\'d be in that cloud too: pick another place if that matters.'));
       const fields = make('div', 'wl-pw');
       fields.append(pw);
       if (fresh) fields.append(pw2);
@@ -1216,7 +1231,7 @@
       const sc = make('input'); sc.type = 'checkbox'; sc.checked = true;
       scrub.append(sc, make('span', '', 'Clear what Lewd Vault kept on this PC before (thumbnail and web caches, the built-in browser\'s data)'));
       box.append(scrub);
-      box.append(make('p', 'wl-note wl-tip', 'Tip: rename "Lewd Vault.exe" and its folder to something dull (say "Notes"): Windows remembers the names of programs that ran.'));
+      box.append(make('p', 'wl-note wl-tip', 'Tip: Windows remembers the names of programs that ran and installed. The portable app (renamed to something dull, say "Notes.exe") leaves less behind than the installer, which shows in the Start menu and in Settings → Apps.'));
       if (extra.drive) box.append(make('p', 'wl-note', 'After this, Lewd Vault restarts and you sign in to Google Drive in your web browser. In Drive, the vault stays encrypted too.'));
       const actions = make('div', 'wl-actions');
       const back = make('button', 'btn', 'Back');

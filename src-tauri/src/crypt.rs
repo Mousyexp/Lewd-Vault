@@ -1,7 +1,7 @@
 // Untraceable mode: the vault, encrypted, inside the app's own folder (welcome screen → Untraceable).
 //
-// For a PC that isn't only yours (a work laptop): the vault lives in a hidden "data.temp" folder next
-// to the app, every file in it is encrypted with a key made from your password, and nothing else goes
+// For a PC that isn't only yours (a work laptop): the vault lives in a hidden "data.temp" folder (next
+// to the app for the portable copy, in Documents for the installed one, or wherever you pick), every file in it is encrypted with a key made from your password, and nothing else goes
 // anywhere on the PC: the thumbnail and web caches, unfinished uploads, the Google Drive sign-in and
 // even the built-in browser's own data (WebView2, in private mode) stay inside data.temp too, and
 // deleted files go to the vault's own _trash rather than the Recycle Bin. Without the password the

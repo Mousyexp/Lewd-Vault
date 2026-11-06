@@ -1455,6 +1455,7 @@ fn api(vault: State<'_, Arc<Vault>>, name: String, args: Vec<Value>) -> Res<Valu
         // where the vault lives (storage.rs)
         "storageOptions" => Ok(storage::options(&vault.root)),
         "storageForPicked" => Ok(storage::for_picked(Path::new(&str_of(&a(0))), &vault.root)),
+        "untraceableForPicked" => Ok(storage::untraceable_for_picked(Path::new(&str_of(&a(0))), &vault.root)),
         "useStorage" => {
             // (a(2): { untraceable, password, scrub, deleteOld } for the Untraceable choice)
             let r = storage::use_folder(&vault, Path::new(&str_of(&a(0))), a(1) == json!(true), &a(2))?;
@@ -1959,6 +1960,11 @@ fn main() {
     // where the vault lives: chosen on the welcome screen, see storage.rs
     let start = storage::start();
     crypt::set_untraceable(start.untraceable);
+    if start.untraceable {
+        if let Some(hidden) = start.root.parent() {
+            storage::set_hidden(hidden.to_path_buf()); // (its caches and browser data go beside it)
+        }
+    }
     gdrive::ask_sign_in(start.drive_setup);
     let vault = Arc::new(Vault::new(start.root, start.first_run));
     let for_files = vault.clone();

@@ -8,9 +8,10 @@
 // can't be written, in %APPDATA%\Image Vault. IMAGE_VAULT_DATA still overrides everything (testing),
 // IMAGE_VAULT_CONFIG points the config file elsewhere.
 //
-// Untraceable (crypt.rs): the vault in a hidden "data.temp" folder next to the .exe, encrypted, with
-// everything this PC would otherwise keep elsewhere (caches, the browser engine's data) in there too;
-// its choice only ever next to the .exe. Choosing it can also clear what the app left on this PC
+// Untraceable (crypt.rs): the vault in a hidden "data.temp" folder, encrypted: next to the .exe for
+// the portable copy, in Documents for the installed one (where it can't write next to itself), or a
+// place you pick; everything this PC would otherwise keep elsewhere (caches, the browser engine's
+// data) goes in there too. Choosing it can also clear what the app left on this PC
 // before ("scrub", done at the next start, when nothing holds those folders open).
 
 use super::{err, md5_hex, parse_rows, Res, Vault, INDEX_NAME};
@@ -24,9 +25,36 @@ pub const CLOUD_FOLDER: &str = "Image Vault Desktop";
 const LOCAL_FOLDER: &str = "Image Vault data";
 pub const HIDDEN: &str = "data.temp";
 
-/// Untraceable mode's folder, next to the app.
+/// The untraceable vault in use: <somewhere>\data.temp\vault (set at start, see main).
+static HIDDEN_AT: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+pub fn set_hidden(dir: PathBuf) {
+    *HIDDEN_AT.write().unwrap() = Some(dir);
+}
+/// Untraceable mode's folder ("data.temp"): the one in use, else where a new one goes by default:
+/// next to the app (the portable copy), or in Documents when the app can't write there (installed).
 pub fn hidden_dir() -> PathBuf {
-    exe_dir().join(HIDDEN)
+    HIDDEN_AT.read().unwrap().clone().unwrap_or_else(default_hidden)
+}
+fn default_hidden() -> PathBuf {
+    if exe_dir_writable() {
+        return exe_dir().join(HIDDEN);
+    }
+    env_path("USERPROFILE").map(|u| u.join("Documents")).filter(|d| d.is_dir())
+        .or_else(|| env_path("LOCALAPPDATA"))
+        .unwrap_or_else(exe_dir)
+        .join(HIDDEN)
+}
+/// Where an untraceable vault goes in a folder you picked: its data.temp, or the folder itself
+/// when you picked a data.temp (or the vault inside one).
+pub fn untraceable_in(picked: &Path) -> PathBuf {
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if name(picked) == "vault" && picked.parent().is_some_and(|p| name(p) == HIDDEN) {
+        return picked.to_path_buf();
+    }
+    if name(picked) == HIDDEN {
+        return picked.join("vault");
+    }
+    picked.join(HIDDEN).join("vault")
 }
 /// Where this PC keeps the app's own things (caches, Discover's sources, the Drive sign-in).
 pub fn local_base() -> PathBuf {
@@ -157,9 +185,8 @@ fn save_config(root: &Path, untraceable: bool, scrub: &[PathBuf], drive_setup: b
     }
     let text = v.to_string();
     let mut last = String::from("no place to keep the setting");
-    // (untraceable: only ever next to the app)
-    let paths = if untraceable && env_path("IMAGE_VAULT_CONFIG").is_none() { vec![exe_dir().join("Image Vault.config.json")] } else { config_paths() };
-    for p in paths {
+    // (next to the app when it can write there, the portable copy; installed, in %APPDATA%)
+    for p in config_paths() {
         if let Some(dir) = p.parent() {
             let _ = fs::create_dir_all(dir);
         }
@@ -255,12 +282,11 @@ pub fn options(current: &Path) -> Value {
         option("icloud", "iCloud Drive", icloud(), None, current),
         option("local", "This PC", Some(local_home()), Some(local.clone()), current),
     ];
-    // Untraceable: next to the app, so only where the app's folder can be written (the portable copy)
-    let mut untr = option("untraceable", "Untraceable", Some(exe_dir()), Some(hidden_dir().join("vault")), current);
-    if !exe_dir_writable() {
-        untr["found"] = json!(false);
-        untr["why"] = json!("Needs the portable version (Lewd Vault Portable.zip), in a folder you can write to");
-    }
+    // Untraceable: the one in use, or a new one next to the app / in Documents (another place can be
+    // picked on its page)
+    let hidden = hidden_dir();
+    let mut untr = option("untraceable", "Untraceable", hidden.parent().map(Path::to_path_buf), Some(hidden.join("vault")), current);
+    untr["synced"] = json!(synced_folder(&hidden));
     list.push(untr);
     // a folder chosen earlier that's none of these
     if !list.iter().any(|o| o["current"] == json!(true)) {
@@ -272,6 +298,20 @@ pub fn options(current: &Path) -> Value {
 
 /// What a folder picked with "Another folder…" would hold the vault as: the folder itself when it
 /// already has a vault (or is empty), otherwise an "Image Vault Desktop" folder inside it.
+/// Whether a folder is inside one a cloud service uploads (OneDrive often backs up Documents).
+fn synced_folder(p: &Path) -> bool {
+    let s = p.display().to_string().to_lowercase();
+    ["onedrive", "dropbox", "google drive", "my drive", "icloud"].iter().any(|k| s.contains(k))
+}
+
+/// "Another place…" on the Untraceable page.
+pub fn untraceable_for_picked(picked: &Path, current: &Path) -> Value {
+    let folder = untraceable_in(picked);
+    let mut o = option("untraceable", "Untraceable", folder.parent().and_then(Path::parent).map(Path::to_path_buf), Some(folder.clone()), current);
+    o["synced"] = json!(synced_folder(&folder));
+    o
+}
+
 pub fn for_picked(picked: &Path, current: &Path) -> Value {
     let empty = fs::read_dir(picked).map(|mut d| d.next().is_none()).unwrap_or(true);
     let folder = if count_items(picked).is_some() || empty { picked.to_path_buf() } else { picked.join(CLOUD_FOLDER) };
@@ -334,8 +374,8 @@ pub fn use_folder(vault: &Vault, target: &Path, copy: bool, opts: &Value) -> Res
     }
     let mut key = None;
     if untraceable {
-        if !exe_dir_writable() {
-            return Err("Untraceable keeps the vault next to the app, and this folder can't be written (installed in Program Files?). Use the portable version, Lewd Vault Portable.zip, unzipped somewhere you can write to.".into());
+        if !target.parent().is_some_and(|p| p.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(HIDDEN))) {
+            return Err("An untraceable vault lives in a data.temp folder".into());
         }
         let pw = opts["password"].as_str().unwrap_or("");
         if pw.chars().count() < 6 {
@@ -351,7 +391,7 @@ pub fn use_folder(vault: &Vault, target: &Path, copy: bool, opts: &Value) -> Res
     }
     fs::create_dir_all(target).map_err(|e| format!("Could not make {}: {e}", target.display()))?;
     if untraceable {
-        hide(&hidden_dir());
+        hide(target.parent().unwrap());
     }
     let has_vault = target.join(INDEX_NAME).exists();
     let mut copied = false;
@@ -383,7 +423,10 @@ pub fn use_folder(vault: &Vault, target: &Path, copy: bool, opts: &Value) -> Res
             // sign-in, the browser engine's data (with its cache of pictures), the other config
             scrub.extend(env_path("LOCALAPPDATA").map(|l| l.join("Image Vault")));
             scrub.extend(env_path("LOCALAPPDATA").map(|l| l.join("local.imagevault.desktop")));
-            scrub.extend(appdata_config().and_then(|c| c.parent().map(Path::to_path_buf)));
+            // (%APPDATA%\Image Vault only when the config goes next to the app: installed, it lives there)
+            if exe_dir_writable() {
+                scrub.extend(appdata_config().and_then(|c| c.parent().map(Path::to_path_buf)));
+            }
         }
         if opts["deleteOld"] == json!(true) && copied && !crate::crypt::untraceable() && removable(&vault.root) {
             scrub.push(vault.root.clone());
@@ -407,4 +450,19 @@ pub fn local_dir(root: &Path, what: &str) -> PathBuf {
     let base = local_base();
     let key = &md5_hex(root.display().to_string().as_bytes())[..12];
     base.join(what).join(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn untraceable_places() {
+        let base = Path::new("x").join("Docs");
+        assert_eq!(untraceable_in(&base), base.join("data.temp").join("vault"));
+        assert_eq!(untraceable_in(&base.join("data.temp")), base.join("data.temp").join("vault"));
+        assert_eq!(untraceable_in(&base.join("data.temp").join("vault")), base.join("data.temp").join("vault"));
+        assert!(synced_folder(Path::new("C:/Users/a/OneDrive - Acme/Documents/data.temp")));
+        assert!(!synced_folder(Path::new("C:/Users/a/Documents/data.temp")));
+    }
 }
