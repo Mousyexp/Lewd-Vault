@@ -970,3 +970,12 @@ Measured on 3,000 items: switching a filter took 40–58 ms before anything show
 - They're kept with Discover's sources (`%LOCALAPPDATA%\Image Vault\sources.json`: Discover's in `sources` as kind `recipe`, Videos' and Audio's in `sites`), and only their addresses may be read (`web.rs learn`; `webAllow` while one is being tried).
 - **⚙ Customise** in Discover (any source: your own chip groups `# Group` / `Label = words`, the site's own chips on or off, the header on or off, picture size; "Back to how it was"), Videos (sites shown or hidden and in what order, your own front-page rows `Title = words | sort:… | category:…`, the site's own rows and the big video on or off, card width) and Audio (sources shown or hidden, their order).
 - Fullscreen from the Videos theater now covers the sidebar too.
+
+## Screenshots and the trailer
+
+`node tools/screenshots.mjs <folder with the 5 demo pictures>` retakes every picture in `docs/screenshots/` from the
+real page and the real Rust backend: it starts the backend as a small local HTTP server over a fresh demo vault
+(`main.rs` test `screenshot_server`, opt-in with `--ignored`), opens the page in Chromium with a stand-in for
+Tauri's bridge, adds the pictures through the Add screen, looks at a few, then visits each screen. The demo pictures
+aren't in the repository. `--dpr 3 --frames <dir>` makes sharp PNG frames instead (for the trailer), leaving
+`docs/screenshots/` alone. The trailer itself is in `docs/trailer/` (its `NOTE.md` says how it was made and rebuilt).

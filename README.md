@@ -6,6 +6,10 @@ Lewd Vault is a cute, fast Windows app for collecting, tagging and enjoying your
 
 ![The Library](docs/screenshots/library.webp)
 
+🎬 **[Watch the 13-second trailer](docs/trailer/lewd-vault-trailer.mp4)**: one key, and it's gone.
+
+[![The trailer: "Someone at the door?"](docs/trailer/poster.jpg)](docs/trailer/lewd-vault-trailer.mp4)
+
 ## ✨ Why you'll love it
 
 - 🧘 **Calm by default.** The everyday stuff is big and up front; extra options fold away next to where you use them and remember how you left them.

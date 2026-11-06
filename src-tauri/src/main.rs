@@ -1312,6 +1312,11 @@ impl Vault {
 
 #[tauri::command(async)]
 fn api(vault: State<'_, Arc<Vault>>, name: String, args: Vec<Value>) -> Res<Value> {
+    api_call(vault.inner(), name, args)
+}
+
+// (apart from the command, so the screenshot server, tools/screenshots.mjs, can call it too)
+fn api_call(vault: &Arc<Vault>, name: String, args: Vec<Value>) -> Res<Value> {
     let a = |k: usize| args.get(k).cloned().unwrap_or(Value::Null);
     let strings = |v: Value| arr(&v).iter().map(str_of).collect::<Vec<_>>();
     if crypt::locked() && !matches!(name.as_str(), "lockState" | "appVersion") {
@@ -1394,7 +1399,7 @@ fn api(vault: State<'_, Arc<Vault>>, name: String, args: Vec<Value>) -> Res<Valu
             Ok(json!(true))
         }
         // Clean up: duplicates (dupes.rs), and compacting videos
-        "backupStart" => maint::backup_start(vault.inner().clone(), &str_of(&a(0))),
+        "backupStart" => maint::backup_start(vault.clone(), &str_of(&a(0))),
         "backupProgress" => Ok(maint::backup_progress()),
         "healthCheck" => maint::health(&vault),
         "healthFix" => maint::health_fix(&vault, &str_of(&a(0))),
@@ -1402,9 +1407,9 @@ fn api(vault: State<'_, Arc<Vault>>, name: String, args: Vec<Value>) -> Res<Valu
         "updateDownload" => maint::update_download(&str_of(&a(0))),
         "updateProgress" => Ok(maint::update_progress()),
         "appVersion" => Ok(json!(env!("CARGO_PKG_VERSION"))),
-        "findDuplicates" => dupes::start(vault.inner().clone()),
+        "findDuplicates" => dupes::start(vault.clone()),
         "duplicateProgress" => Ok(dupes::progress(&vault)),
-        "setDiscreet" => discreet::start(vault.inner().clone(), a(0).as_bool() == Some(true)),
+        "setDiscreet" => discreet::start(vault.clone(), a(0).as_bool() == Some(true)),
         "discreetProgress" => Ok(discreet::progress(&vault)),
         "tidyPack" => pack::tidy(&vault, &str_of(&a(0))),
         "backupToBin" => vault.backup_to_bin(&str_of(&a(0))),
@@ -1466,9 +1471,9 @@ fn api(vault: State<'_, Arc<Vault>>, name: String, args: Vec<Value>) -> Res<Valu
         // Google Drive over the web, for PCs without Google Drive for desktop (gdrive.rs)
         "driveStatus" => Ok(gdrive::status(&vault)),
         "driveSetKey" => gdrive::set_key(&vault, &str_of(&a(0)), &str_of(&a(1))),
-        "driveSignIn" => gdrive::sign_in(vault.inner().clone()),
+        "driveSignIn" => gdrive::sign_in(vault.clone()),
         "driveSignOut" => gdrive::sign_out(&vault),
-        "driveSync" => gdrive::sync_start(vault.inner().clone()),
+        "driveSync" => gdrive::sync_start(vault.clone()),
         "driveCancel" => Ok(gdrive::cancel()),
         "driveAsked" => Ok(gdrive::asked()),
         "driveAuto" => gdrive::set_auto(&vault, a(0).as_bool() == Some(true)),
@@ -2106,6 +2111,90 @@ mod tests {
         crypt::set_key(None);
         assert!(crypt::read(&dir.join(INDEX_NAME)).is_err());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // The README's screenshots and the trailer (tools/screenshots.mjs): the real backend over a vault
+    // in $DEMO_DATA, on 127.0.0.1:$DEMO_PORT, for the real page in a browser. POST /api {name, args},
+    // POST /upload (the upload command's headers), GET /vault/<path> (vault://). Runs until killed:
+    //   DEMO_DATA=... DEMO_PORT=8790 cargo test screenshot_server -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn screenshot_server() {
+        use std::io::{BufRead, BufReader, Write};
+        let dir = PathBuf::from(std::env::var("DEMO_DATA").expect("DEMO_DATA"));
+        let port = std::env::var("DEMO_PORT").unwrap_or_else(|_| "8790".into());
+        let vault = Arc::new(Vault::new(dir, false));
+        let listener = std::net::TcpListener::bind(format!("127.0.0.1:{port}")).unwrap();
+        println!("screenshot server on {port}");
+        for conn in listener.incoming().flatten() {
+            let vault = vault.clone();
+            std::thread::spawn(move || {
+                let mut out = conn.try_clone().unwrap();
+                let mut reader = BufReader::new(conn);
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    return;
+                }
+                let mut parts = line.split_whitespace();
+                let (method, target) = (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("").to_string());
+                let mut headers: Vec<(String, String)> = Vec::new();
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                        break;
+                    }
+                    if let Some((k, v)) = h.trim_end().split_once(':') {
+                        headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
+                    }
+                }
+                let header = |k: &str| headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).unwrap_or_default();
+                let mut body = vec![0u8; header("content-length").parse().unwrap_or(0)];
+                let _ = reader.read_exact(&mut body);
+                let send = |out: &mut std::net::TcpStream, status: u16, kind: &str, extra: &[(String, String)], bytes: &[u8]| {
+                    let mut head = format!("HTTP/1.1 {status} X\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: *\r\nAccess-Control-Expose-Headers: *\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n", bytes.len());
+                    for (k, v) in extra {
+                        head.push_str(&format!("{k}: {v}\r\n"));
+                    }
+                    head.push_str("\r\n");
+                    let _ = out.write_all(head.as_bytes()).and_then(|_| out.write_all(bytes));
+                };
+                let answer = |r: Res<Value>| match r {
+                    Ok(v) => json!({ "ok": v }),
+                    Err(e) => json!({ "err": e }),
+                };
+                if method == "OPTIONS" {
+                    send(&mut out, 204, "text/plain", &[], b"");
+                } else if target == "/api" {
+                    let v: Value = serde_json::from_slice(&body).unwrap_or_default();
+                    let r = api_call(&vault, str_of(&v["name"]), arr(&v["args"]));
+                    send(&mut out, 200, "application/json", &[], answer(r).to_string().as_bytes());
+                } else if target == "/upload" {
+                    let dec = |k: &str| percent_decode_str(&header(k)).decode_utf8_lossy().into_owned();
+                    let token = dec("x-token");
+                    let r = if token.is_empty() {
+                        vault.save_upload(&dec("x-name"), &dec("x-parent"), &body)
+                    } else {
+                        write_piece(&vault, &token, header("x-first") == "1", header("x-pos").parse().ok(), &mut &body[..]).and_then(|_| {
+                            if header("x-done") == "1" { finish_piece(&vault, &token, &dec("x-name"), &dec("x-parent")) } else { Ok(String::new()) }
+                        })
+                    };
+                    send(&mut out, 200, "application/json", &[], answer(r.map(Value::String)).to_string().as_bytes());
+                } else if let Some(rest) = target.strip_prefix("/vault/") {
+                    let mut req = tauri::http::Request::builder().uri(format!("http://vault.localhost/{rest}"));
+                    if !header("range").is_empty() {
+                        req = req.header("range", header("range"));
+                    }
+                    let res = serve(&vault, &req.body(Vec::new()).unwrap());
+                    let extra: Vec<(String, String)> = res.headers().iter()
+                        .filter(|(k, _)| !["content-type", "content-length", "access-control-allow-origin"].contains(&k.as_str()))
+                        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string())).collect();
+                    let kind = res.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
+                    send(&mut out, res.status().as_u16(), &kind, &extra, res.body());
+                } else {
+                    send(&mut out, 404, "text/plain", &[], b"");
+                }
+            });
+        }
     }
 
     #[test]
