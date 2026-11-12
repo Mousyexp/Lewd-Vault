@@ -11,9 +11,16 @@ name: Build
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    tags: ['v*', 'V*']
   pull_request:
+  # Actions → Build → Run workflow, with a tag: builds that tag and attaches the downloads to its release
+  # (for a release whose tag was made on GitHub's release page, which doesn't start this workflow by itself)
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build (e.g. v1.1.0); empty = only the checks'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -31,11 +38,15 @@ jobs:
       - run: npm test
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/V') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     needs: check
     runs-on: windows-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-node@v5
         with:
           node-version: 20
@@ -61,11 +72,12 @@ jobs:
           Copy-Item 'src-tauri/target/release/Lewd Vault.exe' 'Lewd Vault Portable/Lewd Vault.exe'
           Compress-Archive -Path 'Lewd Vault Portable' -DestinationPath 'Lewd Vault Portable.zip'
           # "v1.0.0" is named "Lewd Vault 1.0", "v1.2.3" "Lewd Vault 1.2.3"
-          $v = '${{ github.ref_name }}'.TrimStart('v')
+          $v = $env:TAG.TrimStart('v', 'V')
           if ($v -match '^\d+\.\d+\.0$') { $v = $v.Substring(0, $v.Length - 2) }
           "name=Lewd Vault $v" >> $env:GITHUB_OUTPUT
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.TAG }}
           name: ${{ steps.pack.outputs.name }}
           files: |
             Lewd Vault.msi
