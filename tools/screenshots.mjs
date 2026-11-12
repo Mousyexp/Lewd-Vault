@@ -1,7 +1,7 @@
 // The README's screenshots (docs/screenshots/*.webp), taken from the real page and the real Rust
 // backend over a fresh demo vault, so they can be retaken whenever the app changes:
 //
-//   node tools/screenshots.mjs <folder with the 5 demo pictures> [--frames <folder>]
+//   node tools/screenshots.mjs <folder with the 5 demo pictures>
 //
 // What it does:
 //   1. builds the page (sync-ui) and starts the backend as a small HTTP server over a new vault in a
@@ -10,8 +10,6 @@
 //      stand-in for Tauri's bridge that sends the page's calls to that server,
 //   3. adds the demo pictures through the Add screen like you would (category, tags, NSFW, rating),
 //      looks at a few, then visits each screen and saves it as lossless WebP.
-// --frames also keeps every shot as PNG there; with --dpr 3 only those (sharp frames for the trailer,
-// docs/trailer/, which the camera magnifies).
 //
 // The demo pictures aren't in the repository (they're used with permission for the screenshots only).
 // Their order and details are in DEMO below; any 5 pictures work.
@@ -29,11 +27,8 @@ const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const root = fileURLToPath(new URL('..', import.meta.url));
 const args = process.argv.slice(2);
-const pics = args.find((a, i) => !a.startsWith('--') && !['--frames', '--dpr'].includes(args[i - 1]));
-const framesDir = args.includes('--frames') ? path.resolve(args[args.indexOf('--frames') + 1]) : null;
-// --dpr 3: sharper frames for the trailer (only the --frames PNGs; docs/screenshots stay 1400 x 900)
-const dpr = args.includes('--dpr') ? +args[args.indexOf('--dpr') + 1] : 1;
-if (!pics) { console.error('usage: node tools/screenshots.mjs <folder with the demo pictures> [--frames <folder>]'); process.exit(2); }
+const pics = args.find(a => !a.startsWith('--'));
+if (!pics) { console.error('usage: node tools/screenshots.mjs <folder with the demo pictures>'); process.exit(2); }
 const files = fs.readdirSync(pics).filter(f => /\.(webp|png|jpe?g)$/i.test(f)).sort();
 if (files.length < 5) { console.error(`need 5 pictures in ${pics}, found ${files.length}`); process.exit(2); }
 
@@ -72,7 +67,7 @@ const site = http.createServer((q, r) => {
 
 // 2. the browser, with Tauri's bridge pointed at the backend
 const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
-const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 }, deviceScaleFactor: dpr });
+const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 }, deviceScaleFactor: 1 });
 await ctx.route('http://vault.localhost/**', async route => {
   const u = new URL(route.request().url());
   const headers = {};
@@ -134,8 +129,7 @@ const shot = async (name, fullClip) => {
   await sleep(250);
   const png = path.join(work, name + '.png');
   await page.screenshot({ path: png, clip: fullClip });
-  if (framesDir) { fs.mkdirSync(framesDir, { recursive: true }); fs.copyFileSync(png, path.join(framesDir, name + '.png')); }
-  if (dpr === 1) execFileSync('python3', ['-c', `from PIL import Image; Image.open(r'''${png}''').convert('RGB').save(r'''${path.join(out, name + '.webp')}''', lossless=True, method=6)`]);
+  execFileSync('python3', ['-c', `from PIL import Image; Image.open(r'''${png}''').convert('RGB').save(r'''${path.join(out, name + '.webp')}''', lossless=True, method=6)`]);
   console.log('saved', name);
 };
 
@@ -245,8 +239,7 @@ await lockPage.evaluate(() => document.querySelectorAll('#toast, #splash').forEa
 {
   const png = path.join(work, 'password.png');
   await lockPage.screenshot({ path: png });
-  if (framesDir) fs.copyFileSync(png, path.join(framesDir, 'password.png'));
-  if (dpr === 1) execFileSync('python3', ['-c', `from PIL import Image; Image.open(r'''${png}''').convert('RGB').save(r'''${path.join(out, 'password.webp')}''', lossless=True, method=6)`]);
+  execFileSync('python3', ['-c', `from PIL import Image; Image.open(r'''${png}''').convert('RGB').save(r'''${path.join(out, 'password.webp')}''', lossless=True, method=6)`]);
   console.log('saved password');
 }
 

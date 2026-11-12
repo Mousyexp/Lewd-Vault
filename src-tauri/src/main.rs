@@ -2113,7 +2113,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    // The README's screenshots and the trailer (tools/screenshots.mjs): the real backend over a vault
+    // The README's screenshots (tools/screenshots.mjs): the real backend over a vault
     // in $DEMO_DATA, on 127.0.0.1:$DEMO_PORT, for the real page in a browser. POST /api {name, args},
     // POST /upload (the upload command's headers), GET /vault/<path> (vault://). Runs until killed:
     //   DEMO_DATA=... DEMO_PORT=8790 cargo test screenshot_server -- --ignored --nocapture
