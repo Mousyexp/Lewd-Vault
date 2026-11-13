@@ -156,10 +156,15 @@ jobs:
             export APPLE_API_KEY_PATH="$key"
             npx tauri ios build --export-method debugging
           else
+            # The Apple secrets are not set in this repo, so GitHub passes them as *empty* strings.
+            # Tauri's credential reader treats "present but empty" as a mistake and aborts (it only
+            # tolerates all three being absent), so clear them for the unsigned path. Nothing is
+            # signed here — sideloading tools sign on the device.
+            unset APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
             # `tauri ios build` assembles the Apple config *before* it looks at `--no-sign`, and that
-            # config rejects an empty development team (`apple.development-team` is empty). Nothing is
-            # signed on this path — sideloading tools sign on the device — so a placeholder is enough
-            # to get past the check. A real team (the secret) still wins when the signed path is taken.
+            # config rejects an empty development team (`apple.development-team` is empty). A
+            # placeholder satisfies the check; a real team from the secret still wins when the signed
+            # path is taken.
             export APPLE_DEVELOPMENT_TEAM="${APPLE_DEVELOPMENT_TEAM:-0000000000}"
             npx tauri ios build --no-sign
           fi
