@@ -941,6 +941,16 @@ version skips.
 - **Tags on the web:** the web version doesn't have tags.
 - **HEVC:** see above.
 
+## iOS port (research only, 13 Nov 2026)
+
+The research for an iOS port lives in `docs/IOS-PORT.md`: what the Tauri 2 iOS target gives you,
+the two architectural decisions (media over a loopback HTTP server instead of the `vault://` custom
+scheme, and one computed origin instead of the hardcoded `http://vault.localhost/`), the Windows-only
+backend paths that need an iOS branch (`explorer`, `trash`, `%LOCALAPPDATA%`, the global shortcut,
+single-instance, self-update), the crate restructuring mobile needs, and the build/sign pipeline for
+a sideloaded IPA (macOS CI, `tauri ios build`, AltStore/TrollStore/paid account). No code has changed
+yet; the document ends with a phased plan and the open questions to settle first.
+
 ## Safety for synced vaults (20 Oct 2026)
 
 - **Daily backups.** At each start and before the first change of a day, `index.csv`, `views.csv` and `_app/settings.json` are copied into `_app/backups/<date>/`. The newest 14 days are kept. To undo a bad sync, close the app and copy them back.

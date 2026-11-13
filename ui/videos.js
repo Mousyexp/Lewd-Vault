@@ -20,7 +20,7 @@
   const fmt = s => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
   const LONG = 600;
   const D = () => window.vaultDiscover;
-  const proxy = url => url ? 'http://vault.localhost/web?u=' + enc(url) : '';
+  const proxy = url => url ? vaultOrigin() + '/web?u=' + enc(url) : '';
   const clean = text => !D() || !D().NEVER_TEXT.test(text || '');
 
   // ---------- what's kept with the vault: where you stopped, and what you kept for later ----------
@@ -34,7 +34,7 @@
   const saveLater = () => api('kvSet', 'watchlater', later).catch(e => toast(errMsg(e), 'err'));
   const kvReady = setupReady.then(loadKV);
   libraryOk = i => !(i.kind === 'video' && i.duration >= LONG);
-  const stream = url => 'http://vault.localhost/stream?u=' + enc(url);
+  const stream = url => vaultOrigin() + '/stream?u=' + enc(url);
   const secs = t => String(t || '').split(':').reduce((a, b) => a * 60 + (+b || 0), 0);
 
   // the full view remembers where a long video was left, and starts there next time

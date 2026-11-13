@@ -57,8 +57,11 @@ function vaultUnlock() {
     });
   }).catch(() => {});
 }
-// files are served by the app's vault:// protocol (with byte ranges); WebView2 spells it http://vault.localhost/
-const vaultUrl = id => 'http://vault.localhost/' + encodeURIComponent(id);
+// files are read through the vault's own origin, which the app sets on the window before the page
+// runs: the vault:// protocol on the desktop (WebView2 spells it http://vault.localhost/), the
+// loopback media server on iOS (custom schemes don't feed <img>/<video> on WKWebView)
+const vaultOrigin = () => (window.__VAULT_ORIGIN || 'http://vault.localhost').replace(/\\/$/, '');
+const vaultUrl = id => vaultOrigin() + '/' + encodeURIComponent(id);
 async function localFetch(id, init) {
   const res = await fetch(vaultUrl(id), init);
   if (!res.ok) throw new Error(\`File not found (\${res.status})\`);

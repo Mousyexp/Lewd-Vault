@@ -502,7 +502,7 @@
     return r;
   };
   $('detailImg').addEventListener('load', e => {
-    if (!e.target.src.startsWith('http://vault.localhost/item')) return;
+    if (!e.target.src.startsWith(vaultOrigin() + '/item')) return;
     e.target.animate([{ opacity: .55, filter: 'blur(6px)' }, { opacity: 1, filter: 'blur(0)' }], { duration: 260, easing: 'ease-out' });
   });
   window.saveDetailTags = async item => {
@@ -640,7 +640,7 @@
   // browser decodes off the main thread, and thumbnails come at the size the card needs (the backend
   // makes and keeps card-sized copies of the 900 x 1200 thumbnails, see grid_thumb in main.rs).
   const WIDTHS = [240, 360, 480, 720, 960];
-  const thumbSrc = (item, w) => `http://vault.localhost/t/${encodeURIComponent(item.thumb)}?w=${w}`;
+  const thumbSrc = (item, w) => `${vaultOrigin()}/t/${encodeURIComponent(item.thumb)}?w=${w}`;
   function neededWidth(item) {
     const [tw, th] = (item.thumbSize || '').split('x').map(Number);
     const ar = tw && th ? tw / th : item.width && item.height ? item.width / item.height : 0.75;

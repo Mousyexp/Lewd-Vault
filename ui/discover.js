@@ -17,7 +17,7 @@
   if (!window.vaultUI || !inTauri) return;
   const { make, tagChip, tagBox, pretty, typeOf, nameOf, cleanTags, showTitle, peek, TAB_KEY, foldChips } = vaultUI;
   const enc = encodeURIComponent;
-  const proxy = url => url ? 'http://vault.localhost/web?u=' + enc(url) : '';
+  const proxy = url => url ? vaultOrigin() + '/web?u=' + enc(url) : '';
   const PAGE = 60;
   // never shown, never searched for: sexual content involving minors
   // (each site's own word for it: e621's young and cub, Derpibooru's foal and filly, Danbooru's child...)
@@ -1799,7 +1799,7 @@
         if (onProgress) onProgress(p);
         await new Promise(r => setTimeout(r, 500));
       }
-      return await (await fetch('http://vault.localhost/dl/' + id)).blob();
+      return await (await fetch(vaultOrigin() + '/dl/' + id)).blob();
     } finally { api('downloadDrop', id).catch(() => {}); }
   }
   // the little round spinner that becomes a tick
@@ -1899,7 +1899,7 @@
     if (/^(webm|mp4)$/.test(ext)) {
       const v = make('video');
       // (through vault://stream, a piece at a time: the picture proxy sends whole files, which can't be jumped into)
-      Object.assign(v, { autoplay: true, loop: true, playsInline: true, crossOrigin: 'anonymous', src: 'http://vault.localhost/stream?u=' + enc(file) });
+      Object.assign(v, { autoplay: true, loop: true, playsInline: true, crossOrigin: 'anonymous', src: vaultOrigin() + '/stream?u=' + enc(file) });
       media.append(v);
       window.vaultPlayer.attach(v, media);
     } else {

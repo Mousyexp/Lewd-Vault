@@ -4,6 +4,12 @@ version = "1.1.0"
 description = "Image Vault, as a portable desktop app over a local folder"
 edition = "2021"
 
+# The app is a library so the same code builds for iOS too (where the platform owns the entry point
+# and links the staticlib); main.rs is the desktop entry point.
+[lib]
+name = "image_vault_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -27,6 +33,7 @@ getrandom = "0.2"
 chacha20 = "0.9" # (Untraceable mode, crypt.rs: the files encrypted)
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 image = { version = "0.25", default-features = false, features = ["webp", "jpeg", "png", "gif"] }
+tauri-plugin-opener = "2.7.3"
 
 [profile.release]
 # smaller exe; the backend does little work, so speed isn't the point here

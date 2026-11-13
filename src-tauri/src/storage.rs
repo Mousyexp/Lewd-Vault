@@ -36,13 +36,22 @@ pub fn hidden_dir() -> PathBuf {
     HIDDEN_AT.read().unwrap().clone().unwrap_or_else(default_hidden)
 }
 fn default_hidden() -> PathBuf {
-    if exe_dir_writable() {
-        return exe_dir().join(HIDDEN);
+    // iOS: an app has one container and no "next to the .exe"; keep the untraceable folder out of
+    // sight in Application Support (it is not exposed to the Files app).
+    #[cfg(target_os = "ios")]
+    {
+        return ios_support().join(HIDDEN);
     }
-    env_path("USERPROFILE").map(|u| u.join("Documents")).filter(|d| d.is_dir())
-        .or_else(|| env_path("LOCALAPPDATA"))
-        .unwrap_or_else(exe_dir)
-        .join(HIDDEN)
+    #[cfg(not(target_os = "ios"))]
+    {
+        if exe_dir_writable() {
+            return exe_dir().join(HIDDEN);
+        }
+        env_path("USERPROFILE").map(|u| u.join("Documents")).filter(|d| d.is_dir())
+            .or_else(|| env_path("LOCALAPPDATA"))
+            .unwrap_or_else(exe_dir)
+            .join(HIDDEN)
+    }
 }
 /// Where an untraceable vault goes in a folder you picked: its data.temp, or the folder itself
 /// when you picked a data.temp (or the vault inside one).
@@ -61,7 +70,15 @@ pub fn local_base() -> PathBuf {
     if crate::crypt::untraceable() {
         return hidden_dir().join("local");
     }
-    env_path("LOCALAPPDATA").unwrap_or_else(std::env::temp_dir).join("Image Vault")
+    #[cfg(target_os = "ios")]
+    {
+        // the app's container, not exposed to the Files app (unlike Documents)
+        return ios_support();
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        env_path("LOCALAPPDATA").unwrap_or_else(std::env::temp_dir).join("Image Vault")
+    }
 }
 /// Hidden and "system", so Explorer doesn't show it even with hidden files shown.
 fn hide(p: &Path) {
@@ -77,36 +94,91 @@ fn hide(p: &Path) {
 pub(crate) fn exe_dir() -> PathBuf {
     std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default()
 }
+
+// ---------- iOS containers ----------
+// An iOS app has one sandbox container and nothing to write next to itself. Documents is visible in
+// the Files app (with UIFileSharingEnabled in Info.plist); Application Support / Library is not.
+
+#[cfg(target_os = "ios")]
+fn ios_home() -> PathBuf {
+    // NSHomeDirectory() is the container root: <container>/Documents, <container>/Library/...
+    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+}
+/// The vault's home on iOS: Documents (the same place a user would drop a vault folder into).
+#[cfg(target_os = "ios")]
+pub(crate) fn ios_documents() -> PathBuf {
+    ios_home().join("Documents")
+}
+/// The app's own things on iOS: Library/Application Support (hidden, not user-visible).
+#[cfg(target_os = "ios")]
+pub(crate) fn ios_support() -> PathBuf {
+    ios_home().join("Library").join("Application Support")
+}
+
 /// Can this app write next to itself? Not when installed (Program Files): then the vault and the
 /// setting live in the user's own folders instead.
 pub(crate) fn exe_dir_writable() -> bool {
-    let probe = exe_dir().join(format!(".lewd-vault-probe-{}", std::process::id()));
-    let ok = fs::write(&probe, b"").is_ok();
-    let _ = fs::remove_file(&probe);
-    ok
+    // iOS: never (there is no writable folder next to the app)
+    #[cfg(target_os = "ios")]
+    {
+        return false;
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let probe = exe_dir().join(format!(".lewd-vault-probe-{}", std::process::id()));
+        let ok = fs::write(&probe, b"").is_ok();
+        let _ = fs::remove_file(&probe);
+        ok
+    }
 }
 /// Where "This PC" keeps the vault: next to the app (portable), else Documents\Image Vault data.
 fn local_home() -> PathBuf {
-    if exe_dir_writable() {
-        return exe_dir();
+    // iOS: Documents is where a vault folder can live (and be reached from the Files app)
+    #[cfg(target_os = "ios")]
+    {
+        return ios_documents();
     }
-    env_path("USERPROFILE").map(|u| u.join("Documents")).filter(|d| d.is_dir())
-        .or_else(|| env_path("LOCALAPPDATA"))
-        .unwrap_or_else(exe_dir)
+    #[cfg(not(target_os = "ios"))]
+    {
+        if exe_dir_writable() {
+            return exe_dir();
+        }
+        env_path("USERPROFILE").map(|u| u.join("Documents")).filter(|d| d.is_dir())
+            .or_else(|| env_path("LOCALAPPDATA"))
+            .unwrap_or_else(exe_dir)
+    }
 }
 fn env_path(key: &str) -> Option<PathBuf> {
     std::env::var_os(key).map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
 }
 fn appdata_config() -> Option<PathBuf> {
-    env_path("APPDATA").map(|a| a.join("Image Vault").join("config.json"))
+    #[cfg(target_os = "ios")]
+    {
+        // the app's own hidden folder, not Documents
+        return Some(ios_support().join("Image Vault").join("config.json"));
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        env_path("APPDATA").map(|a| a.join("Image Vault").join("config.json"))
+    }
 }
 fn config_paths() -> Vec<PathBuf> {
     if let Some(p) = env_path("IMAGE_VAULT_CONFIG") {
         return vec![p];
     }
-    let mut v = vec![exe_dir().join("Image Vault.config.json")];
-    v.extend(appdata_config());
-    v
+    #[cfg(target_os = "ios")]
+    {
+        let mut v = vec![ios_support().join("Image Vault").join("config.json")];
+        // a config the user dropped into Documents (e.g. copied over from a PC), if any
+        v.push(ios_documents().join("Image Vault.config.json"));
+        return v;
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let mut v = vec![exe_dir().join("Image Vault.config.json")];
+        v.extend(appdata_config());
+        v
+    }
 }
 
 /// The data folder to open, and whether the welcome screen should ask where it goes.
@@ -282,6 +354,10 @@ pub fn options(current: &Path) -> Value {
         option("icloud", "iCloud Drive", icloud(), None, current),
         option("local", "This PC", Some(local_home()), Some(local.clone()), current),
     ];
+    // iOS: no cloud service installs a synced folder on the device, so those entries would only
+    // offer Windows download links. The vault lives in the app's Documents folder instead.
+    #[cfg(target_os = "ios")]
+    list.retain(|o| o["id"] != json!("gdrive") && o["id"] != json!("onedrive") && o["id"] != json!("dropbox") && o["id"] != json!("icloud"));
     // Untraceable: the one in use, or a new one next to the app / in Documents (another place can be
     // picked on its page)
     let hidden = hidden_dir();

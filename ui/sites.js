@@ -19,7 +19,7 @@
   const make = window.vaultUI.make;
   const D = () => window.vaultDiscover;
   const enc = encodeURIComponent;
-  const proxy = url => url ? 'http://vault.localhost/web?u=' + enc(url) : '';
+  const proxy = url => url ? vaultOrigin() + '/web?u=' + enc(url) : '';
   const clean = text => !D().NEVER_TEXT.test(text || '');
 
   // "Label = value" lines ⇄ [[label, value]]
@@ -309,7 +309,7 @@
           report.append(make('p', 'st-good', `✓ Its file: ${d.file.replace(/^https?:\/\//, '').slice(0, 90)}`));
           const kind = /^(mp4|webm|m4v)$/.test(d.ext) ? 'video' : /^(mp3|m4a|ogg|opus|wav|flac)$/.test(d.ext) ? 'audio' : 'img';
           const m = make(kind); m.className = 'st-media';
-          if (kind === 'img') m.src = proxy(d.file); else { m.src = 'http://vault.localhost/stream?u=' + enc(d.file); m.controls = true; m.muted = true; m.preload = 'metadata'; }
+          if (kind === 'img') m.src = proxy(d.file); else { m.src = vaultOrigin() + '/stream?u=' + enc(d.file); m.controls = true; m.muted = true; m.preload = 'metadata'; }
           report.append(m, make('p', d.tags.length ? 'st-good' : 'st-wait', d.tags.length ? `✓ Its tags: ${d.tags.slice(0, 12).join(', ')}` : 'No tags found on its page (they\'re optional).'));
         } catch (e) { report.lastChild.remove(); report.append(make('p', 'st-bad', `✗ Its page: ${errMsg(e)}`)); }
       }

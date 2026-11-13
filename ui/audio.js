@@ -15,7 +15,7 @@
   const { make, showTitle, TAB_KEY } = window.vaultUI;
   const enc = encodeURIComponent;
   const fmt = s => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
-  const proxy = url => url ? 'http://vault.localhost/web?u=' + enc(url) : '';
+  const proxy = url => url ? vaultOrigin() + '/web?u=' + enc(url) : '';
   const clean = text => !window.vaultDiscover || !window.vaultDiscover.NEVER_TEXT.test(text || '');
   const CATS = ['JOI', 'Hypno', 'ASMR', 'Erotic stories', 'Moans', 'Music', 'Other'];
   const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|oga|opus|flac|wav)$/i;
