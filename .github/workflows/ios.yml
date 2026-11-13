@@ -156,6 +156,11 @@ jobs:
             export APPLE_API_KEY_PATH="$key"
             npx tauri ios build --export-method debugging
           else
+            # `tauri ios build` assembles the Apple config *before* it looks at `--no-sign`, and that
+            # config rejects an empty development team (`apple.development-team` is empty). Nothing is
+            # signed on this path — sideloading tools sign on the device — so a placeholder is enough
+            # to get past the check. A real team (the secret) still wins when the signed path is taken.
+            export APPLE_DEVELOPMENT_TEAM="${APPLE_DEVELOPMENT_TEAM:-0000000000}"
             npx tauri ios build --no-sign
           fi
       - uses: actions/upload-artifact@v4
