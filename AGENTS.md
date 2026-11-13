@@ -54,6 +54,34 @@ place. Key conclusions: feasible as a sideloaded IPA; serve media over a loopbac
 origin instead of hardcoding `http://vault.localhost/`; the crate must be restructured for mobile;
 iOS builds need macOS + Xcode.
 
+### Building the IPA in CI (`.github/workflows/ios.yml`)
+
+The `ios.yml` workflow builds an unsigned, sideloadable IPA on a `macos-26` runner
+(`tauri ios init` + `tauri ios build --no-sign`), then uploads it as the `LewdVault-ipa`
+artifact. Four things bite on a fresh checkout; all are already fixed there, but they are
+the same traps for any future iOS CI:
+
+- **`cargo test` needs the Linux GTK/WebKit headers.** The `rust-tests` job runs on
+  ubuntu-latest, and the crate is a Tauri app, so even `cargo test` compiles the desktop
+  backend; without `libwebkit2gtk-4.1-dev`/`libgtk-3-dev`/`libsoup-3.0-dev` the `-sys` build
+  scripts fail ("Package gobject-2.0 was not found in the pkg-config search path").
+- **`tauri ios build` requires a non-empty development team even with `--no-sign`.** It
+  builds the Apple config before it looks at the flag, and that config rejects an empty
+  `apple.development-team`. The unsigned path exports a placeholder team (`0000000000`);
+  nothing is signed there, so the value is never used.
+- **Unset Apple secrets arrive as empty strings.** GitHub passes a missing secret as `""`,
+  and Tauri's credential reader treats "present but empty" as an error (it only tolerates all
+  three being *absent*). The unsigned path `unset`s `APPLE_API_KEY`, `APPLE_API_ISSUER`,
+  `APPLE_API_KEY_PATH` first.
+- **The generated Xcode project calls an npm script.** Its "Build Rust Code" phase runs
+  `npm run -- tauri ios xcode-script`, so `package.json` needs the `"tauri": "tauri"` script
+  the official Tauri templates ship; without it xcodebuild exits 65 ("Missing script: tauri").
+
+The unsigned IPA is `gen/apple/build/arm64/Lewd Vault.ipa`; its `Info.plist` carries
+`CFBundleIdentifier local.imagevault.desktop`, `MinimumOSVersion 26.0`, `UIRequiredDeviceCapabilities
+["arm64","metal"]`, and `UIFileSharingEnabled`/`LSSupportsOpeningDocumentsInPlace` (so the vault
+folder is reachable in Files). Sideload with AltStore/SideStore, which sign on the device.
+
 ### Audit of `mobile/docs/PORT.md` (13 Nov 2026, against the code)
 
 Verified claims that matter, and two fixes made while checking:
