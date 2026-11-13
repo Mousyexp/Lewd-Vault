@@ -67,9 +67,11 @@ only runs on macOS:
    - 🆓 **AltStore / SideStore** (free Apple ID): signs the IPA with your own certificate and
      re-signs it every 7 days. AltStore Classic runs AltServer on your **Windows PC**, so no Mac is
      needed; SideStore pairs once and then works untethered.
-   - 💳 **Paid Apple Developer account**: set the `APPLE_API_KEY`, `APPLE_API_ISSUER` and
-     `APPLE_API_KEY_P8` repository secrets and the workflow produces a **signed** IPA (development
-     method, 1-year profile, up to 100 devices) that installs straight away.
+   - 💳 **Paid Apple Developer account**: set the `APPLE_API_KEY`, `APPLE_API_ISSUER`,
+     `APPLE_API_KEY_P8` and `APPLE_DEVELOPMENT_TEAM` repository secrets and the workflow produces a
+     **signed** IPA (development method, 1-year profile, up to 100 devices) that installs straight
+     away. All four are needed: the API key authorizes the export, the team ID is what Xcode signs
+     with.
 
 Requires **iOS 26** (the app uses the iOS 26 web features natively). Your vault is the *same folder*
 as on Windows: open the app's **Documents** folder in the Files app and drop a vault in — `index.csv`,

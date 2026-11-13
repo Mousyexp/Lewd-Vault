@@ -167,6 +167,12 @@ step('the iOS port pieces the platform turns on are in place', () => {
   const lib = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'lib.rs'), 'utf8');
   if (!/classList\.add\((['"])ios\1\)/.test(lib)) throw new Error("nothing adds the html.ios class, so ui/ios.js never runs");
   if (!page.includes('src="/ios.js"')) throw new Error('the page does not load /ios.js');
+  // The iOS build only runs in .github/workflows/ios.yml. Two of the ten classic CI failure modes have
+  // to stay fixed there or the IPA job breaks: the aarch64-apple-ios target (without it the crate
+  // cannot find `std`), and a pinned macOS runner (macos-latest drifts to a new Xcode and its SDK).
+  const wf = fs.readFileSync(path.join(root, '.github', 'workflows', 'ios.yml'), 'utf8');
+  if (!/aarch64-apple-ios/.test(wf)) throw new Error('ios.yml does not install the aarch64-apple-ios Rust target');
+  if (/runs-on:\s*macos-latest/.test(wf)) throw new Error('ios.yml uses the floating macos-latest runner; pin it');
 });
 
 if (problems.length) {

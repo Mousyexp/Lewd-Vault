@@ -87,11 +87,22 @@ Verified claims that matter, and two fixes made while checking:
 
 There is no local Mac, so the IPA is built by GitHub Actions (`.github/workflows/ios.yml`):
 `macos-26` (macOS 26 Tahoe, **Xcode 26.6 + the iOS 26 SDK** — required because
-`bundle.iOS.minimumSystemVersion` is `26.0`; `macos-latest` currently aliases to it). `brew install
-xcodegen`, then `npx tauri ios init --ci`, `npx tauri icon art/app-icon.png`, then `npx tauri ios
+`bundle.iOS.minimumSystemVersion` is `26.0`; `macos-latest` currently aliases to it, but the runner
+tag is pinned and a step re-selects `/Applications/Xcode_26.6.app`, because the image's *default*
+Xcode drifts when GitHub updates it). The `ipa` job: `dtolnay/rust-toolchain` with the
+`aarch64-apple-ios` target, `Swatinem/rust-cache` (`workspaces: src-tauri`), `brew install xcodegen`
+(auto-update off), `npx tauri ios init --ci`, `npx tauri icon art/app-icon.png`, then `npx tauri ios
 build`. No Apple secrets → `--no-sign` (unsigned IPA, signed on device); `APPLE_API_KEY` +
-`APPLE_API_ISSUER` + `APPLE_API_KEY_P8` set → `--export-method debugging` (signed IPA). Facts worth
-keeping:
+`APPLE_API_ISSUER` + `APPLE_API_KEY_P8` + `APPLE_DEVELOPMENT_TEAM` set → `--export-method debugging`
+(signed IPA). Facts worth keeping:
+
+- The aarch64-apple-ios target **must** be installed (`rustup target add`, via the toolchain action);
+  without it the crate fails to compile with "can't find crate for `std`".
+- A headless keychain step (`security unlock-keychain` + `set-key-partition-list -S
+  apple-tool:,apple:,codesign:`) runs before the build so nothing waits on a password prompt a cloud
+  runner cannot answer. Each line is `|| true` (harmless under `--no-sign`).
+- A cold run compiles the whole Rust tree for aarch64-apple-ios plus the CocoaPods graph, so the job
+  timeout is 90 min and the caches above keep later runs short.
 
 - `bundle.active: false` does **not** block `tauri ios build`: that command uses cargo-mobile2's
   archive/export, not Tauri's desktop bundler.

@@ -57,12 +57,14 @@ jobs:
       - run: cargo test --manifest-path src-tauri/Cargo.toml
 
   ipa:
-    # macos-26 is macOS 26 Tahoe with Xcode 26.6 and the iOS 26 SDK. The SDK has to be this new
-    # because bundle.iOS.minimumSystemVersion is 26.0 (an older Xcode's SDK cannot target 26).
-    # `macos-latest` currently points at macos-26, so it works too; this is explicit.
+    # macos-26 is macOS 26 Tahoe. Its default Xcode is 26.6 (iOS 26 SDK), required because
+    # bundle.iOS.minimumSystemVersion is 26.0 (an older SDK cannot target 26). The default Xcode drifts
+    # when GitHub updates the image, so the version is pinned in a step below.
     runs-on: macos-26
     needs: rust-tests
-    timeout-minutes: 60
+    # A cold run compiles the whole Rust tree for aarch64-apple-ios plus the CocoaPods graph. Give it
+    # room so a slow first build does not hit the limit (later runs reuse the caches below).
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -71,10 +73,22 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
+          # Without this the iOS compile fails with "can't find crate for `std`" (target not installed).
           targets: aarch64-apple-ios
       - uses: Swatinem/rust-cache@v2
         with:
+          # Caches ~/.cargo and src-tauri/target (including the aarch64-apple-ios triple), so a
+          # re-run does not recompile every dependency.
           workspaces: src-tauri
+      # Pin the SDK. `macos-26` defaults to Xcode 26.6 today; if GitHub moves the default this keeps
+      # the iOS 26 SDK (and prints what was actually used, so a drift is visible in the log).
+      - name: Select Xcode 26.6
+        run: |
+          if [ -d /Applications/Xcode_26.6.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app
+          fi
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos || true
       - run: npm ci
       # npm test runs sync-ui.mjs (which writes the gitignored src/ the build needs) and checks the
       # page hangs together.
@@ -82,7 +96,13 @@ jobs:
       # Explicit, so the build below does not depend on a side effect of the test: writes src/.
       - run: npm run sync
       # XcodeGen turns project.yml into the Xcode project; CocoaPods resolves the Tauri pods.
-      - run: brew install xcodegen
+      # (CocoaPods is preinstalled on the runner; XcodeGen is not.) Auto-update is off so a headless
+      # runner never waits on a Homebrew prompt.
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: brew install xcodegen
       # Creates src-tauri/gen/apple (the Xcode project) once; a no-op when it is already there.
       - run: npx tauri ios init --ci
       # The real icon into the asset catalog. It has to run *after* ios init, because `tauri icon`
@@ -90,16 +110,28 @@ jobs:
       # src-tauri/icons/ios otherwise), so running it first would leave the template's placeholder
       # icons in the build.
       - run: npx tauri icon art/app-icon.png
+      # Headless keychain: unlock it and grant codesign access so nothing waits on a password prompt
+      # a cloud runner cannot answer. Each line is best-effort (`|| true`): with --no-sign none of this
+      # is needed, and with the Apple secrets below the CLI signs from a temporary keychain.
+      - name: Prepare the keychain (headless)
+        run: |
+          security default-keychain -s "$HOME/Library/Keychains/login.keychain-db" || true
+          security unlock-keychain -p "" "$HOME/Library/Keychains/login.keychain-db" || true
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$HOME/Library/Keychains/login.keychain-db" || true
       - name: Build the IPA
         env:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
         run: |
-          # A signed IPA when the three Apple secrets are set, otherwise an unsigned one.
+          # A signed IPA when all four Apple secrets are set, otherwise an unsigned one. All four are
+          # required: the API key authorizes the export, and the team ID is what Xcode signs with
+          # (without it the export fails, because the project has no DEVELOPMENT_TEAM otherwise).
           # (`tauri ios build` wants APPLE_API_KEY_PATH to point at a file, so the .p8 is kept in a
-          # secret as text and written here. With --no-sign none of it is needed.)
-          if [ -n "$APPLE_API_KEY" ] && [ -n "$APPLE_API_ISSUER" ] && [ -n "$APPLE_API_KEY_P8" ]; then
+          # secret as text and written here. With --no-sign none of it is needed, which is the
+          # sideloading path: AltStore/SideStore sign on the device.)
+          if [ -n "$APPLE_API_KEY" ] && [ -n "$APPLE_API_ISSUER" ] && [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_DEVELOPMENT_TEAM" ]; then
             umask 077
             key="$RUNNER_TEMP/AuthKey.p8"
             printf '%s' "$APPLE_API_KEY_P8" > "$key"
@@ -111,5 +143,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: LewdVault-ipa
-          path: src-tauri/gen/apple/build/**/*.ipa
+          # `tauri ios build` writes the IPA to gen/apple/build/<arch>/ (the product name has a space,
+          # which the glob matches). Broadened so a layout change does not silently fail the upload.
+          path: |
+            src-tauri/gen/apple/**/*.ipa
           if-no-files-found: error
