@@ -105,6 +105,11 @@ keeping:
   `.gitattributes` because the repo-wide `* text=auto eol=lf` rewrote the plain vault's CRLF (the
   format the app writes, `lib.rs`) to LF on checkout, so on a fresh clone the encrypted fixture no
   longer decrypted back to it. Do not remove that rule.
+- **The Rust tests run in `ios.yml`'s `rust-tests` job, and nowhere else.** They are the vault-format
+  acceptance gate (`golden_vault_round_trips_byte_identical`, `index_is_windows_compatible`,
+  `untraceable_vault_made_elsewhere_opens`, uid allocation, the file-name format); `npm test` does not
+  cover them. `cargo test` needs the gitignored `src/` (tauri's `generate_context!` requires the
+  `frontendDist` dir), so the job runs `npm run sync` first. The `ipa` job `needs: rust-tests`.
 
 
 Two user priorities outrank the rest:

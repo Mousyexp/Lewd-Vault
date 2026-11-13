@@ -55,6 +55,30 @@ Then pick where your vault should live (your PC, a cloud folder, Google Drive in
 
 You need WebView2, which Windows 10 and 11 already have. 👍
 
+## 📱 On iPhone / iPad (sideloaded)
+
+There is no App Store build (the content would never pass review). The app is built as an **IPA** and
+sideloaded instead. The build runs in CI (`.github/workflows/ios.yml`) because it needs Xcode, which
+only runs on macOS:
+
+1. On GitHub: **Actions → Build iOS → Run workflow**. When it finishes, download the
+   **LewdVault-ipa** artifact (that job also runs the Rust vault-format tests first).
+2. Install the IPA with a signer:
+   - 🆓 **AltStore / SideStore** (free Apple ID): signs the IPA with your own certificate and
+     re-signs it every 7 days. AltStore Classic runs AltServer on your **Windows PC**, so no Mac is
+     needed; SideStore pairs once and then works untethered.
+   - 💳 **Paid Apple Developer account**: set the `APPLE_API_KEY`, `APPLE_API_ISSUER` and
+     `APPLE_API_KEY_P8` repository secrets and the workflow produces a **signed** IPA (development
+     method, 1-year profile, up to 100 devices) that installs straight away.
+
+Requires **iOS 26** (the app uses the iOS 26 web features natively). Your vault is the *same folder*
+as on Windows: open the app's **Documents** folder in the Files app and drop a vault in — `index.csv`,
+`views.csv` and `_app/` stay interchangeable between the PC and the phone. Untraceable mode's
+encryption works the same on both.
+
+The workflow is manual for now; it is not yet wired to Releases. Full detail (and the reason for each
+iOS decision) is in [docs/IOS-PORT.md](docs/IOS-PORT.md).
+
 ## 🧑‍💻 Build it yourself
 
 ```bash

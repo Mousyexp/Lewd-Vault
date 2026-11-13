@@ -554,13 +554,17 @@ Each phase should end with a runnable build on a device or the simulator before 
 **Phase 5 — build and sign.**
 - `tauri.conf.json` `bundle.iOS` (team, minimum version, frameworks, Info.plist with ATS local
   networking). **Partly done**: `minimumSystemVersion` is set and `src-tauri/Info.plist` (ATS + file
-  sharing) is written; `developmentTeam` still to add for signing.
-- `tauri icon` to generate the iOS asset catalog. **To do** (the current icon set is desktop
-  `icon.ico`/PNG).
-- GitHub Actions `macos-latest` job: `tauri ios build` → signed IPA (Apple API key) or `--no-sign`
-  unsigned IPA; attach `LewdVault.ipa` to the release. **Workflow written** (`.github/workflows/ios.yml`,
-  manual trigger, unsigned by default); verify it on a real runner.
-- Document the AltStore / TrollStore / paid-account install steps in the README.
+  sharing) is written; `developmentTeam` is still to add, but only for a *signed* build (the default
+  `--no-sign` path does not need it).
+- ~~`tauri icon` to generate the iOS asset catalog.~~ **Done**: the workflow runs `npx tauri icon
+  art/app-icon.png` *after* `tauri ios init` (the CLI writes into `gen/apple/Assets.xcassets/
+  AppIcon.appiconset` only once it exists), and `src-tauri/icons/ios/` is checked in as the fallback.
+- ~~GitHub Actions job: `tauri ios build` → signed IPA (Apple API key) or `--no-sign` unsigned IPA;
+  attach to the release.~~ **Done** (`.github/workflows/ios.yml`, manual trigger, unsigned by
+  default). It also runs the Rust vault-format tests on `ubuntu-latest` first, because no other
+  workflow did. Still to verify on a real runner. Not yet attached to a Release.
+- ~~Document the AltStore / TrollStore / paid-account install steps in the README.~~ **Done**
+  (README "On iPhone / iPad" section).
 
 ---
 

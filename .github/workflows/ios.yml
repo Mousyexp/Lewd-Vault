@@ -33,11 +33,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rust-tests:
+    # The acceptance gate for "a vault round-trips between Windows and iOS" is the Rust test suite:
+    # index/views CSV byte-identity, the golden vault (read, then no-op rewrite, must be identical),
+    # the untraceable fixture made elsewhere, uid allocation, the file-name format. It lives in the
+    # crate, so `npm test` alone (all the Windows release workflow runs) does not cover it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      # `cargo test` compiles the crate with tauri::generate_context!, which requires the
+      # frontendDist directory (../src) to exist — it is gitignored and written by sync-ui.
+      - run: npm run sync
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+
   ipa:
     # macos-26 is macOS 26 Tahoe with Xcode 26.6 and the iOS 26 SDK. The SDK has to be this new
     # because bundle.iOS.minimumSystemVersion is 26.0 (an older Xcode's SDK cannot target 26).
     # `macos-latest` currently points at macos-26, so it works too; this is explicit.
     runs-on: macos-26
+    needs: rust-tests
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
