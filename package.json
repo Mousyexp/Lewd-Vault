@@ -6,6 +6,7 @@
   "scripts": {
     "sync": "node sync-ui.mjs",
     "test": "node tools/check.mjs",
+    "tauri": "tauri",
     "dev": "node sync-ui.mjs && tauri dev",
     "build": "node sync-ui.mjs && tauri build --no-bundle",
     "icon": "node tools/make-icon.mjs",
