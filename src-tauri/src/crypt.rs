@@ -209,7 +209,10 @@ impl Write for Writer {
         }
     }
     fn flush(&mut self) -> io::Result<()> {
-        self.f.flush()
+        self.f.flush()?;
+        // push the bytes to the storage device before the caller renames this temp file into place:
+        // on flash (iOS) a rename can otherwise land while the data behind it is still only cached
+        self.f.sync_all()
     }
 }
 
@@ -316,7 +319,7 @@ pub fn trash(path: &Path) -> bool {
     if untraceable() {
         return fs::remove_file(path).is_ok();
     }
-    trash::delete(path).is_ok()
+    super::recycle::delete(path).is_ok()
 }
 
 /// The password check (the vault's _app/key.check): CHECK encrypted with a nonce of zeros, so the

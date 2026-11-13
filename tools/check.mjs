@@ -65,6 +65,110 @@ step('the desktop hooks are in the page', () => {
   if (missing.length) throw new Error('missing ' + missing.join(', '));
 });
 
+// The page's own inline <style> (ui/Index.html) is copied into src/index.html too, so it has to be
+// checked as well as desktop.css — otherwise a stray unprefixed use there is invisible to this test.
+const unpairedBackdrop = (css, where) => {
+  const lines = css.split('\n');
+  const bad = lines.filter((l, i) => /(^|[^-])backdrop-filter\s*:/.test(l) && !/-webkit-backdrop-filter/.test(l) && !/-webkit-backdrop-filter/.test(lines[i - 1] || ''));
+  if (bad.length) throw new Error(`${where}: ${bad.length} without the prefix, e.g. ${bad[0].trim()}`);
+};
+step('every backdrop-filter has its -webkit- pair (iOS WebKit)', () => {
+  const css = fs.readFileSync(path.join(root, 'ui', 'desktop.css'), 'utf8');
+  unpairedBackdrop(css, 'desktop.css');
+  if (!css.includes('--glass-blur')) throw new Error('the Liquid Glass tokens are missing');
+  const html = fs.readFileSync(path.join(root, 'ui', 'Index.html'), 'utf8');
+  const style = html.slice(html.indexOf('<style>'), html.indexOf('</style>'));
+  unpairedBackdrop(style, 'Index.html inline style');
+});
+
+// The golden vault (src-tauri/tests/fixtures/golden-vault) is the Windows-on-disk shape; the page's
+// own parseCsv must read it exactly. This pulls the real function out of the built page (so it tests
+// the code that ships, not a copy) and checks BOM, CRLF, RFC-4180 quoting, an embedded newline and a
+// non-ASCII cell.
+step('the page reads the golden vault (BOM, CRLF, quoting)', () => {
+  const html = fs.readFileSync(path.join(src, 'index.html'), 'utf8');
+  const lines = html.split('\n');
+  const at = lines.findIndex(l => /^\s*function parseCsv\(/.test(l));
+  if (at < 0) throw new Error('parseCsv is not in the page');
+  const end = lines.findIndex((l, i) => i > at && l === '}');
+  if (end < 0) throw new Error('parseCsv has no end');
+  const parseCsv = new Function(`${lines.slice(at, end + 1).join('\n')}; return parseCsv;`)();
+
+  const read = name => fs.readFileSync(path.join(root, 'src-tauri', 'tests', 'fixtures', 'golden-vault', name), 'utf8');
+  const index = read('index.csv');
+  if (index.charCodeAt(0) !== 0xFEFF) throw new Error('the fixture lost its BOM');
+  const rows = parseCsv(index.replace(/^\uFEFF/, ''));
+  const head = rows.shift();
+  if (head[0] !== 'id' || head.length !== 21) throw new Error(`header is wrong: ${head.length} columns`);
+  if (rows.length !== 3) throw new Error(`expected 3 rows, got ${rows.length}`);
+  const col = name => head.indexOf(name);
+  const get = (r, name) => r[col(name)];
+  if (get(rows[0], 'original_name') !== 'Cover, front "final".webp') throw new Error('a quoted comma / doubled quote did not parse');
+  if (get(rows[1], 'collection') !== 'Set, A') throw new Error('a quoted collection did not parse');
+  if (get(rows[1], 'thumb').indexOf(':') < 0) throw new Error('the packed-thumbnail value did not parse');
+  if (get(rows[2], 'category') !== '日本語') throw new Error('a non-ASCII cell did not parse');
+  if (get(rows[2], 'original_name') !== 'line1\nline2.gif') throw new Error('a quoted newline did not parse');
+  const views = parseCsv(read('views.csv').replace(/^\uFEFF/, ''));
+  if (views.length !== 4) throw new Error(`expected 3 view rows, got ${views.length - 1}`);
+});
+
+// The untraceable fixture (golden-untraceable) is encrypted by tools/chacha20.py, an implementation
+// written from the format spec rather than shared with the Rust code. Its ChaCha20 core is checked
+// against the RFC 8439 keystream vector, and it decrypts the fixture back to the plain golden vault's
+// index.csv/views.csv. This runs both checks, so the Rust test's "a vault made elsewhere opens" claim
+// is backed by an independent implementation that is itself verified. Skipped (not failed) if python3
+// is missing: the Rust test still covers the fixture.
+step('the untraceable fixture is independently generated and self-consistent', () => {
+  let py;
+  try {
+    py = execFileSync('python3', ['-c', 'print(1)'], { encoding: 'utf8' }).trim();
+  } catch { return; }
+  const tool = path.join(root, 'tools', 'chacha20.py');
+  execFileSync('python3', [tool, 'self-test'], { encoding: 'utf8' });
+
+  const fixtures = path.join(root, 'src-tauri', 'tests', 'fixtures');
+  const script = `
+import sys
+sys.path.insert(0, ${JSON.stringify(path.join(root, 'tools'))})
+from chacha20 import MAGIC, derive, crypt
+key = derive("hunter2")
+root = ${JSON.stringify(path.join(fixtures, 'golden-untraceable'))}
+plain = ${JSON.stringify(path.join(fixtures, 'golden-vault'))}
+def open_vault(name):
+    b = open(root + "/" + name, "rb").read()
+    assert b[:4] == MAGIC, name + " is not an encrypted file"
+    return crypt(key, b[4:16], b[16:])
+for name in ["index.csv", "views.csv"]:
+    assert open_vault(name) == open(plain + "/" + name, "rb").read(), name + " did not decrypt to the plain vault"
+print("ok")
+`;
+  const out = execFileSync('python3', ['-c', script], { encoding: 'utf8' }).trim();
+  if (!out.endsWith('ok')) throw new Error(`the untraceable fixture did not check out: ${out}`);
+});
+
+step('the iOS port pieces the platform turns on are in place', () => {
+  // These are exactly the things that silently break the iOS build or the iOS-only behaviour, and
+  // each has bitten once. They are cheap to pin here (this runs on every `npm test`, on any OS).
+  const conf = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri', 'tauri.conf.json'), 'utf8'));
+  // The bundle key is "iOS" (capital I/O/S, matching "macOS"); "ios" is a deprecated alias. The
+  // minimum version encodes the iOS-26 decision (docs/IOS-PORT.md section 11).
+  if (!conf.bundle?.iOS) throw new Error('bundle.iOS is missing from tauri.conf.json');
+  if (conf.bundle.iOS.minimumSystemVersion !== '26.0') throw new Error(`bundle.iOS.minimumSystemVersion is ${conf.bundle.iOS.minimumSystemVersion}, expected 26.0`);
+  // The crate must build as a staticlib for iOS (docs/IOS-PORT.md section 5).
+  const cargo = fs.readFileSync(path.join(root, 'src-tauri', 'Cargo.toml'), 'utf8');
+  if (!/crate-type\s*=\s*\[[^\]]*staticlib/.test(cargo)) throw new Error('the crate is not a staticlib (needed for iOS)');
+  // Info.plist: file sharing + the loopback ATS exception (docs/IOS-PORT.md sections 4, 8).
+  const plist = fs.readFileSync(path.join(root, 'src-tauri', 'Info.plist'), 'utf8');
+  for (const key of ['UIFileSharingEnabled', 'NSAllowsLocalNetworking', '127.0.0.1']) {
+    if (!plist.includes(key)) throw new Error(`Info.plist is missing ${key}`);
+  }
+  // The iOS layer runs only under html.ios, which the Rust side adds as an initialization script
+  // before the page's own scripts; if that ever disappears, ui/ios.js silently does nothing.
+  const lib = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'lib.rs'), 'utf8');
+  if (!/classList\.add\((['"])ios\1\)/.test(lib)) throw new Error("nothing adds the html.ios class, so ui/ios.js never runs");
+  if (!page.includes('src="/ios.js"')) throw new Error('the page does not load /ios.js');
+});
+
 if (problems.length) {
   console.error('\n' + problems.join('\n'));
   process.exit(1);

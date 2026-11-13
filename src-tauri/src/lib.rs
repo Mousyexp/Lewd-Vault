@@ -27,7 +27,10 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use tauri::http::{response::Builder as ResponseBuilder, Request as HttpRequest, Response};
-use tauri::{Manager, State};
+use tauri::State;
+// (get_webview_window, used only by the desktop window/panic code)
+#[cfg(desktop)]
+use tauri::Manager;
 
 mod discreet;
 mod crypt;
@@ -39,6 +42,7 @@ mod maint;
 #[cfg(target_os = "ios")]
 mod media;
 mod pack;
+mod recycle;
 mod storage;
 mod web;
 
@@ -844,10 +848,18 @@ impl Vault {
     fn reserve_locked(&self, count: u64) -> Res<Vec<String>> {
         let state_path = self.app_dir("state.json");
         let mut state: Value = crypt::read_to_string(&state_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
+        let (items, _) = self.load_index()?;
+        let taken: HashSet<String> = items.iter().map(|i| i.uid.clone()).filter(|u| !u.is_empty()).collect();
+        let highest = taken.iter().filter_map(|u| u.parse::<u64>().ok()).max().unwrap_or(0);
         let mut n = state["nextUid"].as_u64().unwrap_or(0);
         if n == 0 {
-            let (items, _) = self.load_index()?;
-            n = items.iter().map(|i| i.uid.parse::<u64>().unwrap_or(0)).max().unwrap_or(0) + 1;
+            n = highest + 1;
+        }
+        // state.json is written after index.csv, so a device that wrote the index last may have taken
+        // numbers another device's counter still points at. Re-read the index and skip past anything it
+        // already lists, rather than handing out a duplicate.
+        if (0..count).any(|k| taken.contains(&format!("{:06}", n + k))) {
+            n = highest + 1;
         }
         state["nextUid"] = json!(n + count);
         write_atomic(&state_path, state.to_string().as_bytes())?;
@@ -1191,7 +1203,7 @@ impl Vault {
         for p in paths.into_iter().filter(|p| p.exists()) {
             // the Recycle Bin, or (a cloud drive may not have one; untraceable: the bin is a trace) the
             // vault's own _trash folder
-            if crypt::untraceable() || trash::delete(&p).is_err() {
+            if crypt::untraceable() || recycle::delete(&p).is_err() {
                 let bin = self.root.join("_trash");
                 let _ = fs::create_dir_all(&bin);
                 let to = bin.join(p.file_name().unwrap_or_default());
@@ -1219,7 +1231,7 @@ impl Vault {
         fs::create_dir_all(&dir).map_err(err)?;
         let copy = dir.join(format!("original {name}"));
         fs::copy(&from, &copy).map_err(|e| format!("Could not back up {name}: {e}"))?;
-        if crypt::untraceable() || trash::delete(&copy).is_err() {
+        if crypt::untraceable() || recycle::delete(&copy).is_err() {
             let bin = self.root.join("_trash");
             fs::create_dir_all(&bin).map_err(err)?;
             let to = bin.join(copy.file_name().unwrap_or_default());
@@ -1452,7 +1464,7 @@ fn api_call(vault: &Arc<Vault>, name: String, args: Vec<Value>) -> Res<Value> {
                 return Err("Not an audio file".into());
             }
             let p = vault.resolve(&id)?;
-            if p.exists() && trash::delete(&p).is_err() {
+            if p.exists() && recycle::delete(&p).is_err() {
                 let bin = vault.root.join("_trash");
                 fs::create_dir_all(&bin).map_err(err)?;
                 fs::rename(&p, bin.join(p.file_name().unwrap_or_default())).map_err(err)?;
@@ -1772,13 +1784,34 @@ const PANIC_KEY: &str = "Ctrl+Shift+Space";
 //   2 "hide": the window disappears, from the taskbar too. Pressing the key again (or starting the
 //     app again) brings it back.
 static PANIC_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+// The cover state: only the desktop's global shortcut drives it (iOS has no global hotkeys).
+#[cfg(desktop)]
 static COVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(desktop)]
 static WAS_FULLSCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// iOS: whether the page's CSS full-bleed ("full screen") is on. There is no window to full-screen
+// there, so this is just the toggle state the page reads back (see window_action).
+#[cfg(mobile)]
+static MOBILE_FULLSCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn panic_mode_of(mode: &str) -> u8 {
     match mode { "video" => 1, "hide" => 2, _ => 0 }
 }
 
+// iOS has no window frame: "full screen to the monitor" and "restore from minimized" have no
+// meaning there (the panic cover is a CSS full-bleed inside the webview). These wrap the desktop
+// calls so the panic logic below reads the same on both platforms.
+#[cfg(desktop)]
+fn go_fullscreen(w: &tauri::WebviewWindow, on: bool) {
+    let _ = w.set_fullscreen(on);
+}
+
+#[cfg(desktop)]
+fn unminimize(w: &tauri::WebviewWindow) {
+    let _ = w.unminimize();
+}
+
+#[cfg(desktop)]
 fn panic_toggle(app: &tauri::AppHandle) {
     use std::sync::atomic::Ordering::Relaxed;
     use tauri::Emitter;
@@ -1806,20 +1839,21 @@ fn panic_toggle(app: &tauri::AppHandle) {
         // a hidden or minimized window stays out of sight (it opens on the cover if someone restores it)
         if visible && !minimized {
             WAS_FULLSCREEN.store(w.is_fullscreen().unwrap_or(false), Relaxed);
-            let _ = w.set_fullscreen(true);
+            go_fullscreen(&w, true);
         }
     } else {
         let _ = w.emit("panic", json!({ "on": false, "mode": "cover" }));
         if !WAS_FULLSCREEN.swap(false, Relaxed) {
-            let _ = w.set_fullscreen(false);
+            go_fullscreen(&w, false);
         }
         bring_back(&w);
     }
 }
 
+#[cfg(desktop)]
 fn bring_back(w: &tauri::WebviewWindow) {
     let _ = w.show();
-    let _ = w.unminimize();
+    unminimize(w);
     let _ = w.set_focus();
 }
 
@@ -1954,9 +1988,19 @@ const B64S: base64::engine::GeneralPurpose = base64::engine::general_purpose::ST
 // "Another folder…" on the welcome screen: the system's folder picker.
 #[tauri::command(async)]
 fn pick_folder(app: tauri::AppHandle) -> Option<String> {
-    use tauri_plugin_dialog::DialogExt;
-    app.dialog().file().set_title("Where should Lewd Vault keep your library?").blocking_pick_folder()
-        .and_then(|f| f.into_path().ok()).map(|p| p.display().to_string())
+    // iOS has no folder picker for an arbitrary path (and the sandbox container is the vault root):
+    // the welcome screen hides "choose a folder" there (see storage.rs).
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        return app.dialog().file().set_title("Where should Lewd Vault keep your library?").blocking_pick_folder()
+            .and_then(|f| f.into_path().ok()).map(|p| p.display().to_string());
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        None
+    }
 }
 
 // After choosing a new place: start again on it.
@@ -1975,6 +2019,19 @@ fn window_ready(window: tauri::WebviewWindow) {
 // The page's own title bar buttons. Returns whether the window is maximized.
 #[tauri::command]
 fn window_action(window: tauri::WebviewWindow, action: String) -> Res<bool> {
+    // iOS has no window frame to minimize/maximize/full-screen to a monitor, so "full screen" is a
+    // CSS full-bleed inside the webview. The page turns its own classes on from the returned flag, so
+    // this just tracks the on/off state (see ui/player.js and ui/slideshow.js).
+    #[cfg(mobile)]
+    {
+        let _ = window;
+        return match action.as_str() {
+            "fullscreen" => Ok(!MOBILE_FULLSCREEN.fetch_xor(true, std::sync::atomic::Ordering::SeqCst)),
+            "unfullscreen" => { MOBILE_FULLSCREEN.store(false, std::sync::atomic::Ordering::SeqCst); Ok(false) }
+            _ => Ok(false),
+        };
+    }
+    #[cfg(desktop)]
     match action.as_str() {
         "minimize" => window.minimize().map_err(err)?,
         "maximize" => {
@@ -1993,6 +2050,7 @@ fn window_action(window: tauri::WebviewWindow, action: String) -> Res<bool> {
         }
         _ => {}
     }
+    #[cfg(desktop)]
     window.is_maximized().map_err(err)
 }
 
@@ -2068,6 +2126,12 @@ pub fn run() {
             // the page builds every media URL from this one value (vaultUrl in sync-ui.mjs): on the
             // desktop the vault:// origin, on iOS the loopback media server's base (with its token)
             window = window.initialization_script(format!("window.__VAULT_ORIGIN = {};", serde_json::to_string(&vault_origin()).unwrap_or_else(|_| "\"\"".into())));
+            // iOS: the page keys its iOS layout (the bottom tab bar, the Apple Photos chrome) off
+            // html.ios. Done here, before the page's own scripts, so nothing flashes in desktop shape.
+            #[cfg(target_os = "ios")]
+            {
+                window = window.initialization_script("document.documentElement.classList.add('ios');");
+            }
             // Untraceable: the browser engine keeps nothing (private mode), and what it must have on
             // disk goes inside the app's hidden folder instead of %LOCALAPPDATA%
             if crypt::untraceable() {
@@ -2115,6 +2179,15 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    // Copies a fixture vault into a temp dir (recursively; the fixture is small).
+    fn copy_dir(from: &Path, to: &Path) {
+        fs::create_dir_all(to).unwrap();
+        for e in fs::read_dir(from).unwrap().flatten() {
+            let (src, dst) = (e.path(), to.join(e.file_name()));
+            if src.is_dir() { copy_dir(&src, &dst); } else { fs::copy(&src, &dst).unwrap(); }
+        }
+    }
+
     #[test]
     fn csv_round_trip() {
         let rows = vec![header_row(&["a", "b"]), vec!["x, \"y\"".into(), "line\r\nbreak".into()]];
@@ -2160,6 +2233,197 @@ item-000124,000124,000124_261016_v013_Clips.mp4,clip.mp4,Clips,video,1,3,2026-10
         assert_eq!(old.len(), 1);
         assert_eq!(old[0].width, 0);
         assert_eq!(old[0].tags, "");
+    }
+
+    // The acceptance gate for "a vault round-trips between Windows and iOS": a checked-in vault
+    // (tests/fixtures/golden-vault, in the exact on-disk shape the Windows app writes) must read,
+    // then write back byte-identical when nothing is edited. If a rewrite dropped the BOM, changed
+    // CRLF, reordered columns or re-quoted a cell, this is where it shows.
+    #[test]
+    fn golden_vault_round_trips_byte_identical() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden-vault");
+        let read = |name: &str| fs::read(root.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+
+        let index_bytes = read(INDEX_NAME);
+        let views_bytes = read(VIEWS_NAME);
+
+        // (the shape Windows writes: BOM, CRLF, and only the cells that need quoting)
+        assert!(index_bytes.starts_with(&[0xEF, 0xBB, 0xBF]), "index.csv lost its BOM");
+        assert!(views_bytes.starts_with(&[0xEF, 0xBB, 0xBF]), "views.csv lost its BOM");
+        assert!(index_bytes.windows(2).any(|w| w == b"\r\n"), "index.csv lost its CRLF");
+
+        let index_text = String::from_utf8(index_bytes.clone()).unwrap();
+        let views_text = String::from_utf8(views_bytes.clone()).unwrap();
+
+        // everything reads, including a non-ASCII category, a quoted comma and an embedded newline
+        let items = items_from_csv(&index_text);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].name, "Cover, front \"final\".webp");
+        assert_eq!(items[0].category, "Test- Cat");
+        assert_eq!(items[0].tags, "artist:someone blue_hair smile");
+        assert_eq!(items[1].duration, 95.5);
+        assert!(items[1].thumb.contains(':'), "packed-thumbnail thumb value did not survive");
+        assert_eq!(items[1].collection, "Set, A");
+        assert!(items[1].collection_cover);
+        assert_eq!(items[2].category, "日本語");
+        assert_eq!(items[2].name, "line1\nline2.gif");
+
+        let views = views_from_csv(&views_text);
+        assert_eq!(views.len(), 3);
+        assert_eq!(views[0].seconds, 42.6);
+
+        // the writer reproduces the bytes exactly (no re-quoting, no BOM/CRLF drift)
+        assert_eq!(to_csv(&items).into_bytes(), index_bytes, "index.csv did not round-trip");
+        assert_eq!(views_csv(&views).into_bytes(), views_bytes, "views.csv did not round-trip");
+    }
+
+    // A vault made on one platform, opened on the other: the on-disk bytes never change just by
+    // reading. This runs the fixture through the real Vault (which writes index/views on init and
+    // backs up) and asserts the two files are untouched.
+    #[test]
+    fn golden_vault_opens_without_touching_the_files() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden-vault");
+        let dir = std::env::temp_dir().join(format!("lv-golden-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        copy_dir(&src, &dir);
+        let before_index = fs::read(dir.join(INDEX_NAME)).unwrap();
+        let before_views = fs::read(dir.join(VIEWS_NAME)).unwrap();
+        let vault = Vault::new(dir.clone(), false);
+        let _ = vault.load_index().unwrap();
+        let _ = vault.load_views().unwrap();
+        assert_eq!(fs::read(dir.join(INDEX_NAME)).unwrap(), before_index, "index.csv was rewritten by a plain read");
+        assert_eq!(fs::read(dir.join(VIEWS_NAME)).unwrap(), before_views, "views.csv was rewritten by a plain read");
+        // a no-op change still writes the same bytes (the app's own rewrite path)
+        let (items, _) = vault.load_index().unwrap();
+        vault.write_index(&items).unwrap();
+        assert_eq!(fs::read(dir.join(INDEX_NAME)).unwrap(), before_index, "a no-op rewrite changed index.csv");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Two devices on one synced folder: uids come from state.json under a lock, so two callers can
+    // never mint the same number (the lock is the Mutex in Vault, shared here through one instance;
+    // across processes the atomic rename in write_atomic is what keeps the file whole).
+    #[test]
+    fn concurrent_uid_allocation_never_collides() {
+        let dir = std::env::temp_dir().join(format!("lv-uids-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let vault = Arc::new(Vault::new(dir.clone(), false));
+        let seen = Arc::new(Mutex::new(HashSet::new()));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let (v, seen) = (vault.clone(), seen.clone());
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..25 {
+                    let ids = v.reserve_uids(&json!(1)).unwrap();
+                    let one = ids.as_array().unwrap()[0].as_str().unwrap().to_string();
+                    assert!(seen.lock().unwrap().insert(one), "a uid was handed out twice");
+                }
+            }));
+        }
+        for h in handles { h.join().unwrap(); }
+        assert_eq!(seen.lock().unwrap().len(), 200);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Two writers on index.csv: every change goes through change_index, which takes the lock, re-reads
+    // the file and rewrites it whole. Interleaved from many threads, no row may be lost.
+    #[test]
+    fn concurrent_index_writes_do_not_lose_rows() {
+        let dir = std::env::temp_dir().join(format!("lv-conc-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let vault = Arc::new(Vault::new(dir.clone(), false));
+        let mut handles = Vec::new();
+        for t in 0..6 {
+            let v = vault.clone();
+            handles.push(std::thread::spawn(move || {
+                for k in 0..10 {
+                    let id = format!("item-{:06}", t * 100 + k);
+                    v.change_index(|items| {
+                        items.push(Item { id: id.clone(), uid: format!("{:06}", t * 100 + k), kind: "image".into(), ..Default::default() });
+                    }).unwrap();
+                }
+            }));
+        }
+        for h in handles { h.join().unwrap(); }
+        let (items, _) = vault.load_index().unwrap();
+        let ids: HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(items.len(), 60, "a concurrent write dropped a row");
+        assert_eq!(ids.len(), 60, "a concurrent write produced a duplicate row");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // A stale counter (state.json written by another device that has not synced yet) must not hand out
+    // a uid the index already lists: allocation skips past the highest uid it can see.
+    #[test]
+    fn uid_allocation_skips_a_stale_counter() {
+        let dir = std::env::temp_dir().join(format!("lv-stale-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let vault = Vault::new(dir.clone(), false);
+        let items: Vec<Item> = (1..=3).map(|n| Item { id: format!("item-{n:06}"), uid: format!("{n:06}"), kind: "image".into(), ..Default::default() }).collect();
+        vault.write_index(&items).unwrap();
+        // another device's counter, pointing at 000002 (already taken here)
+        fs::write(vault.app_dir("state.json"), "{\"nextUid\":2}").unwrap();
+        let got = vault.reserve_uids(&json!(1)).unwrap();
+        assert_eq!(got.as_array().unwrap()[0].as_str().unwrap(), "000004");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // The untraceable format, pinned against a fixture made by an *independent* implementation
+    // (tools/chacha20.py, checked against the RFC 8439 vector): "LVX1" + 12-byte nonce + ChaCha20
+    // keystream XOR, key = PBKDF2-HMAC-SHA256(password, fixed salt, 310000). If the salt, nonce size,
+    // round count or magic ever drift, a Windows-made encrypted vault stops opening on iOS (and back);
+    // this is the test that catches it. The fixture was encrypted by that other implementation, so
+    // agreeing on the plaintext here proves the two are interoperable, not merely self-consistent.
+    #[test]
+    fn untraceable_vault_made_elsewhere_opens() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden-untraceable");
+        let key = crypt::derive("hunter2");
+        // the password check file (the one a device validates a password against)
+        let check = fs::read(root.join("_app/key.check")).unwrap();
+        assert!(crypt::check_ok(&key, &check), "the password check from another implementation did not verify");
+        assert!(!crypt::check_ok(&crypt::derive("hunter3"), &check));
+
+        let dir = std::env::temp_dir().join(format!("lv-untr-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        copy_dir(&root, &dir);
+
+        // (the key alone drives decryption; untraceable() only changes trashing, and flipping that
+        // global here would race the other tests, so leave it)
+        crypt::set_key(Some(key));
+        let vault = Vault::new(dir.clone(), false);
+        let (items, _) = vault.load_index().unwrap();
+        assert_eq!(items.len(), 3, "the encrypted index did not decrypt to the same rows");
+        assert_eq!(items[2].category, "日本語");
+        let (views, _) = vault.load_views().unwrap();
+        assert_eq!(views.len(), 3);
+        assert_eq!(views[0].seconds, 42.6);
+        assert_eq!(vault.load_settings()["theme"], "berry");
+        // re-writing keeps the same plaintext (the writer re-encrypts with a fresh nonce, so the
+        // bytes differ, but the content must not)
+        vault.write_index(&items).unwrap();
+        let (again, _) = vault.load_index().unwrap();
+        assert_eq!(to_csv(&again), to_csv(&items));
+        crypt::set_key(None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // Phase 1.2: the origin is computed once (vault_origin) and every URL the backend hands the page
+    // is built from it, so the hardcoded Windows form (http://vault.localhost) can never leak into a
+    // media URL on iOS. This pins that: the item list and getThumb both go through vault_url.
+    #[test]
+    fn every_page_url_uses_the_computed_origin() {
+        let csv = "\u{feff}id,uid,file,original_name,category,kind,nsfw,quality,added,width,height,duration,preview_id,thumb,thumbhash,stream_id,thumb_size,collection,collection_cover,tags,source\r\n\
+item-000123,000123,f.webp,f.webp,Cat,image,0,7,2026-10-16T09:00:00Z,,,,,,,,,,,,,\r\n";
+        let item = items_from_csv(csv).into_iter().next().unwrap();
+        let url = for_page(&item)["url"].as_str().unwrap().to_string();
+        assert_eq!(url, vault_url(&item.id));
+        assert!(url.starts_with(&vault_origin()), "{url} is not under the computed origin");
+        // the id is percent-encoded, so decode the path back before comparing
+        let id_in_url = url.rsplit('/').next().unwrap();
+        assert_eq!(percent_decode_str(id_in_url).decode_utf8_lossy(), "item-000123");
+        // the thumb path the page calls resolves under the same origin (the id is percent-encoded)
+        assert!(vault_url("thumbs-abc").starts_with(&format!("{}/", vault_origin())));
+        assert!(vault_url("thumbs-abc").contains("thumbs"));
     }
 
     // The file name format the Drive/web version uses, so a vault stays readable in either place.

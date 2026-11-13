@@ -1,5 +1,8 @@
 # keep text files with LF line endings on every checkout (sync-ui patches the page with LF text)
 * text=auto eol=lf
+# The test vaults are byte-exact specimens: the plain one holds the CRLF the app writes, and the
+# untraceable one is encrypted bytes compared with == to it. No line-ending conversion, ever.
+src-tauri/tests/fixtures/** -text
 *.png binary
 *.webp binary
 *.ogg binary

@@ -305,9 +305,14 @@ patch(`</body>`, `<script src="/desktop.js"></script>
 <script src="/share.js"></script>
 <script src="/extras.js"></script>
 <script src="/streamline.js"></script>
+<script src="/ios.js"></script>
 </body>`);
 patch(`<head>`, `<head>\n<title>Lewd Vault</title>
 <meta name="referrer" content="no-referrer">`); // (no page address goes out with requests: RedGifs refuses a foreign one)
+// fill the whole screen on iOS so the Liquid Glass bars sit under the notch and home indicator
+// (desktop ignores the safe-area insets, so this is harmless there)
+patch(`<meta name="viewport" content="width=device-width, initial-scale=1">`,
+      `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">`);
 
 // ---------- write src/ ----------
 const copy = (from, to) => { fs.mkdirSync(new URL('.', to), { recursive: true }); fs.copyFileSync(from, to); };
@@ -333,6 +338,7 @@ copy(new URL('ui/coach.js', here), new URL('coach.js', out));
 copy(new URL('ui/share.js', here), new URL('share.js', out));
 copy(new URL('ui/extras.js', here), new URL('extras.js', out));
 copy(new URL('ui/streamline.js', here), new URL('streamline.js', out));
+copy(new URL('ui/ios.js', here), new URL('ios.js', out));
 copy(new URL('src-tauri/icons/128x128@2x.png', here), new URL('app-icon.png', out)); // the brand mark in the sidebar
 for (const f of fs.readdirSync(new URL('art/decor/', here))) copy(new URL(`art/decor/${f}`, here), new URL(`decor/${f}`, out)); // see ui/desktop.js
 // her moans (MagicalMysticVA on Freesound, CC BY 4.0): Appreciate's like-*.ogg, the coach's coach-*.ogg

@@ -289,7 +289,10 @@ pub fn update_progress() -> Value {
     update_state().lock().unwrap().clone()
 }
 
-// swaps the downloaded app in once this one has closed, then starts it again
+// swaps the downloaded app in once this one has closed, then starts it again. Windows only: the
+// update files are a Windows .msi/.exe, and the restart script is `cmd`. Elsewhere (iOS in
+// particular) there is nothing to swap in, so this must not write the script or call app.exit(0).
+#[cfg(windows)]
 #[tauri::command]
 pub fn install_update(app: tauri::AppHandle) -> Res<()> {
     let exe = std::env::current_exe().map_err(err)?;
@@ -312,4 +315,15 @@ pub fn install_update(app: tauri::AppHandle) -> Res<()> {
     }
     app.exit(0);
     Ok(())
+}
+
+// iOS and any other platform: there is no self-update (the release files are Windows builds, and an
+// app can't rewrite its own signed bundle), so say so instead of quitting. The page reaches this only
+// through Settings → Updates, which iOS never offers (exe_dir_writable() is false there, so
+// update_check never reports a newer version).
+#[cfg(not(windows))]
+#[tauri::command]
+pub fn install_update(app: tauri::AppHandle) -> Res<()> {
+    let _ = app;
+    Err("Updates are installed by sideloading a new IPA, not from inside the app.".into())
 }

@@ -1,0 +1,91 @@
+# Builds the iOS app on a macOS runner and attaches an IPA.
+#
+# The iOS build cannot run on Windows or Linux: it needs Xcode, XcodeGen and CocoaPods. The artifact
+# is unsigned by default (`--no-sign`), then signed on the device by whatever sideloading tool you
+# use (AltStore/SideStore, TrollStore, or your own certificate) — see docs/IOS-PORT.md section 6.
+#
+# Trigger it by hand (Actions -> Build iOS -> Run workflow) or on a pull request that touches the
+# app. Set the Apple API key secrets (below) to produce a *signed* IPA instead.
+name: Build iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'src-tauri/**'
+      - 'ui/**'
+      - 'tools/**'
+      - 'sync-ui.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'art/app-icon.png'
+      - '.github/workflows/ios.yml'
+
+# The workflow only reads the repo (nothing is pushed), so the default token needs no write scopes.
+permissions:
+  contents: read
+
+concurrency:
+  # a new build for the same ref replaces one still running
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    # macos-26 is macOS 26 Tahoe with Xcode 26.6 and the iOS 26 SDK. The SDK has to be this new
+    # because bundle.iOS.minimumSystemVersion is 26.0 (an older Xcode's SDK cannot target 26).
+    # `macos-latest` currently points at macos-26, so it works too; this is explicit.
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      # npm test runs sync-ui.mjs (which writes the gitignored src/ the build needs) and checks the
+      # page hangs together.
+      - run: npm test
+      # Explicit, so the build below does not depend on a side effect of the test: writes src/.
+      - run: npm run sync
+      # XcodeGen turns project.yml into the Xcode project; CocoaPods resolves the Tauri pods.
+      - run: brew install xcodegen
+      # Creates src-tauri/gen/apple (the Xcode project) once; a no-op when it is already there.
+      - run: npx tauri ios init --ci
+      # The real icon into the asset catalog. It has to run *after* ios init, because `tauri icon`
+      # writes into gen/apple/Assets.xcassets/AppIcon.appiconset when that exists (and falls back to
+      # src-tauri/icons/ios otherwise), so running it first would leave the template's placeholder
+      # icons in the build.
+      - run: npx tauri icon art/app-icon.png
+      - name: Build the IPA
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          # A signed IPA when the three Apple secrets are set, otherwise an unsigned one.
+          # (`tauri ios build` wants APPLE_API_KEY_PATH to point at a file, so the .p8 is kept in a
+          # secret as text and written here. With --no-sign none of it is needed.)
+          if [ -n "$APPLE_API_KEY" ] && [ -n "$APPLE_API_ISSUER" ] && [ -n "$APPLE_API_KEY_P8" ]; then
+            umask 077
+            key="$RUNNER_TEMP/AuthKey.p8"
+            printf '%s' "$APPLE_API_KEY_P8" > "$key"
+            export APPLE_API_KEY_PATH="$key"
+            npx tauri ios build --export-method debugging
+          else
+            npx tauri ios build --no-sign
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LewdVault-ipa
+          path: src-tauri/gen/apple/build/**/*.ipa
+          if-no-files-found: error

@@ -35,9 +35,11 @@ await sharp(Buffer.from(svg)).png().toFile(out);
 console.log('make-icon: the heart -> art/app-icon.png');
 
 execSync('npx tauri icon art/app-icon.png', { cwd: fileURLToPath(here), stdio: 'ignore' });
-for (const d of ['android', 'ios']) fs.rmSync(new URL(`src-tauri/icons/${d}`, here), { recursive: true, force: true });
+// Android isn't a target: drop its icons. The iOS catalog is kept (the iOS build copies it into
+// Assets.xcassets), see docs/IOS-PORT.md.
+fs.rmSync(new URL('src-tauri/icons/android', here), { recursive: true, force: true });
 // Cargo doesn't watch the icon files: touching these makes the next build embed the new icon
-// (build.rs puts it in the .exe; main.rs's generate_context! uses it for the window).
+// (build.rs puts it in the .exe; lib.rs's generate_context! uses it for the window).
 const now = new Date();
-for (const f of ['src-tauri/build.rs', 'src-tauri/src/main.rs']) fs.utimesSync(new URL(f, here), now, now);
+for (const f of ['src-tauri/build.rs', 'src-tauri/src/lib.rs']) fs.utimesSync(new URL(f, here), now, now);
 console.log('make-icon: src-tauri/icons updated (run npm run dist to build with it)');

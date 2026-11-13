@@ -33,7 +33,7 @@
       "icons/128x128.png",
       "icons/icon.ico"
     ],
-    "ios": {
+    "iOS": {
       "minimumSystemVersion": "26.0"
     }
   }

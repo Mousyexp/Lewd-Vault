@@ -11,7 +11,8 @@ Phase 0 (the throwaway spike: crate restructuring, `tauri ios init`, one video o
 comes before this. Phase 1 assumes that spike proved media playback works.
 
 The other Phase 1 goal is the **look**: adopt Liquid Glass so the iOS app reads as native rather
-than as a Windows app in a phone frame, while keeping the nine themes the desktop already has.
+than as a Windows app in a phone frame, while keeping the eleven themes the desktop already has
+(nine named in `THEME_LIST`, plus `rose` — the default — and `custom`).
 
 Read `docs/IOS-PORT.md` first for the research behind these decisions.
 
@@ -19,7 +20,7 @@ Read `docs/IOS-PORT.md` first for the research behind these decisions.
 
 ## What "compatible" concretely means
 
-The format is defined in `src-tauri/src/main.rs` (the header comment) and produced by
+The format is defined in `src-tauri/src/lib.rs` (the header comment) and produced by
 `file_name`, `to_csv`, `views_csv`, `csv_text`, `write_atomic`, `app_dir`, and `crypt.rs`. Phase 1
 must reproduce all of it byte-for-byte. The contract:
 
@@ -120,6 +121,7 @@ Add these as an iOS-side test target and, where possible, a shared fixture set:
 | Same item added on both, then folder copied | Ids stay stable; no duplicate rows; no column reorder. |
 | Untraceable vault made on Windows | Opens on iOS with the same password. |
 | Untraceable vault made on iOS | Opens on Windows with the same password. |
+| Untraceable vault made by an independent implementation | Opens with the same password (the fixture test). |
 | Vault with an older, shorter CSV header | Loads on iOS (by-name columns). |
 | Vault with a packed-thumbnail `thumb` value | Thumbnails resolve on iOS. |
 | `index (1).csv` / `index-DESKTOP-4F2.csv` conflict copies | Folded the same way as Windows. |
@@ -216,9 +218,12 @@ uses), so they refract and adapt like the system does. Caveats, all verified in 
 rely on by default:
 
 - `backdrop-filter` is supported on iOS Safari/WebKit (MDN BCD: Safari 18 unprefixed; the
-  `-webkit-` prefix goes back to iOS 9). **The current CSS has 27 `backdrop-filter` uses and zero
-  `-webkit-backdrop-filter`** — add the prefixed form everywhere, because the prefix is the safe
-  bet on older iOS and is harmless on new.
+  `-webkit-` prefix goes back to iOS 9). **The pre-Phase-1 `ui/desktop.css` had 27 `backdrop-filter`
+  uses and zero `-webkit-backdrop-filter`; the prefix has since been added next to every use there
+  (now 31 of each), and `tools/check.mjs` fails the build if a new unprefixed use appears — it scans
+  both `ui/desktop.css` and the page's own inline `<style>` in `ui/Index.html` (which had one
+  unpaired `.show-bar` use that the desktop-only scan used to miss)** — the prefix is the safe bet
+  on older iOS and is harmless on new.
 - The app already uses the pattern: the sidebar is
   `background: color-mix(in srgb, var(--panel) 62%, transparent); backdrop-filter: blur(18px) saturate(1.3);`.
   Liquid Glass is a *refinement* of exactly this: more blur, a saturation/contrast lift, a subtle
@@ -230,7 +235,7 @@ rely on by default:
 ### The "glass" design tokens
 
 Add a small set of tokens (in `ui/desktop.css`, alongside the existing `--bg/--panel/--line/--text/
---dim/--accent` tokens) so all nine themes keep working. Sketch:
+--dim/--accent` tokens) so all eleven themes (nine named + `rose` + `custom`) keep working. Sketch:
 
 ```css
 :root {
@@ -313,9 +318,9 @@ Each item names the files it touches and a done-check.
 
 ### 1.0 — Crate restructure and iOS target (from Phase 0, hardened)
 
-- `src-tauri/Cargo.toml`: add `[lib] name = "app_lib" crate-type = ["staticlib","cdylib","rlib"]`.
+- `src-tauri/Cargo.toml`: add `[lib] name = "image_vault_lib" crate-type = ["staticlib","cdylib","rlib"]`.
 - `src-tauri/src/lib.rs`: `#[cfg_attr(mobile, tauri::mobile_entry_point)] pub fn run()`.
-- `src-tauri/src/main.rs`: becomes `fn main() { app_lib::run() }`.
+- `src-tauri/src/main.rs`: becomes `fn main() { image_vault_lib::run() }`.
 - `src-tauri/tauri.conf.json`: add `bundle.iOS` (minimum version, team placeholder, Info.plist path).
 - **Done:** `cargo check` passes on the host; `tauri ios build` produces an app bundle (signed or
   `--no-sign`) in CI.
@@ -330,18 +335,19 @@ Each item names the files it touches and a done-check.
 ### 1.2 — One computed origin (kills the hardcoded Windows URL)
 
 - `sync-ui.mjs`: replace the hardcoded `http://vault.localhost/` in `vaultUrl` with a value derived
-  from the platform (the Rust side can hand it over via the existing `api(...)` bridge, or use
-  `window.__TAURI__`).
-- `src-tauri/src/main.rs`: `for_page` and `getThumb` must emit the same base.
+  from the platform. **Done** — the backend hands it over as `window.__VAULT_ORIGIN` (an
+  initialization script), not via `api(...)` or `window.__TAURI__`.
+- `src-tauri/src/lib.rs`: `for_page` and `getThumb` must emit the same base (`vault_url()`).
 - **Done:** on iOS, images load; on Windows, nothing changes.
 
 ### 1.3 — Media over loopback HTTP
 
-- Add a media server (reuse the `fastlane.rs` pattern: `127.0.0.1:0`, random `x-key`, `Origin`
-  check, `206`/`Content-Range`, 4 MB `RANGE_PIECE`). Keep `vault://` for the page itself.
-- Point `vaultUrl` at the loopback base on iOS.
+- Add a media server (reuse the `fastlane.rs` pattern: `127.0.0.1:0`, random token, `206`/`Content-Range`,
+  4 MB `RANGE_PIECE`). Keep `vault://` for the page itself. **Done** (`media.rs`); the guard is the
+  per-launch token in the first path segment, not an `Origin` check (see `docs/IOS-PORT.md` §3.3).
+- Point `vaultUrl` at the loopback base on iOS. **Done** (via `window.__VAULT_ORIGIN`).
 - Add the ATS exception in `Info.plist` (`NSAllowsLocalNetworking`, and/or an `127.0.0.1`
-  `NSExceptionDomains` entry).
+  `NSExceptionDomains` entry). **Done** (`src-tauri/Info.plist`).
 - **Done:** video seeks, audio plays, thumbnails and grid images load on a real device.
 
 ### 1.4 — Vault format: read/write parity
@@ -350,6 +356,11 @@ Each item names the files it touches and a done-check.
   `safe_name`, id minting (`URL_SAFE_NO_PAD`), `state.json` allocation, and the `crypt.rs` format on
   iOS (it is already pure Rust — mostly a compile-and-test job).
 - Add the **golden-vault fixture** and the round-trip byte-identity test.
+- Add a **golden untraceable vault** and a test that opens it. It is generated by
+  `tools/chacha20.py` — a second implementation of the encryption written from the spec, not shared
+  with `crypt.rs`, and checked against the RFC 8439 keystream vector — so the test proves the two
+  implementations interoperate rather than only agreeing with themselves. `npm test` re-checks the
+  fixture through that same script.
 - Add the compatibility matrix tests from above.
 - **Done:** every row of the compatibility matrix passes.
 
@@ -363,7 +374,8 @@ Each item names the files it touches and a done-check.
 ### 1.6 — Liquid Glass, stage 1 (the material)
 
 - Add the glass tokens and the `.glass` class to `ui/desktop.css`; add `-webkit-backdrop-filter`
-  next to all 27 `backdrop-filter` uses.
+  next to all 31 `backdrop-filter` uses in `ui/desktop.css` (and the one in `ui/Index.html`'s own
+  `<style>`).
 - Apply to sidebar/nav, bars, search, sheets/popovers/toasts/menus, player controls, FABs.
 - Add the `@supports (-apple-visual-effect: …)` native enhancement behind an `html.ios` class.
 - Add the `prefers-reduced-transparency` / `prefers-reduced-motion` fallbacks.
@@ -380,6 +392,13 @@ Each item names the files it touches and a done-check.
 
 - `tauri icon` to generate `Assets.xcassets`; wire it in `tauri.conf.json`.
 - **Done:** the app installs with a real icon (layered Liquid Glass icon deferred).
+
+### 1.8b — The CI job that builds the IPA
+
+- `.github/workflows/ios.yml` on `macos-latest`: `tauri ios init --ci`, then `tauri icon` (so the
+  real icon lands in the catalog), then `tauri ios build` (`--no-sign` unless Apple API key secrets
+  are set) and upload the IPA. Manual dispatch plus a path-filtered pull request.
+- **Done:** a green run produces a `LewdVault-ipa` artifact.
 
 ### 1.9 — Verify
 
@@ -413,8 +432,8 @@ Each item names the files it touches and a done-check.
 | Two devices mint the same uid | Locked `state.json` allocation with retry (1.5). |
 | `crypt.rs` diverges (salt/nonce/rounds) and the encrypted vaults stop matching | Keep the constants literal; test a Windows-made untraceable vault on iOS (1.4). |
 | Local timezone differences change `file_name` dates | Test with a vault made in a different timezone; the date comes from the stored `added` timestamp. |
-| Loopback media server reachable by other apps | Bind `127.0.0.1` only, per-launch `x-key`, `Origin` check (same as `fastlane.rs`). |
-| CSP header over WebKit's 16 KiB limit | Measure at 1.0; fall back to an explicit CSP with hash injection disabled. |
+| Loopback media server reachable by other apps | Bind `127.0.0.1` only, per-launch token in the first path segment (the `fastlane.rs` pattern; not an `Origin` check — see `docs/IOS-PORT.md` §3.3). |
+| CSP header over WebKit's 16 KiB limit | Measured: with `csp: null` no CSP header is emitted at all, so the limit cannot be hit; re-measure only if a CSP is added later. |
 
 ---
 

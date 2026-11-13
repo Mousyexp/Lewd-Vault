@@ -16,7 +16,12 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, OnceLock};
 
 static LANE: OnceLock<(u16, String)> = OnceLock::new();
-const ORIGINS: [&str; 2] = ["http://tauri.localhost", "https://tauri.localhost"];
+// The page's own origin, which browsers (correctly) demand the reply name before the page may read
+// it. Windows serves the page from http(s)://tauri.localhost (crates/tauri/src/protocol/mod.rs); on
+// iOS the page is a custom-scheme origin (scheme://localhost -> tauri://localhost). "null" covers an
+// opaque origin, which is what WebKit falls back to if the scheme is not treated as a scheme handler.
+// None of this is the guard: the per-launch x-key below is (a wrong key is a 403, origin or not).
+const ORIGINS: [&str; 4] = ["http://tauri.localhost", "https://tauri.localhost", "tauri://localhost", "null"];
 const MAX_PIECE: u64 = 256 * 1024 * 1024;
 
 pub fn start(vault: Arc<Vault>) {
