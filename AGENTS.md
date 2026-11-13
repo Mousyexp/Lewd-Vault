@@ -80,6 +80,31 @@ Verified claims that matter, and two fixes made while checking:
 - **`requestFullscreen`** appears once (`src/index.html:576`) but `ui/slideshow.js` reassigns
   `showFullscreen` at runtime to the backend `window_action` version, so the element call is dead
   code (and a no-op on iPhone).
+
+### UI preview verification (13 Nov 2026)
+
+The frontend is static (`frontendDist` = `../src`), so it previews in any browser; outside Tauri it
+runs its own demo mode. Serve `src/` and add `html.ios` to see the iOS layer (the real app does this
+via `initialization_script`). Verified at 393×852 (iPhone) and 1024×1366 (iPad):
+
+- **Fixed: the tab bar was a `<nav>`, and the desktop sidebar's rules ate it.** `ui/ios.js` built the
+  bar as `<nav class="photos-tabbar">`, but on iOS `<html>` carries **both** `ios` (added by
+  `lib.rs`) and `desktop` (`ui/desktop.js:17` adds it unconditionally). The sidebar is styled with
+  ~90 `html.desktop nav …` rules (specificity 0,1,1) which outrank `.photos-tabbar` (0,1,0), so the
+  bar inherited `flex-direction: column` and `html.desktop nav button { font-size: 0 }`. Measured
+  result: six **389×6 px** buttons stacked vertically, bottom edge at 891 px on an 852 px screen —
+  i.e. off-screen, unusable. Now a `<div role="navigation">`, so nothing matches: a row of
+  **63×49 px** buttons at the bottom, all ≥44 px (iOS HIG), no horizontal overflow. iPad width keeps
+  the sidebar (as Apple Photos does), which the `<div>` also fixes (`display:grid` before).
+- **Same fix, second half: the icons.** Those `html.desktop nav [data-tab=…] { --icon: … }` rules
+  were *also* the tab bar's icon source. A `<div>` does not match them, so `ui/ios.js` now copies the
+  sidebar button's resolved `--icon` onto each tab button explicitly.
+- **Regression guard** in `tools/check.mjs`: fails if the bar is a `<nav>` again, if it is not a
+  `<div class="photos-tabbar">`, or if the `--icon` copy is dropped.
+- Verified working after the fix: all six tabs switch and keep tab bar + sidebar highlight in step;
+  the 34 px collapsing `Library` title, the `.scroll-edge` gradient, and the floating `.viewer-chrome`
+  all render; zero undersized tap targets on the phone layout.
+
 - **Not worth doing (skipped):** capability-gating `VideoEncoder`/`AudioEncoder`/`setSinkId`. The
   target is iOS 26, which has all three natively; gating would add UI risk for no reachable benefit.
 

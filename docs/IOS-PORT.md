@@ -624,3 +624,32 @@ Each phase should end with a runnable build on a device or the simulator before 
 6. **Glass scope:** how far to push it — surfaces only (bars, sheets, controls), or also the layout
    (bottom tab bar, scroll edge effect, press-morph)? (Recommend both; they are what makes it read
    as native.)
+
+## 12. UI preview verification (13 Nov 2026)
+
+The frontend is plain static files (`frontendDist` = `../src`), so it previews in any browser; served
+outside Tauri it runs its own demo mode, and adding `html.ios` to `<html>` turns on the iOS layer
+(the real app does this from `lib.rs` via `initialization_script`). Checked at 393×852 (iPhone) and
+1024×1366 (iPad).
+
+**Bug found and fixed: the bottom tab bar was laid out as the desktop sidebar.** `ui/ios.js` built the
+bar as `<nav class="photos-tabbar">`. On iOS `<html>` ends up with **both** `ios` (added by `lib.rs`)
+and `desktop` (`ui/desktop.js:17` adds `desktop` unconditionally, and nothing removes it). The
+sidebar's ~90 `html.desktop nav …` rules (specificity 0,1,1) then match the bar and beat
+`.photos-tabbar` (0,1,0), so it inherited the sidebar's `flex-direction: column` and
+`html.desktop nav button { font-size: 0 }`. Measured before the fix: six **389×6 px** buttons in a
+vertical column, bottom edge at 891 px on an 852 px screen — off-screen and unusable. On iPad width
+it also wrongly rendered as `display: grid`.
+
+Fixed by building the bar as `<div role="navigation" aria-label="Sections">` so no sidebar rule
+matches. After: a horizontal row of **63×49 px** buttons at the bottom, every one ≥44 px (iOS HIG),
+no horizontal overflow, and iPad width keeps the sidebar (as Apple Photos does).
+
+That same set of `html.desktop nav [data-tab=…] { --icon: … }` rules was also the bar's **icon**
+source, which a `<div>` no longer matches — so `ui/ios.js` now copies each sidebar button's resolved
+`--icon` onto its tab button. Without that the bar renders with blank icons.
+
+`tools/check.mjs` guards all three points (bar is not a `<nav>`; it is a `<div class="photos-tabbar">`;
+the `--icon` copy is present). Verified working after the fix: all six tabs switch and keep the tab
+bar and sidebar highlight in step; the 34 px collapsing `Library` title (→ 20 px on scroll), the
+`.scroll-edge` gradient, and the floating `.viewer-chrome` all render.

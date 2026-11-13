@@ -167,6 +167,15 @@ step('the iOS port pieces the platform turns on are in place', () => {
   const lib = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'lib.rs'), 'utf8');
   if (!/classList\.add\((['"])ios\1\)/.test(lib)) throw new Error("nothing adds the html.ios class, so ui/ios.js never runs");
   if (!page.includes('src="/ios.js"')) throw new Error('the page does not load /ios.js');
+  // The tab bar must NOT be a <nav>: on iOS <html> has both `ios` and `desktop` (desktop.js adds
+  // `desktop` unconditionally), and the desktop sidebar's 90 `html.desktop nav …` rules then capture
+  // it — column layout, font-size 0 — collapsing it to a 6px strip off the bottom of the screen.
+  const iosjs = fs.readFileSync(path.join(root, 'ui', 'ios.js'), 'utf8');
+  if (/make\(\s*['"]nav['"]\s*,\s*['"]photos-tabbar['"]/.test(iosjs)) throw new Error("ui/ios.js builds the tab bar as a <nav>, which the html.desktop nav rules clobber on iOS");
+  if (!/make\(\s*['"]div['"]\s*,\s*['"]photos-tabbar['"]/.test(iosjs)) throw new Error('ui/ios.js no longer builds the tab bar as a <div class="photos-tabbar">');
+  // ...and because a <div> does not match `html.desktop nav [data-tab=…]`, the icon has to be copied
+  // onto each tab button explicitly, or the bar renders with blank icons.
+  if (!/setProperty\(\s*['"]--icon['"]/.test(iosjs)) throw new Error('ui/ios.js no longer copies the sidebar icon onto the tab buttons (blank tab icons)');
   // The iOS app launches through `main.mm`'s `ffi::start_app()`: `mobile_entry_point` turns `run()`
   // into an exported `start_app` symbol (a #[no_mangle] extern "C"). Rename `run` and the build still
   // succeeds, then the app dies on launch with a missing symbol — so pin the attribute here.

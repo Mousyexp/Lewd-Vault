@@ -13,7 +13,13 @@
 
   // ---------- the bottom tab bar (mirrors the sidebar) ----------
   const nav = document.querySelector('header nav');
-  const tabbar = make('nav', 'photos-tabbar');
+  // A <div>, not a <nav>: the desktop layer's sidebar rules are written as `html.desktop nav …`
+  // (90 of them), and on iOS <html> carries both `ios` and `desktop`. A <nav> here would be caught
+  // by those rules — column layout, zero font-size — and collapse to a 6px-tall strip off-screen.
+  // role="navigation" keeps the semantics without the selector collision.
+  const tabbar = make('div', 'photos-tabbar');
+  tabbar.setAttribute('role', 'navigation');
+  tabbar.setAttribute('aria-label', 'Sections');
   const tabs = nav ? [...nav.querySelectorAll('button')] : [];
   for (const b of tabs) {
     const t = make('button', b.classList.contains('on') ? 'on' : '');
@@ -21,6 +27,10 @@
     t.dataset.tab = b.dataset.tab;
     t.textContent = (b.querySelector('.nt-title') || b).textContent.trim();
     if (b.dataset.count) t.dataset.count = b.dataset.count;
+    // the icon: the sidebar gets it from `html.desktop nav [data-tab=…]` in CSS, which a <div> does
+    // not match, so mirror the resolved value onto the button (its ::before masks by var(--icon))
+    const icon = getComputedStyle(b).getPropertyValue('--icon').trim();
+    if (icon) t.style.setProperty('--icon', icon);
     t.onclick = () => b.click(); // the shared page does the switching; this only mirrors it
     tabbar.append(t);
   }
