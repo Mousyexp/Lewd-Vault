@@ -14,7 +14,7 @@ The other Phase 1 goal is the **look**: adopt Liquid Glass so the iOS app reads 
 than as a Windows app in a phone frame, while keeping the eleven themes the desktop already has
 (nine named in `THEME_LIST`, plus `rose` — the default — and `custom`).
 
-Read `docs/IOS-PORT.md` first for the research behind these decisions.
+Read `docs/PORT.md` first for the research behind these decisions.
 
 ---
 
@@ -344,7 +344,7 @@ Each item names the files it touches and a done-check.
 
 - Add a media server (reuse the `fastlane.rs` pattern: `127.0.0.1:0`, random token, `206`/`Content-Range`,
   4 MB `RANGE_PIECE`). Keep `vault://` for the page itself. **Done** (`media.rs`); the guard is the
-  per-launch token in the first path segment, not an `Origin` check (see `docs/IOS-PORT.md` §3.3).
+  per-launch token in the first path segment, not an `Origin` check (see `docs/PORT.md` §3.3).
 - Point `vaultUrl` at the loopback base on iOS. **Done** (via `window.__VAULT_ORIGIN`).
 - Add the ATS exception in `Info.plist` (`NSAllowsLocalNetworking`, and/or an `127.0.0.1`
   `NSExceptionDomains` entry). **Done** (`src-tauri/Info.plist`).
@@ -432,7 +432,7 @@ Each item names the files it touches and a done-check.
 | Two devices mint the same uid | Locked `state.json` allocation with retry (1.5). |
 | `crypt.rs` diverges (salt/nonce/rounds) and the encrypted vaults stop matching | Keep the constants literal; test a Windows-made untraceable vault on iOS (1.4). |
 | Local timezone differences change `file_name` dates | Test with a vault made in a different timezone; the date comes from the stored `added` timestamp. |
-| Loopback media server reachable by other apps | Bind `127.0.0.1` only, per-launch token in the first path segment (the `fastlane.rs` pattern; not an `Origin` check — see `docs/IOS-PORT.md` §3.3). |
+| Loopback media server reachable by other apps | Bind `127.0.0.1` only, per-launch token in the first path segment (the `fastlane.rs` pattern; not an `Origin` check — see `docs/PORT.md` §3.3). |
 | CSP header over WebKit's 16 KiB limit | Measured: with `csp: null` no CSP header is emitted at all, so the limit cannot be hit; re-measure only if a CSP is added later. |
 
 ---

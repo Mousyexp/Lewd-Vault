@@ -4,7 +4,7 @@
 // mirrors the sidebar's sections into a translucent bottom tab bar, adds the large collapsing title
 // over the Library grid, floats the detail viewer's chrome over the media and hides it on tap, and
 // keeps the tab bar in step with whichever section is shown. Liquid Glass itself is CSS
-// (ui/desktop.css); this file only supplies the structure and the small behaviours.
+// (mobile/ui/ios.css); this file only supplies the structure and the small behaviours.
 (() => {
   'use strict';
   if (!document.documentElement.classList.contains('ios')) return;

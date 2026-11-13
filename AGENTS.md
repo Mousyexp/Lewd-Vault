@@ -7,14 +7,17 @@ Repository-specific knowledge for future sessions. Keep this short and factual.
 Lewd Vault (formerly "Image Vault"): a Windows-only Tauri 2 desktop app for collecting, tagging and
 viewing NSFW media, shipped as a portable `~6 MB` `Lewd Vault.exe` (or an MSI). The frontend is a
 shared page (`ui/Index.html` + `ui/*.js` + `ui/desktop.css`) that is also the Google Apps Script web
-version; `sync-ui.mjs` patches it into `src/`, which Tauri serves.
+version; `sync-ui.mjs` patches it into `src/`, which Tauri serves. iOS is a second target of the same
+crate; its only iOS-specific code is the `mobile/` layer (see `mobile/README.md`).
 
 ## Build
 
 - `npm install`, then `npm run dist` (needs Rust + VS C++ Build Tools + Node).
 - `npm run sync` regenerates `src/` from `ui/`. Never edit `src/` by hand.
 - Every patch in `sync-ui.mjs` must match exactly once, or the build stops.
-- Edit the shared page in `ui/Index.html`; edit desktop-only additions in `ui/*.js`.
+- Edit the shared page in `ui/Index.html`; edit desktop-only additions in `ui/*.js`; edit the iOS layer
+  in `mobile/ui/` (`ios.js`, `ios.css`). `sync-ui.mjs` builds one stylesheet, `src/mobile.css`
+  (`ui/desktop.css` + `mobile/ui/ios.css` appended after it), so the iOS skin always wins on iOS.
 - Tests: `npm test` runs `tools/check.mjs`; `cargo test` covers the Rust pieces (`src-tauri`).
 - Build output (`src/`, `src-tauri/target/`, `src-tauri/gen/`, `dist/`) is git-ignored.
 
@@ -42,13 +45,16 @@ version; `sync-ui.mjs` patches it into `src/`, which Tauri serves.
 
 ## iOS port research
 
-See `docs/IOS-PORT.md` (research) and `docs/IOS-PHASE-1.md` (detailed Phase 1 plan). Key
-conclusions: feasible as a sideloaded IPA; serve media over a loopback HTTP server (custom-scheme
-`<video>`/`<audio>` is fragile on iOS — WebKit bugs 146351 and 324711); compute the origin instead
-of hardcoding `http://vault.localhost/`; the crate must be restructured for mobile; iOS builds need
-macOS + Xcode.
+The iOS port lives in `mobile/` (see `mobile/README.md` for the map). Its research docs are
+`mobile/docs/PORT.md` (research) and `mobile/docs/PHASE-1.md` (detailed Phase 1 plan). The iOS
+front-end layer is `mobile/ui/ios.js` + `mobile/ui/ios.css` (the latter folded into the built
+`src/mobile.css` after `ui/desktop.css`); everything else is shared with Windows and branched in
+place. Key conclusions: feasible as a sideloaded IPA; serve media over a loopback HTTP server
+(custom-scheme `<video>`/`<audio>` is fragile on iOS — WebKit bugs 146351 and 324711); compute the
+origin instead of hardcoding `http://vault.localhost/`; the crate must be restructured for mobile;
+iOS builds need macOS + Xcode.
 
-### Audit of `docs/IOS-PORT.md` (13 Nov 2026, against the code)
+### Audit of `mobile/docs/PORT.md` (13 Nov 2026, against the code)
 
 Verified claims that matter, and two fixes made while checking:
 
@@ -87,7 +93,7 @@ The frontend is static (`frontendDist` = `../src`), so it previews in any browse
 runs its own demo mode. Serve `src/` and add `html.ios` to see the iOS layer (the real app does this
 via `initialization_script`). Verified at 393×852 (iPhone) and 1024×1366 (iPad):
 
-- **Fixed: the tab bar was a `<nav>`, and the desktop sidebar's rules ate it.** `ui/ios.js` built the
+- **Fixed: the tab bar was a `<nav>`, and the desktop sidebar's rules ate it.** `mobile/ui/ios.js` built the
   bar as `<nav class="photos-tabbar">`, but on iOS `<html>` carries **both** `ios` (added by
   `lib.rs`) and `desktop` (`ui/desktop.js:17` adds it unconditionally). The sidebar is styled with
   ~90 `html.desktop nav …` rules (specificity 0,1,1) which outrank `.photos-tabbar` (0,1,0), so the
@@ -97,7 +103,7 @@ via `initialization_script`). Verified at 393×852 (iPhone) and 1024×1366 (iPad
   **63×49 px** buttons at the bottom, all ≥44 px (iOS HIG), no horizontal overflow. iPad width keeps
   the sidebar (as Apple Photos does), which the `<div>` also fixes (`display:grid` before).
 - **Same fix, second half: the icons.** Those `html.desktop nav [data-tab=…] { --icon: … }` rules
-  were *also* the tab bar's icon source. A `<div>` does not match them, so `ui/ios.js` now copies the
+  were *also* the tab bar's icon source. A `<div>` does not match them, so `mobile/ui/ios.js` now copies the
   sidebar button's resolved `--icon` onto each tab button explicitly.
 - **Regression guard** in `tools/check.mjs`: fails if the bar is a `<nav>` again, if it is not a
   `<div class="photos-tabbar">`, or if the `--icon` copy is dropped.
@@ -166,7 +172,7 @@ Two user priorities outrank the rest:
 - **Vault format compatibility.** The iOS app must read/write the *same* vault folder as Windows
   (same `index.csv`/`views.csv` with BOM + CRLF, `_app/` layout, `file_name` naming, base64url ids,
   `LVX1` ChaCha20+PBKDF2 encryption with the fixed salt, `pack-*.bin`). A no-op round-trip must be
-  byte-identical. The full contract and a compatibility test matrix are in `docs/IOS-PHASE-1.md`.
+  byte-identical. The full contract and a compatibility test matrix are in `mobile/docs/PHASE-1.md`.
 - **Liquid Glass.** No free adoption in a webview. WebKit exposes the real system material as
   `-apple-visual-effect: -apple-system-glass-material` (and `-clear`/`-subdued`/`-media-controls`),
   gated on `HAVE_MATERIAL_HOSTING` which `wtf/PlatformHave.h` defines for `PLATFORM(IOS)`; also

@@ -2,7 +2,7 @@
 
 This is the research behind an iOS port. It answers what is possible, what breaks, and what a
 build-and-sign pipeline looks like. It does not contain code changes yet. It is written to be read
-next to `docs/GUIDE.md` (what the app does today) and `docs/PLAN.md` (how earlier rounds were run).
+next to `../../docs/GUIDE.md` (what the app does today) and `../../docs/PLAN.md` (how earlier rounds were run).
 
 The goal, as asked: a **sideloaded IPA**, not an App Store release. Build it, sign it, install it
 on a device the user controls (AltStore / SideStore / TrollStore / a free or paid Apple developer
@@ -20,12 +20,12 @@ Rust crate. None of those are blockers; each has a known fix.
 1. **Format compatibility.** The iOS app must read and write the *same vault folder* as the Windows
    app — same `index.csv`/`views.csv`, `_app/` layout, file names, ids and encryption — so a folder
    round-trips between the two with no loss. That contract is spelled out in
-   `docs/IOS-PHASE-1.md`; every later decision has to respect it.
+   `docs/PHASE-1.md`; every later decision has to respect it.
 2. **Liquid Glass.** The iOS app should look native, not like a Windows app in a phone frame.
    Liquid Glass (iOS 26) has no free adoption in a webview, but WebKit exposes the real system
    material as `-apple-visual-effect: -apple-system-glass-material` (gated on
    `HAVE_MATERIAL_HOSTING`, which is defined for `PLATFORM(IOS)`), with `backdrop-filter` as the
-   portable fallback. Details and the design tokens are in `docs/IOS-PHASE-1.md`.
+   portable fallback. Details and the design tokens are in `docs/PHASE-1.md`.
 
 ---
 
@@ -353,7 +353,7 @@ with `--export-method debugging` (development) or `release-testing` (ad-hoc). (V
 Tauri CLI source: `tauri ios build` accepts `--no-sign`, `--export-method
 {debugging,release-testing,app-store-connect}` and `--archive-only`.)
 
-**Recommended pipeline (built):** [`.github/workflows/ios.yml`](../.github/workflows/ios.yml) runs on a
+**Recommended pipeline (built):** [`.github/workflows/ios.yml`](../../.github/workflows/ios.yml) runs on a
 `macos-26` runner (Xcode 26.6 + the iOS 26 SDK that `minimumSystemVersion: 26.0` needs). It installs
 XcodeGen, runs `tauri ios init --ci`, writes the icon, then `tauri ios build`. With no Apple secrets
 it runs `--no-sign` and uploads an **unsigned IPA** the user signs locally (AltStore/SideStore, or
@@ -539,7 +539,7 @@ assumed:
 
 ## 10. Suggested phased plan
 
-Phase 1 is written up in full in `docs/IOS-PHASE-1.md` (foundation + format compatibility + Liquid
+Phase 1 is written up in full in `docs/PHASE-1.md` (foundation + format compatibility + Liquid
 Glass). The phases below are the whole arc; Phase 1's detail lives in that file.
 
 Each phase should end with a runnable build on a device or the simulator before the next starts.
@@ -632,7 +632,7 @@ outside Tauri it runs its own demo mode, and adding `html.ios` to `<html>` turns
 (the real app does this from `lib.rs` via `initialization_script`). Checked at 393×852 (iPhone) and
 1024×1366 (iPad).
 
-**Bug found and fixed: the bottom tab bar was laid out as the desktop sidebar.** `ui/ios.js` built the
+**Bug found and fixed: the bottom tab bar was laid out as the desktop sidebar.** `mobile/ui/ios.js` built the
 bar as `<nav class="photos-tabbar">`. On iOS `<html>` ends up with **both** `ios` (added by `lib.rs`)
 and `desktop` (`ui/desktop.js:17` adds `desktop` unconditionally, and nothing removes it). The
 sidebar's ~90 `html.desktop nav …` rules (specificity 0,1,1) then match the bar and beat
@@ -646,7 +646,7 @@ matches. After: a horizontal row of **63×49 px** buttons at the bottom, every o
 no horizontal overflow, and iPad width keeps the sidebar (as Apple Photos does).
 
 That same set of `html.desktop nav [data-tab=…] { --icon: … }` rules was also the bar's **icon**
-source, which a `<div>` no longer matches — so `ui/ios.js` now copies each sidebar button's resolved
+source, which a `<div>` no longer matches — so `mobile/ui/ios.js` now copies each sidebar button's resolved
 `--icon` onto its tab button. Without that the bar renders with blank icons.
 
 `tools/check.mjs` guards all three points (bar is not a `<nav>`; it is a `<div class="photos-tabbar">`;

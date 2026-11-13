@@ -79,7 +79,7 @@ as on Windows: open the app's **Documents** folder in the Files app and drop a v
 encryption works the same on both.
 
 The workflow is manual for now; it is not yet wired to Releases. Full detail (and the reason for each
-iOS decision) is in [docs/IOS-PORT.md](docs/IOS-PORT.md).
+iOS decision) is in [mobile/docs/PORT.md](mobile/docs/PORT.md).
 
 ## 🧑‍💻 Build it yourself
 

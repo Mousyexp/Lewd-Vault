@@ -2,7 +2,8 @@
 //   - applies the few changes the desktop needs to Index.html (the Drive / Apps Script calls go to
 //     the Rust backend and the local files instead, plus hooks for the tags feature),
 //   - adds the desktop layer: ui/desktop.css (the desktop look) and ui/desktop.js (tags, search,
-//     desktop-only settings),
+//     desktop-only settings), plus the iOS layer from mobile/ (mobile/ui/ios.css, folded into the
+//     same stylesheet, and mobile/ui/ios.js),
 //   - copies the libraries and fonts the page loads from the internet in the web version, so the
 //     app works offline.
 // The web version stays the one source of the shared UI: run this (npm run sync) after changing
@@ -286,7 +287,7 @@ patch(`const kindOk = i => !kind || (kind === 'moving' ? i.kind !== 'image' : i.
 
 // ---------- 10. the desktop layer ----------
 patch(`</head>`, `<link rel="stylesheet" href="/vendor/fonts.css">
-<link rel="stylesheet" href="/desktop.css">
+<link rel="stylesheet" href="/mobile.css">
 </head>`);
 patch(`</body>`, `<script src="/desktop.js"></script>
 <script src="/discover.js"></script>
@@ -320,7 +321,12 @@ const mod = p => new URL(`node_modules/${p}`, here);
 fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(new URL('vendor/', out), { recursive: true });
 fs.writeFileSync(new URL('index.html', out), page);
-copy(new URL('ui/desktop.css', here), new URL('desktop.css', out));
+// One stylesheet for the page: the desktop look, then the iOS skin appended after it (mobile/ui/ios.css
+// must come second so its html.ios rules win). Keeping it one file means the page keeps its single
+// <link> and Windows and iOS load exactly the same bytes plus the iOS-only tail.
+fs.writeFileSync(new URL('mobile.css', out),
+  fs.readFileSync(new URL('ui/desktop.css', here), 'utf8') + '\n' +
+  fs.readFileSync(new URL('mobile/ui/ios.css', here), 'utf8'));
 copy(new URL('ui/desktop.js', here), new URL('desktop.js', out));
 copy(new URL('ui/discover.js', here), new URL('discover.js', out));
 copy(new URL('ui/sites.js', here), new URL('sites.js', out));
@@ -338,7 +344,7 @@ copy(new URL('ui/coach.js', here), new URL('coach.js', out));
 copy(new URL('ui/share.js', here), new URL('share.js', out));
 copy(new URL('ui/extras.js', here), new URL('extras.js', out));
 copy(new URL('ui/streamline.js', here), new URL('streamline.js', out));
-copy(new URL('ui/ios.js', here), new URL('ios.js', out));
+copy(new URL('mobile/ui/ios.js', here), new URL('ios.js', out)); // the iOS layer (mobile/ui/ios.css is folded into mobile.css above)
 copy(new URL('src-tauri/icons/128x128@2x.png', here), new URL('app-icon.png', out)); // the brand mark in the sidebar
 for (const f of fs.readdirSync(new URL('art/decor/', here))) copy(new URL(`art/decor/${f}`, here), new URL(`decor/${f}`, out)); // see ui/desktop.js
 // her moans (MagicalMysticVA on Freesound, CC BY 4.0): Appreciate's like-*.ogg, the coach's coach-*.ogg

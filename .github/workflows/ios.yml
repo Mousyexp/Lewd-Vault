@@ -2,7 +2,7 @@
 #
 # The iOS build cannot run on Windows or Linux: it needs Xcode, XcodeGen and CocoaPods. The artifact
 # is unsigned by default (`--no-sign`), then signed on the device by whatever sideloading tool you
-# use (AltStore/SideStore, TrollStore, or your own certificate) — see docs/IOS-PORT.md section 6.
+# use (AltStore/SideStore, TrollStore, or your own certificate) — see mobile/docs/PORT.md section 6.
 #
 # Trigger it by hand (Actions -> Build iOS -> Run workflow) or on a pull request that touches the
 # app. Set the Apple API key secrets (below) to produce a *signed* IPA instead.
@@ -21,6 +21,7 @@ on:
     paths:
       - 'src-tauri/**'
       - 'ui/**'
+      - 'mobile/**'
       - 'tools/**'
       - 'sync-ui.mjs'
       - 'package.json'

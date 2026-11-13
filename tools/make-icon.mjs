@@ -36,7 +36,7 @@ console.log('make-icon: the heart -> art/app-icon.png');
 
 execSync('npx tauri icon art/app-icon.png', { cwd: fileURLToPath(here), stdio: 'ignore' });
 // Android isn't a target: drop its icons. The iOS catalog is kept (the iOS build copies it into
-// Assets.xcassets), see docs/IOS-PORT.md.
+// Assets.xcassets), see mobile/docs/PORT.md.
 fs.rmSync(new URL('src-tauri/icons/android', here), { recursive: true, force: true });
 // Cargo doesn't watch the icon files: touching these makes the next build embed the new icon
 // (build.rs puts it in the .exe; lib.rs's generate_context! uses it for the window).

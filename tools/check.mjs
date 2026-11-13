@@ -60,21 +60,23 @@ step('every script parses', () => {
 });
 
 step('the desktop hooks are in the page', () => {
-  const want = ['const inTauri', 'tauriInvoke', "tauriInvoke('api'", 'vault.localhost', '/vendor/thumbhash.js', '.c3.mp4', '/extras.js', '/desktop.css'];
+  const want = ['const inTauri', 'tauriInvoke', "tauriInvoke('api'", 'vault.localhost', '/vendor/thumbhash.js', '.c3.mp4', '/extras.js', '/mobile.css'];
   const missing = want.filter(w => !page.includes(w));
   if (missing.length) throw new Error('missing ' + missing.join(', '));
 });
 
 // The page's own inline <style> (ui/Index.html) is copied into src/index.html too, so it has to be
-// checked as well as desktop.css — otherwise a stray unprefixed use there is invisible to this test.
+// checked as well as the desktop CSS — otherwise a stray unprefixed use there is invisible to this test.
 const unpairedBackdrop = (css, where) => {
   const lines = css.split('\n');
   const bad = lines.filter((l, i) => /(^|[^-])backdrop-filter\s*:/.test(l) && !/-webkit-backdrop-filter/.test(l) && !/-webkit-backdrop-filter/.test(lines[i - 1] || ''));
   if (bad.length) throw new Error(`${where}: ${bad.length} without the prefix, e.g. ${bad[0].trim()}`);
 };
 step('every backdrop-filter has its -webkit- pair (iOS WebKit)', () => {
-  const css = fs.readFileSync(path.join(root, 'ui', 'desktop.css'), 'utf8');
-  unpairedBackdrop(css, 'desktop.css');
+  // The desktop look and the iOS skin are two files (ui/desktop.css and mobile/ui/ios.css) that
+  // sync-ui concatenates into src/mobile.css; check the built file so neither half can drift.
+  const css = fs.readFileSync(path.join(src, 'mobile.css'), 'utf8');
+  unpairedBackdrop(css, 'mobile.css');
   if (!css.includes('--glass-blur')) throw new Error('the Liquid Glass tokens are missing');
   const html = fs.readFileSync(path.join(root, 'ui', 'Index.html'), 'utf8');
   const style = html.slice(html.indexOf('<style>'), html.indexOf('</style>'));
@@ -151,31 +153,36 @@ step('the iOS port pieces the platform turns on are in place', () => {
   // each has bitten once. They are cheap to pin here (this runs on every `npm test`, on any OS).
   const conf = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri', 'tauri.conf.json'), 'utf8'));
   // The bundle key is "iOS" (capital I/O/S, matching "macOS"); "ios" is a deprecated alias. The
-  // minimum version encodes the iOS-26 decision (docs/IOS-PORT.md section 11).
+  // minimum version encodes the iOS-26 decision (mobile/docs/PORT.md section 11).
   if (!conf.bundle?.iOS) throw new Error('bundle.iOS is missing from tauri.conf.json');
   if (conf.bundle.iOS.minimumSystemVersion !== '26.0') throw new Error(`bundle.iOS.minimumSystemVersion is ${conf.bundle.iOS.minimumSystemVersion}, expected 26.0`);
-  // The crate must build as a staticlib for iOS (docs/IOS-PORT.md section 5).
+  // The crate must build as a staticlib for iOS (mobile/docs/PORT.md section 5).
   const cargo = fs.readFileSync(path.join(root, 'src-tauri', 'Cargo.toml'), 'utf8');
   if (!/crate-type\s*=\s*\[[^\]]*staticlib/.test(cargo)) throw new Error('the crate is not a staticlib (needed for iOS)');
-  // Info.plist: file sharing + the loopback ATS exception (docs/IOS-PORT.md sections 4, 8).
+  // Info.plist: file sharing + the loopback ATS exception (mobile/docs/PORT.md sections 4, 8).
   const plist = fs.readFileSync(path.join(root, 'src-tauri', 'Info.plist'), 'utf8');
   for (const key of ['UIFileSharingEnabled', 'NSAllowsLocalNetworking', '127.0.0.1']) {
     if (!plist.includes(key)) throw new Error(`Info.plist is missing ${key}`);
   }
   // The iOS layer runs only under html.ios, which the Rust side adds as an initialization script
-  // before the page's own scripts; if that ever disappears, ui/ios.js silently does nothing.
+  // before the page's own scripts; if that ever disappears, mobile/ui/ios.js silently does nothing.
   const lib = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'lib.rs'), 'utf8');
-  if (!/classList\.add\((['"])ios\1\)/.test(lib)) throw new Error("nothing adds the html.ios class, so ui/ios.js never runs");
+  if (!/classList\.add\((['"])ios\1\)/.test(lib)) throw new Error("nothing adds the html.ios class, so mobile/ui/ios.js never runs");
   if (!page.includes('src="/ios.js"')) throw new Error('the page does not load /ios.js');
+  // The iOS skin (mobile/ui/ios.css) is appended after the desktop look into the single /mobile.css
+  // the page loads. If sync-ui stops folding it in, iOS would run the desktop look with no iOS styling.
+  if (!page.includes('href="/mobile.css"')) throw new Error('the page does not load /mobile.css');
+  const builtCss = fs.readFileSync(path.join(src, 'mobile.css'), 'utf8');
+  if (!builtCss.includes('.photos-tabbar')) throw new Error('mobile.css has no iOS skin (mobile/ui/ios.css was not folded in)');
   // The tab bar must NOT be a <nav>: on iOS <html> has both `ios` and `desktop` (desktop.js adds
   // `desktop` unconditionally), and the desktop sidebar's 90 `html.desktop nav …` rules then capture
   // it — column layout, font-size 0 — collapsing it to a 6px strip off the bottom of the screen.
-  const iosjs = fs.readFileSync(path.join(root, 'ui', 'ios.js'), 'utf8');
-  if (/make\(\s*['"]nav['"]\s*,\s*['"]photos-tabbar['"]/.test(iosjs)) throw new Error("ui/ios.js builds the tab bar as a <nav>, which the html.desktop nav rules clobber on iOS");
-  if (!/make\(\s*['"]div['"]\s*,\s*['"]photos-tabbar['"]/.test(iosjs)) throw new Error('ui/ios.js no longer builds the tab bar as a <div class="photos-tabbar">');
+  const iosjs = fs.readFileSync(path.join(root, 'mobile', 'ui', 'ios.js'), 'utf8');
+  if (/make\(\s*['"]nav['"]\s*,\s*['"]photos-tabbar['"]/.test(iosjs)) throw new Error("mobile/ui/ios.js builds the tab bar as a <nav>, which the html.desktop nav rules clobber on iOS");
+  if (!/make\(\s*['"]div['"]\s*,\s*['"]photos-tabbar['"]/.test(iosjs)) throw new Error('mobile/ui/ios.js no longer builds the tab bar as a <div class="photos-tabbar">');
   // ...and because a <div> does not match `html.desktop nav [data-tab=…]`, the icon has to be copied
   // onto each tab button explicitly, or the bar renders with blank icons.
-  if (!/setProperty\(\s*['"]--icon['"]/.test(iosjs)) throw new Error('ui/ios.js no longer copies the sidebar icon onto the tab buttons (blank tab icons)');
+  if (!/setProperty\(\s*['"]--icon['"]/.test(iosjs)) throw new Error('mobile/ui/ios.js no longer copies the sidebar icon onto the tab buttons (blank tab icons)');
   // The iOS app launches through `main.mm`'s `ffi::start_app()`: `mobile_entry_point` turns `run()`
   // into an exported `start_app` symbol (a #[no_mangle] extern "C"). Rename `run` and the build still
   // succeeds, then the app dies on launch with a missing symbol — so pin the attribute here.
