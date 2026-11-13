@@ -2998,6 +2998,14 @@ html.ios .grid-group-head {
 /* iOS: the Windows title bar is the window frame, so it's gone; its height goes back to the content */
 html.ios { --bar: 0px; }
 html.ios .titlebar { display: none; }
+
+/* ---------- iOS web-platform defaults ---------- */
+/* the grey flash Safari paints on every tap; the app draws its own :active states */
+html.ios { -webkit-tap-highlight-color: transparent; -webkit-text-size-adjust: 100%; }
+/* an app, not a document: no rubber-band past the ends, no long-press callout/magnifier on chrome */
+html.ios body { overscroll-behavior: none; -webkit-touch-callout: none; }
+/* the large title's backdrop must cover the notch area too, so the text never slides out from under it */
+html.ios .photos-title { padding-top: calc(6px + var(--safe-t)); }
 /* compact widths (iPhone): the sidebar becomes the bottom tab bar, as Photos does. Regular widths
    (iPad) keep the sidebar — also what Photos does. */
 @media (max-width: 820px) {
@@ -3013,6 +3021,13 @@ html.ios .titlebar { display: none; }
     padding-bottom: calc(var(--tabbar) + 28px + var(--safe-b));
   }
   html.ios .photos-tabbar { display: flex; }
+  /* the Library's filter row and the Clean up toolbar are single-line flex rows sized for a wide
+     desktop window; on a phone (they overflow below ~390px) let them wrap instead of scrolling the
+     whole page sideways */
+  html.ios .lib-filterrow { flex-wrap: wrap; }
+  html.ios .lib-filterrow > .filters { flex: 1 1 100%; }
+  html.ios .cleanup-bar { flex-wrap: wrap; }
+  html.ios .cleanup-bar p { flex: 1 1 100%; }
 }
 
 /* ---------- Apple Photos: the viewer's floating chrome ---------- */
