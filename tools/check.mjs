@@ -167,6 +167,11 @@ step('the iOS port pieces the platform turns on are in place', () => {
   const lib = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'lib.rs'), 'utf8');
   if (!/classList\.add\((['"])ios\1\)/.test(lib)) throw new Error("nothing adds the html.ios class, so ui/ios.js never runs");
   if (!page.includes('src="/ios.js"')) throw new Error('the page does not load /ios.js');
+  // The iOS app launches through `main.mm`'s `ffi::start_app()`: `mobile_entry_point` turns `run()`
+  // into an exported `start_app` symbol (a #[no_mangle] extern "C"). Rename `run` and the build still
+  // succeeds, then the app dies on launch with a missing symbol — so pin the attribute here.
+  if (!/#\[cfg_attr\(mobile,\s*tauri::mobile_entry_point\)\]/.test(lib)) throw new Error('lib.rs lost the #[cfg_attr(mobile, tauri::mobile_entry_point)] on run(), so iOS has no start_app symbol');
+  if (!/\n\s*pub fn run\(\)/.test(lib)) throw new Error('lib.rs has no `pub fn run()` for the mobile entry point to wrap');
   // The iOS build only runs in .github/workflows/ios.yml. Several classic CI failure modes have to
   // stay fixed there or the IPA job breaks. Cheap to pin here (this runs on every `npm test`, any OS):
   const wf = fs.readFileSync(path.join(root, '.github', 'workflows', 'ios.yml'), 'utf8');

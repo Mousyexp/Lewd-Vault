@@ -499,6 +499,42 @@ Things that are **not** blockers (verified): `ureq`/`rustls`/`ring`/`getrandom`/
 all build for iOS; `tauri-plugin-dialog` and `tauri-plugin-opener` support iOS; Tauri's iOS build
 produces an IPA; the app already has a loopback HTTP server with the right range semantics to copy.
 
+### 9a. The post-green runtime failure modes (audited against this codebase)
+
+The five classic Rust→iOS failures after the pipeline turns green. Each was checked in the code, not
+assumed:
+
+1. **FFI / symbol export — safe.** The iOS app launches through the generated `main.mm`, which calls
+   `ffi::start_app()`. `#[cfg_attr(mobile, tauri::mobile_entry_point)]` on `run()` (lib.rs:2066)
+   expands to a `#[no_mangle] pub extern "C" fn start_app()`, and Tauri's CLI checks that symbol
+   before building. There is no hand-written FFI to mismatch. `tools/check.mjs` now pins the
+   attribute and the `pub fn run()` it wraps, so a rename cannot compile-then-crash-on-launch.
+2. **Panics — `panic = "abort"` is already set** (`Cargo.toml` `[profile.release]`), so the binary
+   carries no unwinding tables and Tauri's entry point calls `run()` directly (no `catch_unwind`). A
+   panic therefore aborts the app rather than unwinding — correct for a release build. The residual
+   risk is a panic on the launch path (an `unwrap` on a missing path). Mitigation: test on a device
+   that has never run the app, so first-run state is exercised.
+3. **Threads — no async runtime, but one unbounded spawn.** No tokio/async-std/rayon; background work
+   is plain `std::thread::spawn`, mostly one-shot. The one place to watch is `media.rs`: the loopback
+   server spawns a **thread per request** (`listener.incoming()` → `std::thread::spawn`). It is
+   loopback-only and the app makes few concurrent requests, so it should stay bounded — but it is the
+   item to watch in Instruments if the app hangs or the console shows thread-creation failures.
+   Phase 4 nicety: a small thread pool or keep-alive.
+4. **Sandbox / paths — handled.** On iOS the roots resolve through the container `$HOME`
+   (`storage.rs`): vault = `Documents`, app data = `Library/Application Support` (invisible in Files,
+   by design). `exe_dir_writable()` returns `false` on iOS, so the "portable, next to the exe" branch
+   is never taken; the config path is `Library/Application Support/Image Vault/config.json`. No
+   hardcoded Windows path is reachable (the `USERPROFILE`/`LOCALAPPDATA` lookups are inside
+   `#[cfg(not(target_os = "ios"))]`).
+5. **Entitlements / Info.plist — nothing to declare, plus the keys that matter.** The app uses no
+   camera, microphone, Bluetooth, contacts or iOS Keychain, so no `NS*UsageDescription` and no extra
+   entitlement is required (its "Untraceable" crypto is its own ChaCha20 file format, not the
+   Keychain). `src-tauri/Info.plist` carries `UIFileSharingEnabled`,
+   `LSSupportsOpeningDocumentsInPlace` and the `NSAllowsLocalNetworking` / `127.0.0.1` ATS exception
+   for the loopback media server; the CLI merges it into the generated `gen/apple/.../Info.plist` at
+   build (`ios/build.rs`). Local network access on iOS 14+ is only a *prompt* for non-loopback
+   traffic — loopback to 127.0.0.1 needs no `NSLocalNetworkUsageDescription`.
+
 ---
 
 ## 10. Suggested phased plan
