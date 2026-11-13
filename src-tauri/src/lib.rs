@@ -2132,6 +2132,47 @@ mod tests {
         }
     }
 
+    // The index the Windows app writes must read back byte-identical here: this is what "the same
+    // vault opens on both" rests on. The sample exercises every quoting path (comma, double quote,
+    // an empty cell), a non-ASCII category, tags, and the column order.
+    #[test]
+    fn index_is_windows_compatible() {
+        let csv = "\u{feff}id,uid,file,original_name,category,kind,nsfw,quality,added,width,height,duration,preview_id,thumb,thumbhash,stream_id,thumb_size,collection,collection_cover,tags,source\r\n\
+item-000123,000123,000123_261016_i007_Test- Cat.webp,\"Cover, front.webp\",Test- Cat,image,0,7,2026-10-16T09:00:00Z,1200,1600,,,000123.webp,1QcSHQRnh493V4dIh4eXh1h4kJUI=,,900x1200,,,artist:someone blue_hair smile,https://example.test/post/1\r\n\
+item-000124,000124,000124_261016_v013_Clips.mp4,clip.mp4,Clips,video,1,3,2026-10-16T10:00:00Z,1920,1080,95.5,000124.mp4,000124.webp,,000124.json,,\"Set, A\",1,,\r\n";
+        let items = items_from_csv(csv);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "item-000123");
+        assert_eq!(items[0].name, "Cover, front.webp");
+        assert_eq!(items[0].category, "Test- Cat");
+        assert_eq!(items[0].kind, "image");
+        assert_eq!(items[0].quality, 7);
+        assert_eq!(items[0].width, 1200);
+        assert_eq!(items[0].tags, "artist:someone blue_hair smile");
+        assert_eq!(items[1].duration, 95.5);
+        assert_eq!(items[1].collection, "Set, A");
+        assert!(items[1].collection_cover);
+        // re-encoding is byte-identical (no CRLF/BOM/quoting drift on a round trip through the app)
+        assert_eq!(to_csv(&items), csv);
+        // a file with fewer columns (an older vault) still reads
+        let older = "\u{feff}id,uid,file,category,kind,nsfw,quality,added\r\nitem-000001,000001,f.webp,Cat,image,0,5,2026-01-01T00:00:00Z\r\n";
+        let old = items_from_csv(older);
+        assert_eq!(old.len(), 1);
+        assert_eq!(old[0].width, 0);
+        assert_eq!(old[0].tags, "");
+    }
+
+    // The file name format the Drive/web version uses, so a vault stays readable in either place.
+    #[test]
+    fn file_name_format() {
+        let added = "2026-10-16T09:00:00Z";
+        assert!(file_name("000123", added, "image", "Test: Cat", 0, 7, ".webp").starts_with("000123_"));
+        assert!(file_name("000123", added, "image", "Test: Cat", 0, 7, ".webp").ends_with("_Test- Cat.webp"));
+        assert!(file_name("000123", added, "image", "Cat", 0, 7, ".webp").contains("_i007_"));
+        assert!(file_name("000123", added, "video", "Cat", 1, 3, ".mp4").contains("_v013_"));
+        assert!(file_name("000123", added, "gif", "Cat", 0, 5, ".gif").contains("_g005_"));
+    }
+
     #[test]
     fn ranges() {
         assert_eq!(parse_range("bytes=0-99", 1000), Some((0, 100)));
