@@ -170,6 +170,8 @@ step('the iOS port pieces the platform turns on are in place', () => {
   // The iOS build only runs in .github/workflows/ios.yml. Several classic CI failure modes have to
   // stay fixed there or the IPA job breaks. Cheap to pin here (this runs on every `npm test`, any OS):
   const wf = fs.readFileSync(path.join(root, '.github', 'workflows', 'ios.yml'), 'utf8');
+  //   - a manual trigger, so the build can be kicked off from the Actions tab without a dummy commit
+  if (!/workflow_dispatch:/.test(wf)) throw new Error('ios.yml has no workflow_dispatch trigger');
   //   - the Rust target for the phone, without which the crate cannot find `std`
   if (!/aarch64-apple-ios/.test(wf)) throw new Error('ios.yml does not install the aarch64-apple-ios Rust target');
   //   - a pinned runner: macos-latest drifts to a new default Xcode and SDK

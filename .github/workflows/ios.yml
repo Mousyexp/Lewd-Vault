@@ -10,6 +10,11 @@ name: Build iOS
 
 on:
   workflow_dispatch:
+    inputs:
+      signed:
+        description: 'Build a signed IPA (needs the four Apple secrets). Leave off for the first run.'
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:
@@ -124,14 +129,17 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          # Manual runs pick the path; pushes and PRs always take the unsigned path (the secrets are
+          # not needed for sideloading, and an unsigned build is the honest way to test the toolchain).
+          SIGNED: ${{ github.event_name == 'workflow_dispatch' && inputs.signed || 'false' }}
         run: |
-          # A signed IPA when all four Apple secrets are set, otherwise an unsigned one. All four are
-          # required: the API key authorizes the export, and the team ID is what Xcode signs with
-          # (without it the export fails, because the project has no DEVELOPMENT_TEAM otherwise).
-          # (`tauri ios build` wants APPLE_API_KEY_PATH to point at a file, so the .p8 is kept in a
-          # secret as text and written here. With --no-sign none of it is needed, which is the
-          # sideloading path: AltStore/SideStore sign on the device.)
-          if [ -n "$APPLE_API_KEY" ] && [ -n "$APPLE_API_ISSUER" ] && [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_DEVELOPMENT_TEAM" ]; then
+          # A signed IPA when the run asked for it *and* all four Apple secrets are set, otherwise an
+          # unsigned one. All four are required: the API key authorizes the export, and the team ID is
+          # what Xcode signs with (without it the export fails, because the project has no
+          # DEVELOPMENT_TEAM otherwise). `tauri ios build` wants APPLE_API_KEY_PATH to point at a file,
+          # so the .p8 is kept in a secret as text and written here. With --no-sign none of it is
+          # needed, which is the sideloading path: AltStore/SideStore sign on the device.
+          if [ "$SIGNED" = "true" ] && [ -n "$APPLE_API_KEY" ] && [ -n "$APPLE_API_ISSUER" ] && [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_DEVELOPMENT_TEAM" ]; then
             umask 077
             key="$RUNNER_TEMP/AuthKey.p8"
             printf '%s' "$APPLE_API_KEY_P8" > "$key"
