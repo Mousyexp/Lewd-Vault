@@ -1921,6 +1921,12 @@ html.desktop .lib-filterrow > .filters { flex: 1; margin: 0; align-content: cent
 html.desktop .lib-layout { grid-template-columns: minmax(0, 1fr) var(--tagw, 280px); }
 html.desktop .lib-layout.tags-folded { grid-template-columns: minmax(0, 1fr) 0; }
 html.desktop .lib-layout.tags-folded > .tag-panel { visibility: hidden; overflow: hidden; border: 0; padding: 0; }
+/* Narrow windows put the Tags panel on top (the @media (max-width: 1150px) block above). Re-assert the
+   single column here, after the two rules above: those are more specific (html.desktop …), so without
+   this the desktop two-column grid survived at phone widths and the page scrolled sideways. */
+@media (max-width: 1150px) {
+  html.desktop .lib-layout, html.desktop .lib-layout.tags-folded { grid-template-columns: minmax(0, 1fr); }
+}
 .tp-grip { position: fixed; top: var(--bar); bottom: 0; right: calc(var(--tagw, 280px) - 5px); width: 10px; cursor: col-resize; z-index: 19; }
 .tags-folded .tp-grip, #tab-library.hidden .tp-grip { display: none; }
 .tp-grip::after { content: ""; position: absolute; left: 4px; top: 50%; width: 3px; height: 44px; border-radius: 3px; background: var(--line); transform: translateY(-50%); transition: background .15s, height .2s; }
