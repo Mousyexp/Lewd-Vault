@@ -167,12 +167,26 @@ step('the iOS port pieces the platform turns on are in place', () => {
   const lib = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'lib.rs'), 'utf8');
   if (!/classList\.add\((['"])ios\1\)/.test(lib)) throw new Error("nothing adds the html.ios class, so ui/ios.js never runs");
   if (!page.includes('src="/ios.js"')) throw new Error('the page does not load /ios.js');
-  // The iOS build only runs in .github/workflows/ios.yml. Two of the ten classic CI failure modes have
-  // to stay fixed there or the IPA job breaks: the aarch64-apple-ios target (without it the crate
-  // cannot find `std`), and a pinned macOS runner (macos-latest drifts to a new Xcode and its SDK).
+  // The iOS build only runs in .github/workflows/ios.yml. Several classic CI failure modes have to
+  // stay fixed there or the IPA job breaks. Cheap to pin here (this runs on every `npm test`, any OS):
   const wf = fs.readFileSync(path.join(root, '.github', 'workflows', 'ios.yml'), 'utf8');
+  //   - the Rust target for the phone, without which the crate cannot find `std`
   if (!/aarch64-apple-ios/.test(wf)) throw new Error('ios.yml does not install the aarch64-apple-ios Rust target');
+  //   - a pinned runner: macos-latest drifts to a new default Xcode and SDK
   if (/runs-on:\s*macos-latest/.test(wf)) throw new Error('ios.yml uses the floating macos-latest runner; pin it');
+  //   - the Xcode pin, so the iOS 26 SDK does not move under us
+  if (!/xcode-select -s \/Applications\/Xcode_/.test(wf)) throw new Error('ios.yml does not pin the Xcode version');
+  //   - the headless keychain, or codesign can hang on a password prompt a runner cannot answer
+  if (!/set-key-partition-list/.test(wf)) throw new Error('ios.yml does not set the keychain partition list');
+  //   - the fourth signing secret: the API key authorizes the export but Xcode still needs a team ID
+  if (!/APPLE_DEVELOPMENT_TEAM/.test(wf)) throw new Error('ios.yml does not pass APPLE_DEVELOPMENT_TEAM for signing');
+  //   - a job timeout with room for a cold aarch64 + CocoaPods build (the ipa job, not the tests)
+  const mins = [...wf.matchAll(/timeout-minutes:\s*(\d+)/g)].map(m => +m[1]);
+  if (!mins.some(m => m >= 60)) throw new Error('ios.yml has no generous job timeout (a cold iOS build is slow)');
+  // The bundle id is the App ID the Apple portal must know about (#9): a valid reverse-DNS name, and
+  // not Tauri's rejected default. It is shared with the bundle config, so a rename cannot drift.
+  if (conf.identifier !== 'local.imagevault.desktop') throw new Error(`identifier is ${conf.identifier}, expected local.imagevault.desktop`);
+  if (!/^[A-Za-z0-9.-]+$/.test(conf.identifier) || conf.identifier === 'com.tauri.dev') throw new Error('the bundle identifier is not a valid, non-default reverse-DNS name');
 });
 
 if (problems.length) {

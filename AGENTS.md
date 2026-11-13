@@ -112,6 +112,19 @@ build`. No Apple secrets → `--no-sign` (unsigned IPA, signed on device); `APPL
 - Signing reads `APPLE_API_KEY` + `APPLE_API_ISSUER` + `APPLE_API_KEY_PATH` (a *file path* to the
   `.p8`); the workflow writes the secret text to a temp file. Signing also needs
   `APPLE_DEVELOPMENT_TEAM` or `bundle.iOS.developmentTeam`; a partial API-key set is a hard error.
+- **The bundle id is the App ID the Apple portal must know about.** `identifier` is
+  `local.imagevault.desktop` (valid reverse-DNS; Tauri rejects its `com.tauri.dev` default). A paid
+  Apple Developer account must register that exact App ID, and the signing profile must cover it, or
+  the export fails on a bundle-id/profile mismatch. A free-Apple-ID sideload (AltStore) signs with a
+  personal team and rewrites the id itself, so it needs nothing.
+- **The app icons carry no alpha.** `art/app-icon.png` is RGBA (42% transparent), but `tauri icon`
+  draws the iOS appiconset entries onto an opaque background (`Background::Color`, default `#fff`)
+  before writing the PNG, so the asset catalog Xcode compiles is alpha-free. A flat square is what
+  `tauri icon` produces; that is expected, not a bug.
+- **`tools/check.mjs` pins the CI invariants** (aarch64 target, pinned runner, Xcode pin, keychain
+  step, the fourth signing secret, the job timeout, the bundle id), so `npm test` catches a workflow
+  regression on any OS. `rg 'cfg\('` shows the platform split: `cfg(desktop)`/`cfg(windows)` are the
+  desktop-only paths and `cfg(target_os = "ios")` / `cfg(mobile)` are the phone's.
 - **The test-vault fixtures must stay byte-exact.** `src-tauri/tests/fixtures/**` is marked `-text` in
   `.gitattributes` because the repo-wide `* text=auto eol=lf` rewrote the plain vault's CRLF (the
   format the app writes, `lib.rs`) to LF on checkout, so on a fresh clone the encrypted fixture no
