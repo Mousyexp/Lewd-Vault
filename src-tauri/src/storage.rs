@@ -352,7 +352,7 @@ pub fn options(current: &Path) -> Value {
         option("onedrive", "OneDrive", onedrive(), None, current),
         option("dropbox", "Dropbox", dropbox(), None, current),
         option("icloud", "iCloud Drive", icloud(), None, current),
-        option("local", "This PC", Some(local_home()), Some(local.clone()), current),
+        option("local", if cfg!(target_os = "ios") { "This device" } else { "This PC" }, Some(local_home()), Some(local.clone()), current),
     ];
     // iOS: no cloud service installs a synced folder on the device, so those entries would only
     // offer Windows download links. The vault lives in the app's Documents folder instead.

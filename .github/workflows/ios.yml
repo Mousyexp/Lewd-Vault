@@ -17,6 +17,17 @@ on:
         default: false
   push:
     branches: [main]
+    # (only when something the app is built from changed: a macOS build for a README edit is a waste)
+    paths:
+      - 'src-tauri/**'
+      - 'ui/**'
+      - 'mobile/**'
+      - 'tools/**'
+      - 'sync-ui.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'art/app-icon.png'
+      - '.github/workflows/ios.yml'
   pull_request:
     paths:
       - 'src-tauri/**'

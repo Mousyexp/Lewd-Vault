@@ -300,8 +300,12 @@ fn open_browser(url: &str) -> Res<()> {
     let r = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", url]).spawn();
     #[cfg(target_os = "macos")]
     let r = std::process::Command::new("open").arg(url).spawn();
-    #[cfg(not(any(windows, target_os = "macos")))]
+    // (iOS can't start a program; the opener plugin asks the system to open Safari)
+    #[cfg(target_os = "ios")]
+    return tauri_plugin_opener::open_url(url, None::<&str>).map_err(err);
+    #[cfg(not(any(windows, target_os = "macos", target_os = "ios")))]
     let r = std::process::Command::new("xdg-open").arg(url).spawn();
+    #[cfg(not(target_os = "ios"))]
     r.map(|_| ()).map_err(err)
 }
 

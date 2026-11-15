@@ -428,6 +428,12 @@ fn is_conflict_copy(name: &str, base: &str) -> bool {
 fn write_atomic(path: &Path, bytes: &[u8]) -> Res<()> {
     let tmp = path.with_extension(format!("{}.part", path.extension().and_then(|e| e.to_str()).unwrap_or("")));
     crypt::write(&tmp, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    // on the storage device before the rename, so a power cut can't leave the new name on an empty
+    // file. Only here (the index, settings, counters): doing it for every file the app writes, as the
+    // encrypting writer briefly did, made each cached thumbnail wait for the disk.
+    if let Ok(f) = fs::File::open(&tmp) {
+        let _ = f.sync_all();
+    }
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         format!("Could not write {} (is it open in another program?): {e}", path.display())

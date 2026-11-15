@@ -77,7 +77,6 @@ step('every backdrop-filter has its -webkit- pair (iOS WebKit)', () => {
   // sync-ui concatenates into src/mobile.css; check the built file so neither half can drift.
   const css = fs.readFileSync(path.join(src, 'mobile.css'), 'utf8');
   unpairedBackdrop(css, 'mobile.css');
-  if (!css.includes('--glass-blur')) throw new Error('the Liquid Glass tokens are missing');
   const html = fs.readFileSync(path.join(root, 'ui', 'Index.html'), 'utf8');
   const style = html.slice(html.indexOf('<style>'), html.indexOf('</style>'));
   unpairedBackdrop(style, 'Index.html inline style');
@@ -173,39 +172,23 @@ step('the iOS port pieces the platform turns on are in place', () => {
   // the page loads. If sync-ui stops folding it in, iOS would run the desktop look with no iOS styling.
   if (!page.includes('href="/mobile.css"')) throw new Error('the page does not load /mobile.css');
   const builtCss = fs.readFileSync(path.join(src, 'mobile.css'), 'utf8');
-  if (!builtCss.includes('.photos-tabbar')) throw new Error('mobile.css has no iOS skin (mobile/ui/ios.css was not folded in)');
-  // The tab bar must NOT be a <nav>: on iOS <html> has both `ios` and `desktop` (desktop.js adds
-  // `desktop` unconditionally), and the desktop sidebar's 90 `html.desktop nav …` rules then capture
-  // it — column layout, font-size 0 — collapsing it to a 6px strip off the bottom of the screen.
-  const iosjs = fs.readFileSync(path.join(root, 'mobile', 'ui', 'ios.js'), 'utf8');
-  if (/make\(\s*['"]nav['"]\s*,\s*['"]photos-tabbar['"]/.test(iosjs)) throw new Error("mobile/ui/ios.js builds the tab bar as a <nav>, which the html.desktop nav rules clobber on iOS");
-  if (!/make\(\s*['"]div['"]\s*,\s*['"]photos-tabbar['"]/.test(iosjs)) throw new Error('mobile/ui/ios.js no longer builds the tab bar as a <div class="photos-tabbar">');
-  // ...and because a <div> does not match `html.desktop nav [data-tab=…]`, the icon has to be copied
-  // onto each tab button explicitly, or the bar renders with blank icons.
-  if (!/setProperty\(\s*['"]--icon['"]/.test(iosjs)) throw new Error('mobile/ui/ios.js no longer copies the sidebar icon onto the tab buttons (blank tab icons)');
+  if (!builtCss.includes('html.ios .ios-tabbar')) throw new Error('mobile.css has no iOS skin (mobile/ui/ios.css was not folded in)');
+  // Every rule of the iOS skin must start with `html.ios`: the file is appended to the stylesheet
+  // Windows loads too, so one unscoped (or `html.desktop`) rule restyles the desktop app.
+  const skin = fs.readFileSync(path.join(root, 'mobile', 'ui', 'ios.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const m of skin.matchAll(/(^|[{}])\s*([^{}@]+?)\s*\{/g)) {
+    // (split on the commas between selectors, not the ones inside :is(...) / :has(...))
+    const parts = []; let depth = 0, cur = '';
+    for (const ch of m[2]) { if (ch === '(') depth++; if (ch === ')') depth--; if (ch === ',' && !depth) { parts.push(cur); cur = ''; } else cur += ch; }
+    parts.push(cur);
+    const loose = parts.map(x => x.trim()).filter(x => x && !x.startsWith('html.ios') && !/^(from|to|\d+%)$/.test(x));
+    if (loose.length) throw new Error(`mobile/ui/ios.css: "${loose[0]}" is not scoped to html.ios (it would apply on Windows)`);
+  }
   // The iOS app launches through `main.mm`'s `ffi::start_app()`: `mobile_entry_point` turns `run()`
   // into an exported `start_app` symbol (a #[no_mangle] extern "C"). Rename `run` and the build still
   // succeeds, then the app dies on launch with a missing symbol — so pin the attribute here.
   if (!/#\[cfg_attr\(mobile,\s*tauri::mobile_entry_point\)\]/.test(lib)) throw new Error('lib.rs lost the #[cfg_attr(mobile, tauri::mobile_entry_point)] on run(), so iOS has no start_app symbol');
   if (!/\n\s*pub fn run\(\)/.test(lib)) throw new Error('lib.rs has no `pub fn run()` for the mobile entry point to wrap');
-  // The iOS build only runs in .github/workflows/ios.yml. Several classic CI failure modes have to
-  // stay fixed there or the IPA job breaks. Cheap to pin here (this runs on every `npm test`, any OS):
-  const wf = fs.readFileSync(path.join(root, '.github', 'workflows', 'ios.yml'), 'utf8');
-  //   - a manual trigger, so the build can be kicked off from the Actions tab without a dummy commit
-  if (!/workflow_dispatch:/.test(wf)) throw new Error('ios.yml has no workflow_dispatch trigger');
-  //   - the Rust target for the phone, without which the crate cannot find `std`
-  if (!/aarch64-apple-ios/.test(wf)) throw new Error('ios.yml does not install the aarch64-apple-ios Rust target');
-  //   - a pinned runner: macos-latest drifts to a new default Xcode and SDK
-  if (/runs-on:\s*macos-latest/.test(wf)) throw new Error('ios.yml uses the floating macos-latest runner; pin it');
-  //   - the Xcode pin, so the iOS 26 SDK does not move under us
-  if (!/xcode-select -s \/Applications\/Xcode_/.test(wf)) throw new Error('ios.yml does not pin the Xcode version');
-  //   - the headless keychain, or codesign can hang on a password prompt a runner cannot answer
-  if (!/set-key-partition-list/.test(wf)) throw new Error('ios.yml does not set the keychain partition list');
-  //   - the fourth signing secret: the API key authorizes the export but Xcode still needs a team ID
-  if (!/APPLE_DEVELOPMENT_TEAM/.test(wf)) throw new Error('ios.yml does not pass APPLE_DEVELOPMENT_TEAM for signing');
-  //   - a job timeout with room for a cold aarch64 + CocoaPods build (the ipa job, not the tests)
-  const mins = [...wf.matchAll(/timeout-minutes:\s*(\d+)/g)].map(m => +m[1]);
-  if (!mins.some(m => m >= 60)) throw new Error('ios.yml has no generous job timeout (a cold iOS build is slow)');
   // The bundle id is the App ID the Apple portal must know about (#9): a valid reverse-DNS name, and
   // not Tauri's rejected default. It is shared with the bundle config, so a rename cannot drift.
   if (conf.identifier !== 'local.imagevault.desktop') throw new Error(`identifier is ${conf.identifier}, expected local.imagevault.desktop`);

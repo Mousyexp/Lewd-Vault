@@ -1090,7 +1090,7 @@
     });
     // Google Drive without its app (it needs an administrator): the vault on this PC or Untraceable,
     // synced through a sign-in in the browser (drivesync.js, gdrive.rs)
-    const web = make('button', 'wl-opt');
+    const web = make('button', 'wl-opt wl-driveweb');
     web.type = 'button';
     const wi = make('span', 'wl-opt-icon s-gdrive');
     wi.innerHTML = SERVICE_ICONS.gdriveweb;
@@ -1098,7 +1098,7 @@
     web.onclick = () => confirmDriveWeb();
     const at = cards.findIndex(c => c.classList.contains('s-gdrive') || c.querySelector('.s-gdrive'));
     cards.splice(at + 1, 0, web);
-    const other = make('button', 'wl-opt');
+    const other = make('button', 'wl-opt wl-other');
     other.type = 'button';
     const oi = make('span', 'wl-opt-icon s-custom');
     oi.innerHTML = SERVICE_ICONS.custom;

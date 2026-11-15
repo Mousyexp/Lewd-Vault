@@ -209,10 +209,7 @@ impl Write for Writer {
         }
     }
     fn flush(&mut self) -> io::Result<()> {
-        self.f.flush()?;
-        // push the bytes to the storage device before the caller renames this temp file into place:
-        // on flash (iOS) a rename can otherwise land while the data behind it is still only cached
-        self.f.sync_all()
+        self.f.flush()
     }
 }
 

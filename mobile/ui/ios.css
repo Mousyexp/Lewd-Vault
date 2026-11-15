@@ -1,170 +1,340 @@
 /* =====================================================================================
-   iOS / Liquid Glass (iOS 26) — inspired by Apple Photos
+   The iOS skin
    -------------------------------------------------------------------------------------
-   The iOS skin. `mobile/ui/ios.js` supplies the structure (the bottom tab bar, the large
-   collapsing title, the floating viewer chrome); this file is its styling and nothing else.
-   `sync-ui.mjs` concatenates it after `ui/desktop.css` into the single `/mobile.css` the page
-   loads, so it can override the desktop rules — it must stay last.
+   `mobile/ui/ios.js` supplies the structure (the tab bar, sheets, the Library's title); this
+   file is the look. `sync-ui.mjs` appends it after `ui/desktop.css` in the one stylesheet the
+   page loads, so it can override the desktop rules: it must stay last.
 
-   A Tauri app draws one full-screen WKWebView, so there is no UIKit chrome for the system
-   to glass for free: the glass is drawn here. `-apple-visual-effect` (the real system
-   material, iOS 26) is used where WebKit honours it; `backdrop-filter` is the fallback that
-   always works. Glass is kept to the functional layer (bars, sheets, controls) so the
-   content grid stays the focus, as Apple's guidance says. Layout follows Photos: a large
-   collapsing title, a scrolling grid, a translucent bottom tab bar on phone widths, and a
-   viewer whose chrome floats over the media and hides on tap.
+   EVERY rule here starts with `html.ios`. Windows never has that class, so nothing in this
+   file can change the desktop app. (`tools/check.mjs` fails the build on a rule that doesn't.)
 
-   Everything here is gated on `html.ios` (or on `html.desktop`, which iOS also carries — see
-   mobile/docs/PORT.md §12), so on Windows none of it applies.
+   A Tauri app is one full-screen web view, so there is no system chrome to get Liquid Glass
+   for free: bars and sheets draw it here. `-apple-visual-effect` (the real system material,
+   iOS 26) where WebKit has it, `backdrop-filter` otherwise, a solid panel when the user asked
+   for reduced transparency.
+
+   Two layouts: phones (up to 820px wide) get the bottom tab bar and one column of everything;
+   iPads keep the desktop's sidebar.
    ===================================================================================== */
-html.desktop {
-  --glass-blur: 24px;
-  --glass-saturate: 1.8;
-  --glass-tint: color-mix(in srgb, var(--panel) 55%, transparent);
+html.ios {
+  --glass-tint: color-mix(in srgb, var(--panel) 62%, transparent);
   --glass-edge: color-mix(in srgb, var(--text) 14%, transparent);
-  --glass-sheen: rgba(255, 255, 255, .10);
-  --glass-radius: 22px;
-  --tabbar: 50px;              /* the bottom tab bar's height (phone widths) */
+  --tabbar: 54px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-l: env(safe-area-inset-left, 0px);
   --safe-r: env(safe-area-inset-right, 0px);
+  --bar: 0px;                                   /* the Windows title bar's height: there is none */
+  -webkit-tap-highlight-color: transparent;     /* the app draws its own pressed states */
+  -webkit-text-size-adjust: 100%;
 }
-
-/* the material: native first, web approximation everywhere, solid when transparency is off */
-.glass {
+html.ios .glass {
   background: var(--glass-tint);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-          backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+          backdrop-filter: blur(24px) saturate(1.8);
   border: 1px solid var(--glass-edge);
-  border-radius: var(--glass-radius);
-  box-shadow: inset 0 1px 0 var(--glass-sheen), var(--shadow);
 }
 @supports (-apple-visual-effect: -apple-system-glass-material) {
   html.ios .glass { -apple-visual-effect: -apple-system-glass-material; }
 }
 @media (prefers-reduced-transparency: reduce) {
-  html.desktop { --glass-tint: var(--panel); }
-  .glass { -webkit-backdrop-filter: none; backdrop-filter: none; }
+  html.ios .glass { background: var(--panel); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
-/* motion is the other half of Liquid Glass; drop the morph when it's asked for */
 @media (prefers-reduced-motion: reduce) {
-  html.desktop * { transition-duration: .001ms !important; animation-duration: .001ms !important; }
+  html.ios * { transition-duration: .001ms !important; animation-duration: .001ms !important; }
 }
 
-/* ---------- safe areas (notch, home indicator) ---------- */
-html.desktop body { padding-left: var(--safe-l); padding-right: var(--safe-r); }
-html.desktop header { padding-top: calc(18px + var(--safe-t)); padding-bottom: calc(14px + var(--safe-b)); }
-html.desktop main { padding-bottom: calc(48px + var(--safe-b)); }
-html.desktop .titlebar { padding-top: var(--safe-t); height: calc(var(--bar) + var(--safe-t)); }
-html.desktop #detail, html.desktop #collage { padding-top: var(--safe-t); }
+/* an app, not a document: no rubber-banding the whole page, no long-press callout on the chrome,
+   and nothing may ever make the page scroll sideways */
+html.ios, html.ios body { overflow-x: hidden; max-width: 100%; }
+html.ios body { overscroll-behavior: none; -webkit-touch-callout: none; padding-left: var(--safe-l); padding-right: var(--safe-r); }
+html.ios .titlebar { display: none; }           /* the window frame's bar (minimize, close...) */
+/* text fields under 16px make iOS zoom the page when they get focus */
+html.ios input, html.ios select, html.ios textarea { font-size: 16px; }
+/* desktop-only things: mouse cursors, the resize grips, keyboard hints */
+html.ios .side-grip, html.ios .tp-grip, html.ios .tp-fold, html.ios .side-fold, html.ios kbd, html.ios .hint:has(kbd) { display: none !important; }
+html.ios #detail, html.ios #collage { padding-top: var(--safe-t); }
 
-/* ---------- Apple Photos: large title that collapses on scroll ---------- */
-.photos-title {
-  position: sticky; top: 0; z-index: 6; margin: 0 0 10px; padding: 6px 2px 10px;
-  font-size: 34px; font-weight: 800; letter-spacing: -.02em; color: var(--text);
-  background: linear-gradient(to bottom, var(--bg) 70%, transparent);
-  transition: font-size .18s ease, padding .18s ease;
-}
-html.desktop .photos-title.small { font-size: 20px; padding: 2px 2px 8px; }
-/* the scroll edge effect: content hardens under the top instead of a hard line */
-.scroll-edge { position: sticky; top: 0; height: 0; z-index: 5; pointer-events: none; }
-.scroll-edge::after {
-  content: ''; position: absolute; inset: 0 0 auto; height: 18px;
-  background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 92%, transparent), transparent);
-}
+/* things with no meaning on iOS: a mouse pointer, a keyboard shortcut for the emergency key (More →
+   Hide now does that), picking a folder outside the app, and Google Drive's browser sign-in (iOS
+   suspends the app while Safari is in front, so the sign-in could never come back) */
+html.ios .wl-pointer, html.ios .pv-keyrow:not(.pv-moderow):not(.pv-videorow), html.ios .wl-other, html.ios .wl-driveweb, html.ios .wl-hint, html.ios .gd-box { display: none !important; }
 
-/* ---------- Apple Photos: the grid ---------- */
-html.ios #grid { gap: 2px; }
-html.ios .card {
-  border-radius: 8px; overflow: hidden;
-  transition: transform .18s cubic-bezier(.2, .8, .2, 1), box-shadow .18s;
+/* ---------- iOS controls: the system font, capsule buttons, filled fields, switches ---------- */
+html.ios body { font-family: -apple-system, "SF Pro Text", system-ui, "Helvetica Neue", sans-serif; letter-spacing: -.01em; }
+html.ios button, html.ios input, html.ios select, html.ios textarea { font-family: inherit; }
+html.ios { --ios-fill: color-mix(in srgb, var(--text) 12%, transparent); --ios-fill-2: color-mix(in srgb, var(--text) 7%, transparent); --spring: cubic-bezier(.2, .8, .2, 1); }
+/* buttons: a capsule that dims and shrinks a little under the finger (no desktop bevel, no hover) */
+html.ios .btn, html.ios .btn:hover {
+  min-height: 44px; padding: 0 18px; border: 0; border-radius: 99px; margin-bottom: 0;
+  background: var(--ios-fill); color: var(--text); box-shadow: none; filter: none;
+  font-size: 16px; font-weight: 600; letter-spacing: -.01em;
+  transition: transform .18s var(--spring), opacity .18s ease;
 }
-html.ios .card:active { transform: scale(.96); }
-/* the "+1" / month dividers Photos uses between date groups */
-html.ios .grid-group-head {
-  grid-column: 1 / -1; margin: 14px 4px 6px; font-size: 21px; font-weight: 750; letter-spacing: -.01em; color: var(--text);
+html.ios .btn:active:not(:disabled) { transform: scale(.96); opacity: .62; border: 0; margin-bottom: 0; }
+html.ios .btn.primary, html.ios .btn.primary:hover { background: var(--accent); color: #fff; box-shadow: none; }
+html.ios .btn.danger, html.ios .btn.danger:hover { background: color-mix(in srgb, var(--danger, #ff453a) 16%, transparent); color: var(--danger, #ff453a); }
+html.ios .btn.sm { min-height: 34px; padding: 0 13px; font-size: 14px; }
+html.ios .btn:disabled { opacity: .4; }
+html.ios .linkish { color: var(--accent); font-weight: 600; }
+/* fields: filled and rounded, no outline box */
+html.ios input[type=text], html.ios input[type=password], html.ios input[type=number], html.ios input[type=search], html.ios input:not([type]), html.ios select, html.ios textarea {
+  min-height: 44px; border: 0; border-radius: 12px; background-color: var(--ios-fill-2); color: var(--text); box-shadow: none;
 }
+html.ios input:focus, html.ios select:focus, html.ios textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 0; }
+html.ios .searchbar, html.ios .searchbar:focus-within { border: 0; border-radius: 12px; background: var(--ios-fill-2); box-shadow: none; }
+html.ios .searchbar input, html.ios .tagbox input { background: transparent; outline: 0; min-height: 40px; }
+html.ios .st-search { border: 0; border-radius: 12px; background: var(--ios-fill-2); gap: 10px; }
+html.ios .st-search .search-icon { position: static; flex: none; transform: none; }
+html.ios .st-search input { min-height: 0; outline: 0; }
+/* a checkbox is a switch */
+html.ios input[type=checkbox] {
+  -webkit-appearance: none; appearance: none; flex: none; width: 51px; height: 31px; margin: 0; border: 0; border-radius: 99px;
+  background-color: color-mix(in srgb, var(--text) 22%, transparent);
+  background-image: radial-gradient(circle, #fff 0 62%, rgba(0, 0, 0, .12) 64%, transparent 68%);
+  background-size: 29px 29px; background-repeat: no-repeat; background-position: 1px 50%;
+  transition: background-color .22s ease, background-position .22s var(--spring);
+}
+html.ios input[type=checkbox]:checked { background-color: #34c759; background-position: 21px 50%; }
+html.ios input[type=range] { accent-color: var(--accent); min-height: 30px; background: transparent; }
+/* panels and cards: one soft radius, no outline */
+html.ios .setting { min-height: 50px; border-bottom-color: color-mix(in srgb, var(--text) 8%, transparent); }
+html.ios h3 { letter-spacing: .02em; }
+/* the long-press menu: an iOS context menu */
+html.ios .lv-menu { border: 0; border-radius: 16px; padding: 0; overflow: hidden; min-width: 240px;
+  background: color-mix(in srgb, var(--panel) 78%, transparent); -webkit-backdrop-filter: blur(30px) saturate(1.8); backdrop-filter: blur(30px) saturate(1.8);
+  box-shadow: 0 20px 60px -10px rgba(0, 0, 0, .65); animation: ios-pop .22s var(--spring); transform-origin: top left; }
+html.ios .lv-item { min-height: 46px; padding: 0 16px; border-radius: 0; font-size: 16px; border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent); }
+html.ios .lv-item:active { background: var(--ios-fill); }
+html.ios .lv-hint { display: none; }
+html.ios .lv-sep { height: 7px; margin: 0; background: color-mix(in srgb, #000 22%, transparent); }
+@keyframes ios-pop { from { opacity: 0; transform: scale(.82); } }
+@keyframes ios-in { from { opacity: 0; transform: translateY(10px); } }
+@keyframes ios-zoom { from { opacity: 0; transform: scale(.94); } }
+/* a section eases in when you switch to it; the viewer zooms open */
+html.ios main > section:not(.hidden) { animation: ios-in .34s var(--spring); }
+html.ios #detail:not(.hidden) { animation: ios-zoom .3s var(--spring); background: rgba(0, 0, 0, var(--fade, 1)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+html.ios #toast:not(.hidden) { border-radius: 99px; border: 0; animation: ios-in .3s var(--spring); }
 
-/* ---------- Apple Photos: bottom tab bar (phone widths) ---------- */
-.photos-tabbar {
-  display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
-  height: calc(var(--tabbar) + var(--safe-b)); padding: 0 8px var(--safe-b);
-  align-items: stretch; justify-content: space-around;
-  background: var(--glass-tint);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-          backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  border-top: 1px solid var(--glass-edge);
+/* ---------- sheets ---------- */
+html.ios .ios-back {
+  position: fixed; inset: 0; z-index: 300; display: flex; align-items: flex-end; justify-content: center;
+  background: rgba(8, 4, 6, 0); pointer-events: none; transition: background .22s ease;
 }
-@supports (-apple-visual-effect: -apple-system-glass-material) {
-  html.ios .photos-tabbar { -apple-visual-effect: -apple-system-glass-material; }
+html.ios .ios-back.in { background: rgba(8, 4, 6, .5); pointer-events: auto; }
+html.ios .ios-sheet {
+  width: min(100%, 520px); max-height: 82vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  border-radius: 26px 26px 0 0; border-bottom: 0; padding: 8px 16px calc(18px + var(--safe-b));
+  box-shadow: 0 -18px 50px -18px rgba(0, 0, 0, .7); color: var(--text);
+  transform: translateY(102%); transition: transform .26s cubic-bezier(.2, .8, .2, 1);
 }
-.photos-tabbar button {
-  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  border: 0; background: transparent; color: var(--dim); font-size: 10.5px; font-weight: 600;
-  transition: color .15s, transform .12s;
+html.ios .ios-back.in .ios-sheet { transform: none; }
+html.ios .ios-grab { width: 38px; height: 5px; border-radius: 99px; margin: 2px auto 10px; background: color-mix(in srgb, var(--text) 28%, transparent); }
+html.ios .ios-sheet-title { margin: 0 4px 10px; font-size: 22px; font-weight: 800; letter-spacing: -.01em; }
+html.ios .ios-list { display: grid; border-radius: 16px; overflow: hidden; background: color-mix(in srgb, var(--text) 6%, transparent); }
+html.ios .ios-row {
+  display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 0 16px; border: 0; background: transparent;
+  color: var(--text); font: inherit; font-size: 17px; font-weight: 600; text-align: left;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
-.photos-tabbar button::before {
-  content: ''; width: 24px; height: 24px; background: currentColor;
+html.ios .ios-row:last-child { border-bottom: 0; }
+html.ios .ios-row:active { background: color-mix(in srgb, var(--text) 10%, transparent); }
+html.ios .ios-row::before {
+  content: ''; flex: none; width: 24px; height: 24px; background: var(--accent);
   -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat;
 }
-.photos-tabbar button.on { color: var(--accent); }
-.photos-tabbar button:active { transform: scale(.9); }
+html.ios .ios-row.danger { color: var(--accent); }
+/* confirm / prompt */
+html.ios .ios-ask-text { margin: 6px 4px 14px; font-size: 16.5px; line-height: 1.45; font-weight: 600; }
+html.ios .ios-ask-input { width: 100%; height: 48px; margin-bottom: 14px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+html.ios .ios-ask-acts { display: flex; gap: 10px; }
+html.ios .ios-ask-acts .btn { flex: 1; min-height: 50px; font-size: 17px; }
 
-/* iOS: the Windows title bar is the window frame, so it's gone; its height goes back to the content */
-html.ios { --bar: 0px; }
-html.ios .titlebar { display: none; }
+/* the cover while the app is in the background (the app switcher's snapshot) */
+html.ios .ios-cover { position: fixed; inset: 0; z-index: 2147483600; background: #15171c; display: none; }
+html.ios .ios-cover.on { display: block; }
 
-/* ---------- iOS web-platform defaults ---------- */
-/* the grey flash Safari paints on every tap; the app draws its own :active states */
-html.ios { -webkit-tap-highlight-color: transparent; -webkit-text-size-adjust: 100%; }
-/* an app, not a document: no rubber-band past the ends, no long-press callout/magnifier on chrome */
-html.ios body { overscroll-behavior: none; -webkit-touch-callout: none; }
-/* the large title's backdrop must cover the notch area too, so the text never slides out from under it */
-html.ios .photos-title { padding-top: calc(6px + var(--safe-t)); }
-/* keep the inset when the title collapses (the .small rule would otherwise drop it to 2px) */
-html.ios .photos-title.small { padding-top: calc(2px + var(--safe-t)); }
-/* compact widths (iPhone): the sidebar becomes the bottom tab bar, as Photos does. Regular widths
-   (iPad) keep the sidebar — also what Photos does. */
+/* ---------- the tab bar: a floating glass capsule (iOS 26) ---------- */
+html.ios .ios-tabbar { display: none; }
+html.ios .ios-tabbar button {
+  position: relative; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  border: 0; border-radius: 99px; background: transparent; color: color-mix(in srgb, var(--text) 78%, transparent);
+  font: inherit; font-size: 10.5px; font-weight: 600; transition: color .2s, transform .25s var(--spring), background-color .25s;
+}
+html.ios .ios-tabbar button::before {
+  content: ''; width: 25px; height: 25px; background: currentColor; transition: transform .3s var(--spring);
+  -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat;
+}
+html.ios .ios-tabbar button.on { color: var(--accent); background: color-mix(in srgb, var(--text) 10%, transparent); }
+html.ios .ios-tabbar button.on::before { transform: scale(1.08); }
+html.ios .ios-tabbar button:active { transform: scale(.9); }
+
+/* =====================================================================================
+   The Library, like Photos (phones and iPads)
+   ===================================================================================== */
+html.ios { --tabbar: 0px; --tab-b: 8px; }      /* (no tab bar on an iPad: the sidebar stays) */
+html.ios main:has(> #tab-library:not(.hidden)) { padding: 0 0 calc(var(--tabbar) + var(--tab-b) + 76px); }
+html.ios .lib-layout, html.ios .lib-layout.tags-folded { display: block; }
+html.ios .lib-main { min-width: 0; }
+/* the grid: squares, edge to edge, hairline gaps, starting under the status bar */
+html.ios #grid, html.ios #grid.rows { gap: 2px; padding: 0; margin: 0; }
+html.ios #grid[data-layout="grid"] { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+html.ios #grid[data-layout="grid"] > .card { aspect-ratio: 1 !important; width: auto !important; height: auto !important; }
+html.ios #grid .card, html.ios #grid .card:hover { border-radius: 0; box-shadow: none; transform: none; transition: transform .22s var(--spring), opacity .2s; }
+html.ios #grid .card:active { transform: scale(.96); opacity: .8; }
+html.ios #grid .card .badge, html.ios #grid .card .tag { transform: scale(.82); transform-origin: top right; }
+/* over it: the title and count on a soft shade (Photos' date header), the tools on the right */
+html.ios .ios-libhead {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  position: fixed; left: var(--side, 0px); right: 0; top: 0; z-index: 30; pointer-events: none;
+  padding: calc(var(--safe-t) + 10px) 14px 34px 16px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, .62), rgba(0, 0, 0, .28) 55%, transparent);
+}
+html.ios #tab-library.hidden .ios-libhead, html.ios #tab-library.hidden .ios-seg { display: none; }
+html.ios .ios-libwords { min-width: 0; color: #fff; text-shadow: 0 1px 10px rgba(0, 0, 0, .55); }
+html.ios .ios-title { margin: 0; font-size: 32px; line-height: 1.1; font-weight: 800; letter-spacing: -.025em; color: #fff; transform-origin: left top; transition: transform .3s var(--spring); }
+html.ios .ios-sub { display: block; margin-top: 2px; font-size: 15px; font-weight: 600; opacity: .92; transition: opacity .2s; }
+html.ios .ios-libhead.small .ios-title { transform: scale(.66); }
+html.ios .ios-libhead.small .ios-sub { opacity: 0; }
+html.ios .ios-libtools { display: flex; align-items: center; gap: 8px; pointer-events: auto; }
+html.ios .ios-pill, html.ios .ios-round {
+  height: 34px; border: 0; color: #fff; font-size: 15px; font-weight: 650;
+  background: rgba(70, 70, 76, .62); -webkit-backdrop-filter: blur(18px) saturate(1.6); backdrop-filter: blur(18px) saturate(1.6);
+  transition: transform .2s var(--spring), background-color .2s;
+}
+html.ios .ios-pill { padding: 0 14px; border-radius: 99px; }
+html.ios .ios-pill.on { background: var(--accent); }
+html.ios .ios-round { width: 34px; border-radius: 50%; display: grid; place-items: center; }
+html.ios .ios-round::before {
+  content: ''; width: 17px; height: 17px; background: currentColor;
+  -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat;
+}
+html.ios .ios-pill:active, html.ios .ios-round:active { transform: scale(.9); }
+/* the switcher above the tab bar: All / Pictures / GIFs / Videos */
+html.ios .ios-seg {
+  display: grid; grid-template-columns: repeat(var(--n, 4), 1fr); position: fixed; z-index: 39;
+  left: calc(50% + var(--side, 0px) / 2); transform: translateX(-50%); width: min(calc(100% - var(--side, 0px) - 44px), 380px); bottom: calc(var(--tabbar) + var(--tab-b) + 12px);
+  height: 40px; padding: 3px; border-radius: 99px; box-shadow: 0 8px 26px -10px rgba(0, 0, 0, .6);
+}
+html.ios .ios-seg button { position: relative; z-index: 1; border: 0; background: transparent; color: color-mix(in srgb, var(--text) 80%, transparent); font-size: 14.5px; font-weight: 650; transition: color .2s; }
+html.ios .ios-seg button.on { color: #fff; }
+html.ios .ios-seg-thumb {
+  position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / var(--n, 4)); border-radius: 99px;
+  background: color-mix(in srgb, var(--text) 30%, transparent); box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+  transform: translateX(calc(var(--at, 0) * 100%)); transition: transform .34s var(--spring);
+}
+/* the multi-select bar sits where the switcher was */
+html.ios .ms-bar { left: calc(var(--side, 0px) + 12px); right: 12px; width: auto; max-width: none; transform: none; justify-content: center; bottom: calc(var(--tabbar) + var(--tab-b) + 10px); border-radius: 22px; z-index: 39; }
+html.ios .ms-bar > * { flex-wrap: wrap; justify-content: center; min-width: 0; }
+html.ios body:has(.ms-bar:not(.hidden)) .ios-seg { display: none; }
+html.ios #grid .card.picked-many { transform: scale(.9); border-radius: 10px; }
+/* Search & filters, and Tags: sheets made of the page's own controls */
+html.ios .ios-dock-back { display: flex; z-index: 300; }
+html.ios .ios-dock, html.ios .tag-panel {
+  display: block; position: fixed !important; left: 0; right: 0; bottom: 0; top: auto !important; z-index: 301; width: min(100%, 560px); max-width: none; margin: 0 auto;
+  height: auto !important; max-height: 80vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: 8px 16px calc(20px + var(--safe-b)); border-radius: 26px 26px 0 0;
+  border: 1px solid var(--glass-edge); border-bottom: 0; background: var(--panel);
+  box-shadow: 0 -18px 50px -18px rgba(0, 0, 0, .7);
+  transform: translateY(102%); visibility: hidden;
+  transition: transform .34s var(--spring), visibility 0s linear .34s;
+}
+html.ios .ios-dock.in, html.ios.ios-tags-open .tag-panel { transform: none; visibility: visible; transition-delay: 0s; }
+html.ios.ios-dock-open .ios-tabbar, html.ios.ios-dock-open .ios-seg { display: none; }
+html.ios .ios-filters .searchbar { margin: 0 0 12px; }
+html.ios .ios-filters .lib-filterrow { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; align-items: center; }
+html.ios .ios-filters .lib-filterrow > * { min-width: 0; }
+html.ios .ios-filters .filters { flex: 1 1 100%; }
+html.ios .ios-filters #count { display: none; }
+html.ios .tag-panel .tag-list { display: block; }
+html.ios .tag-panel .tag-list li { grid-template-columns: 40px 40px minmax(0, 1fr) auto; gap: 4px; min-height: 46px; padding: 0 2px; border-bottom: 1px solid color-mix(in srgb, var(--text) 7%, transparent); }
+html.ios .tag-panel .tl-op { width: 34px; height: 34px; opacity: 1; }
+html.ios .tag-panel .tl-name { text-align: left; font-size: 16px; }
+
+
+/* =====================================================================================
+   Phones
+   ===================================================================================== */
 @media (max-width: 820px) {
+  html.ios { --side: 0px; }                     /* no sidebar: the tab bar replaces it */
   html.ios header { display: none; }
-  html.ios main { margin-left: 0; padding-top: calc(var(--safe-t) + 12px); padding-bottom: calc(var(--tabbar) + 28px + var(--safe-b)); }
-  /* the tabs that are full-bleed on the desktop (Library's grid, Discover, Videos/Audio, Profile)
-     keep their 0 side padding but need the notch and tab bar clearances */
-  html.ios main:has(> #tab-library:not(.hidden)),
-  html.ios main:has(> #tab-discover:not(.hidden)),
-  html.ios main:has(> :is(#tab-videos, #tab-audio):not(.hidden)),
-  html.ios main:has(> #tab-profile:not(.hidden)) {
-    padding-top: calc(var(--safe-t) + 8px);
-    padding-bottom: calc(var(--tabbar) + 28px + var(--safe-b));
+  html.ios { --tabbar: 62px; --tab-b: max(10px, calc(var(--safe-b) - 6px)); }
+  html.ios #grid[data-layout="grid"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  html.ios .ios-tabbar {
+    display: flex; position: fixed; left: 14px; right: 14px; bottom: var(--tab-b); z-index: 40;
+    height: var(--tabbar); padding: 5px; gap: 2px; border-radius: 99px;
+    box-shadow: 0 10px 34px -10px rgba(0, 0, 0, .6), inset 0 1px 0 rgba(255, 255, 255, .1);
   }
-  html.ios .photos-tabbar { display: flex; }
-  /* the Library's filter row and the Clean up toolbar are single-line flex rows sized for a wide
-     desktop window; on a phone (they overflow below ~390px) let them wrap instead of scrolling the
-     whole page sideways */
-  html.ios .lib-filterrow { flex-wrap: wrap; }
-  html.ios .lib-filterrow > .filters { flex: 1 1 100%; }
+  /* full-screen layers (the viewer, the slideshow, the welcome screen, the emergency cover) own the screen */
+  html.ios body:has(#detail:not(.hidden), #show:not(.hidden), #collage:not(.hidden), #welcome:not(.hidden), .dc-view:not(.hidden), .pv-screen, .pin-lock:not(.hidden)) .ios-tabbar { display: none; }
+  html.ios main, html.ios main:has(> section:not(.hidden)) {
+    margin-left: 0; width: 100%; min-width: 0;
+    padding: calc(var(--safe-t) + 10px) 16px calc(var(--tabbar) + var(--tab-b) + 26px);
+  }
+  /* the sections that run edge to edge (their own content has the side padding) */
+  html.ios main:has(> :is(#tab-library, #tab-discover, #tab-videos, #tab-audio, #tab-profile):not(.hidden)) { padding-left: 0; padding-right: 0; }
+  html.ios main > section { min-width: 0; max-width: 100%; }
+  /* the room decorations (the girls beside pages) need a wide window */
+  html.ios .decor, html.ios [class^="decor-"], html.ios [class*=" decor-"] { display: none !important; }
+  /* comfortable tap targets */
+  html.ios .btn { min-height: 44px; }
+
+  /* ----- Add ----- */
+  html.ios #tab-add:not(.hidden), html.ios #tab-add:has(> #drop:not(.hidden)) { display: block; }
+  html.ios #drop { width: auto; min-height: 170px; margin: 0 0 14px; padding: 22px 16px; }
+  html.ios .add-links { position: static; width: auto; margin: 0 0 14px; }
+  html.ios #tagger { display: block; }
+  html.ios #tagger.hidden { display: none; }
+  html.ios #preview { position: static; max-height: 46vh; margin-bottom: 14px; }
+  html.ios #preview img, html.ios #preview video { max-height: 46vh; width: 100%; object-fit: contain; }
+  html.ios #tagForm { padding-bottom: 8px; }
+
+  /* ----- the viewer: the picture on top, its details scroll under it ----- */
+  html.ios #detail:not(.hidden) { display: block; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: var(--safe-b); }
+  html.ios #detail .big { position: relative; min-height: 0; height: auto; max-height: none; }
+  html.ios #detail .big img, html.ios #detail .big video { width: 100%; height: auto; max-height: 72vh; object-fit: contain; display: block; }
+  html.ios #detail aside { width: auto; max-width: none; height: auto; overflow: visible; border-left: 0; padding: 14px 16px 24px; }
+  html.ios .nav-arrow { width: 40px; height: 40px; }
+  /* handing a file to another app or a file manager: there is neither on a phone */
+  html.ios #dOpen, html.ios .ios-no { display: none !important; }
+
+  /* ----- sheets and panels made for a wide window ----- */
+  html.ios .dc-sheet { padding: 0; align-items: flex-end; }
+  html.ios .dc-sheet-card { width: 100%; max-width: none; max-height: 88vh; border-radius: 26px 26px 0 0; padding-bottom: calc(16px + var(--safe-b)); }
+  html.ios .coach { left: 8px; right: 8px; width: auto; bottom: calc(var(--tabbar) + var(--tab-b) + 8px); max-height: 74vh; overflow-y: auto; }
+  html.ios .welcome { padding: calc(var(--safe-t) + 12px) 12px calc(var(--safe-b) + 12px); }
+  html.ios .wl-card { width: 100%; padding: 22px 16px; }
+  html.ios .wl-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  html.ios .wl-actions { flex-wrap: wrap; }
+  html.ios .wl-where code { word-break: break-all; }
+
+  /* ----- everything else: one column ----- */
+  html.ios .pf-stats-grid, html.ios .charts, html.ios .pf-overview, html.ios .sh-grid, html.ios .sh-panel { grid-template-columns: minmax(0, 1fr); }
+  html.ios .pf-card, html.ios .chart, html.ios .tile { min-width: 0; max-width: 100%; overflow-x: auto; }
+  html.ios .chart svg, html.ios .pf-card svg { max-width: 100%; }
+  html.ios .pf-who { flex-wrap: wrap; gap: 12px; padding-left: 16px; padding-right: 16px; }
+  html.ios .pf-names { min-width: 0; flex: 1 1 180px; }
+  html.ios .pf-name { width: 100%; min-width: 0; }
+  html.ios .pf-level { min-width: 0; flex-wrap: wrap; }
+  html.ios .pf-xp { min-width: 0; }
+  html.ios .pf-road { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  /* the slideshow: its top strip wraps, its controls fit the width */
+  html.ios #showTop { flex-wrap: wrap; gap: 6px 10px; padding-top: calc(var(--safe-t) + 10px); align-items: center; }
+  html.ios #showLevels { flex: 1 1 100%; justify-content: center; }
+  html.ios #showInfo { flex: 1 1 100%; text-align: center; white-space: normal; }
+  html.ios .show-cats { flex: 1 1 100%; flex-direction: row; flex-wrap: wrap; justify-content: center; }
+  html.ios #showBottom { padding-bottom: calc(var(--safe-b) + 14px); }
+  html.ios .show-bar { max-width: calc(100vw - 16px); gap: 0; padding: 4px; }
+  html.ios .show-bar > * { flex: 0 1 auto; min-width: 0; }
+  html.ios .show-bar button { min-width: 0; width: 42px; height: 44px; padding: 0; }
+  html.ios #sFull { display: none; }             /* the slideshow already fills the screen */
+  html.ios .show-bar .sep, html.ios .show-bar hr, html.ios .show-bar i { display: none; }
+  html.ios .show-setup { display: block; }
+  html.ios .show-summary { position: static; width: auto; margin: 0 0 16px; }
   html.ios .cleanup-bar { flex-wrap: wrap; }
   html.ios .cleanup-bar p { flex: 1 1 100%; }
+  html.ios .setting { flex-wrap: wrap; }
+  html.ios .mt-row .s-label { flex: 1 1 100%; }
+  html.ios .pv-keyrow { flex-wrap: wrap; }
+  html.ios .pv-clock { left: 24px; bottom: calc(var(--safe-b) + 90px); }
 }
-
-/* ---------- Apple Photos: the viewer's floating chrome ---------- */
-.viewer-chrome {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 41;
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 10px 14px calc(10px + var(--safe-b));
-  background: var(--glass-tint);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-          backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  border-top: 1px solid var(--glass-edge);
-  transition: opacity .2s ease, transform .2s ease;
-}
-.viewer-chrome .vc-btn {
-  width: 44px; height: 44px; border-radius: 50%; border: 0; color: var(--text);
-  background: color-mix(in srgb, var(--text) 8%, transparent);
-  display: grid; place-items: center; transition: background .15s, transform .12s;
-}
-.viewer-chrome .vc-btn:active { transform: scale(.92); }
-.viewer-chrome .vc-btn::before { content: ''; width: 22px; height: 22px; background: currentColor; -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
-.viewer-chrome .vc-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 650; }
-.viewer-chrome.hidden-chrome { opacity: 0; transform: translateY(100%); pointer-events: none; }
