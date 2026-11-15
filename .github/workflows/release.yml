@@ -90,13 +90,8 @@ jobs:
           files: |
             Lewd Vault.msi
             Lewd Vault Portable.zip
-          generate_release_notes: true
-          body: |
-            **Two ways to get it:**
-            - **Lewd.Vault.msi**: the installer. It puts Lewd Vault in Program Files with a Start menu entry; your vault goes in Documents\Image Vault data (or wherever you choose).
-            - **Lewd.Vault.Portable.zip**: unzip it anywhere (a USB stick works too) and run Lewd Vault.exe. Your vault sits next to it.
-
-            Both update themselves from Settings → Updates.
+          # (the same short notes as every release; Build iOS / Build Android add their files to it)
+          body_path: .github/release-notes.md
       # the 1.0 release replaces the earlier test release (one time only)
       - name: Remove the earlier releases and tags
         if: github.ref_name == 'v1.0.0'
