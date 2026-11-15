@@ -41,6 +41,8 @@ There is no local build without a Mac. **Actions → Build iOS → Run workflow*
 macOS runner, and uploads the **LewdVault-ipa** artifact.
 
 - Unsigned by default (`--no-sign`): sign it on the device with AltStore or SideStore.
+- Fill in **release** (a tag, such as `v1.2.0`) and the IPA is also attached to that release as
+  `Lewd.Vault.iOS.ipa`, replacing the one already there.
 - With the repository secrets `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` and
   `APPLE_DEVELOPMENT_TEAM` (a paid Apple Developer account, with the App ID
   `local.imagevault.desktop` registered), tick **signed** for an IPA that installs directly.

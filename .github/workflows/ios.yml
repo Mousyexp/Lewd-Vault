@@ -15,6 +15,10 @@ on:
         description: 'Build a signed IPA (needs the four Apple secrets). Leave off for the first run.'
         type: boolean
         default: false
+      release:
+        description: 'Also attach the IPA to this release (its tag, e.g. v1.2.0), replacing an IPA already there'
+        type: string
+        default: ''
   push:
     branches: [main]
     # (only when something the app is built from changed: a macOS build for a README edit is a waste)
@@ -91,6 +95,9 @@ jobs:
     # A cold run compiles the whole Rust tree for aarch64-apple-ios plus the CocoaPods graph. Give it
     # room so a slow first build does not hit the limit (later runs reuse the caches below).
     timeout-minutes: 90
+    # (write, only to attach the IPA to a release when the run asks for it; see the last step)
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -187,3 +194,14 @@ jobs:
           path: |
             src-tauri/gen/apple/**/*.ipa
           if-no-files-found: error
+      # Run workflow with "release" set: the IPA goes onto that release as Lewd.Vault.iOS.ipa, replacing
+      # the one there (--clobber), next to the Windows downloads.
+      - name: Attach the IPA to the release
+        if: github.event_name == 'workflow_dispatch' && inputs.release != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release }}
+        run: |
+          ipa=$(find src-tauri/gen/apple -name '*.ipa' | head -1)
+          cp "$ipa" Lewd.Vault.iOS.ipa
+          gh release upload "$TAG" Lewd.Vault.iOS.ipa --clobber --repo "$GITHUB_REPOSITORY"
