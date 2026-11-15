@@ -158,6 +158,14 @@ On a phone the app is laid out like Photos:
   What's sorted is kept in the vault (`_app/kv/phone-sort.json`), so every device agrees.
 - **The level dial**: tap the level in the viewer's toolbar (or in Stories and Sort) and slide your
   thumb along the half circle; it saves when you let go.
+- **The Browser** works like Safari: the address bar sits at the bottom (back, the site and your
+  search, reload, tabs, the page menu) and shrinks to a small pill while you scroll. Tap the address
+  for the search page (favourite sites, bookmarks, recent searches, the site's tag suggestions), the
+  tabs button for every source as a card, and pull down to reload. Swipe from the left edge to go
+  back. A post opens large with its details underneath: swipe for the next, down to close.
+  **⋯ → Customise the Browser**: the bar at the bottom or the top; pictures whole, 2 or 3 across, or
+  as a feed; filters in a sheet or at the top; hide the bars while scrolling; colour the bar like the
+  site; edge swipes; pull to reload; blur the previews.
 - The app covers itself while it is in the background, so the app switcher shows nothing.
 
 Not on the phones: the global emergency shortcut, opening files in other apps, cloud-folder choices,

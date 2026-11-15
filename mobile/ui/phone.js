@@ -18,6 +18,8 @@
 //      then goes back to the Library, and only then leaves the app,
 //   8. phone-only extras: the level dial, Stories (rings over the Library) and Sort (swipe the new
 //      ones into 1, 2 or 3 stars), and the motion that goes with them.
+//   9. the Browser like Safari: an address bar at the bottom, a start page, tabs, a page menu, pull to
+//      reload, swipes from the edges, and Customise (where the bar sits, how pictures are laid out...).
 // The look is mobile/ui/phone.css.
 (() => {
   'use strict';
@@ -40,6 +42,13 @@
     torch: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.800' stroke-linejoin='round'><path d='M8 3h8v3l-2 3v11a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1V9L8 6z'/><path d='M12 12v3' stroke-linecap='round'/></svg>",
     camera: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.800' stroke-linejoin='round'><path d='M3 8.500A1.500 1.500 0 0 1 4.500 7H8l1.500-2h5L16 7h3.500A1.500 1.500 0 0 1 21 8.500v9a1.500 1.500 0 0 1-1.500 1.500h-15A1.500 1.500 0 0 1 3 17.500z'/><circle cx='12' cy='13' r='3.500'/></svg>",
     search: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'><circle cx='11' cy='11' r='6.5'/><path d='M16 16l4.5 4.5'/></svg>",
+    chevl: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.600' stroke-linecap='round' stroke-linejoin='round'><path d='M15 5l-7 7 7 7'/></svg>",
+    chevr: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.600' stroke-linecap='round' stroke-linejoin='round'><path d='M9 5l7 7-7 7'/></svg>",
+    sliders: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.200' stroke-linecap='round'><path d='M4 7h9M17 7h3M4 17h3M11 17h9'/><circle cx='15' cy='7' r='2.200'/><circle cx='9' cy='17' r='2.200'/></svg>",
+    reload: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.400' stroke-linecap='round' stroke-linejoin='round'><path d='M19.500 12a7.500 7.500 0 1 1-2.200-5.300'/><path d='M19.500 4.500v4.200h-4.200'/></svg>",
+    tabs: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.100' stroke-linejoin='round'><rect x='4' y='7' width='13' height='13' rx='3'/><path d='M8 4h9a3 3 0 0 1 3 3v9'/></svg>",
+    star: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.100' stroke-linejoin='round'><path d='M12 3.500l2.600 5.400 5.900.8-4.300 4.100 1 5.800L12 16.900l-5.200 2.700 1-5.800L3.500 9.700l5.900-.8z'/></svg>",
+    brush: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M14.500 4.500l5 5L11 18l-5-5z'/><path d='M6 13c-2 0-3 1.500-3 3.500S2 20 2 20s3.500.5 5-1 1-3.500 1-3.500'/></svg>",
     cards: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'><rect x='6' y='3' width='12' height='16' rx='2.500' transform='rotate(-8 12 11)'/><rect x='6' y='5' width='12' height='16' rx='2.500' transform='rotate(7 12 13)'/></svg>",
     tags: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 12V4h8l10 10-8 8z'/><circle cx='7.500' cy='8.500' r='1.300' fill='black'/></svg>"
   };
@@ -589,7 +598,8 @@
       drag: (dx, dy, axis) => { if (axis === 'y' && dy < 0) screen.style.setProperty('--lift', Math.max(-90, dy / 3) + 'px'); },
       settle: () => screen.style.removeProperty('--lift')
     });
-    screen.addEventListener('touchstart', e => { clearTimeout(timer); if (e.target.closest('.pv-clock')) timer = setTimeout(comeBack, 1000); }, { passive: true });
+    // (the finger is still down when it opens: the tap its lift makes must not land on the app beneath)
+    screen.addEventListener('touchstart', e => { clearTimeout(timer); if (e.target.closest('.pv-clock')) timer = setTimeout(() => { swallowTap(); comeBack(); }, 1000); }, { passive: true });
     for (const ev of ['touchend', 'touchcancel', 'touchmove']) screen.addEventListener(ev, () => clearTimeout(timer), { passive: true });
   }).observe(document.body, { childList: true });
 
@@ -629,7 +639,7 @@
       keys.append(b);
     }
     let timer = null;
-    display.addEventListener('touchstart', () => { clearTimeout(timer); if (!pin()) timer = setTimeout(open, 1000); }, { passive: true });
+    display.addEventListener('touchstart', () => { clearTimeout(timer); if (!pin()) timer = setTimeout(() => { swallowTap(); open(); }, 1000); }, { passive: true });
     for (const ev of ['touchend', 'touchcancel', 'touchmove']) display.addEventListener(ev, () => clearTimeout(timer), { passive: true });
     document.body.append(calc);
   }
@@ -1225,6 +1235,370 @@
         setTimeout(() => c.classList.remove('ph-land'), 700);
       }
     }).observe(detail, { attributes: true, attributeFilter: ['class'] });
+  }
+
+  // ---------- 9. the Browser, like Safari ----------
+  // The desktop's Browser keeps its whole toolbar at the top (tabs, search, sort, levels, size,
+  // categories), which on a phone is half the screen. Here the pictures get the screen and the
+  // controls move where Safari keeps them:
+  //   the address bar   at the bottom (or the top: your choice): back, the site and what you searched
+  //                     (tap it to search), reload, the tabs and the page menu; it shrinks to a small
+  //                     pill while you scroll down, like Safari's
+  //   the start page    tapping the address: the search box over your favourite sites, bookmarks and
+  //                     recent searches; the site's tag suggestions come up as you type
+  //   the tabs          every source as a card, like Safari's tab overview
+  //   the page menu     reload, bookmark, forward, filters (sort, levels, tile size, categories),
+  //                     sources and keys, and Customise
+  // plus pull down to reload and swipes from the screen's edges for back and forward. Every control
+  // presses the Browser's own buttons, so nothing about searching or saving is done twice.
+  const dtab = $('tab-discover');
+  if (dtab) {
+    const dq = sel => dtab.querySelector(sel);
+    const KV = 'phone-browser';
+    const DEF = { bar: 'bottom', layout: 'rows', autohide: true, filters: 'menu', tint: true, edges: true, blur: false, pull: true };
+    let opt = { ...DEF };
+    const RECENT = 'lv.phone.recent';
+    const recent = () => { try { return JSON.parse(localStorage.getItem(RECENT)) || []; } catch (e) { return []; } };
+    const remember = text => { const t = String(text || '').trim(); if (!t) return; try { localStorage.setItem(RECENT, JSON.stringify([t, ...recent().filter(x => x !== t)].slice(0, 10))); } catch (e) {} };
+    const apply = () => {
+      html.dataset.brBar = opt.bar;
+      html.dataset.brLayout = opt.layout;
+      html.classList.toggle('br-tint', !!opt.tint);
+      html.classList.toggle('br-blur', !!opt.blur);
+      html.classList.toggle('br-filters-top', opt.filters === 'top');
+      placeFilters();
+    };
+    const saveOpt = () => { apply(); api('kvSet', KV, opt).catch(() => {}); };
+    (typeof setupReady !== 'undefined' ? setupReady : Promise.resolve()).then(async () => {
+      try { const v = await api('kvGet', KV); if (v && typeof v === 'object') opt = { ...DEF, ...v }; } catch (e) {}
+      apply();
+    });
+
+    // the bar
+    const sbar = make('div', 'ph-sbar');
+    const pill = make('div', 'ph-url glass');
+    const btn = (cls, label, iconName, onTap) => {
+      const b = make('button', 'ph-sb ' + cls);
+      b.type = 'button'; b.setAttribute('aria-label', label); b.title = label;
+      if (iconName) b.style.setProperty('--icon', icon(iconName));
+      b.onclick = e => { e.stopPropagation(); onTap(b); };
+      return b;
+    };
+    const backB = btn('back', 'Back', 'chevl', () => { const b = dq('.dc-back'); if (b && !b.disabled) b.click(); });
+    const fwdB = btn('fwd', 'Forward', 'chevr', () => { const b = dq('.dc-fwd'); if (b && !b.disabled) b.click(); });
+    const pageB = btn('page', 'Filters', 'sliders', () => openFilters());
+    const site = make('button', 'ph-url-site');
+    site.type = 'button';
+    const fav = make('span', 'ph-url-ico'), words = make('span', 'ph-url-text');
+    site.append(fav, words);
+    site.onclick = e => { e.stopPropagation(); if (sbar.classList.contains('mini')) return expand(); startPage(); };
+    const reload = btn('reload', 'Reload', 'reload', () => doReload());
+    const load = make('i', 'ph-url-load');
+    pill.append(pageB, site, reload, load);
+    const tabsB = btn('tabs', 'Tabs', 'tabs', () => openTabs());
+    const tabsN = make('span', 'ph-tabs-n');
+    tabsB.append(tabsN);
+    const moreB = btn('more', 'Page menu', 'more', () => pageMenu());
+    const glassBox = make('div', 'ph-sbar-glass glass');
+    glassBox.append(backB, fwdB, pill, tabsB, moreB);
+    sbar.append(glassBox);
+    document.body.append(sbar);
+
+    // what it shows follows the Browser: the site, its icon and colour, the search, back and forward
+    const srcOn = () => dq('.dc-src.on');
+    const follow = () => {
+      const s = srcOn();
+      const name = s ? s.textContent.trim() : 'Browser';
+      const query = (dq('.dc-search input') || {}).value || '';
+      const sub = dq('.dc-subpill:not(.hidden) b');
+      const text = (sub ? sub.textContent : name) + (query ? ' — ' + query : '');
+      if (words.textContent !== text) words.textContent = text;
+      const img = s && s.querySelector('img.dc-ico');
+      const src = img ? img.src : '';
+      if (fav.dataset.src !== src) { fav.dataset.src = src; fav.style.backgroundImage = src ? `url("${src}")` : ''; }
+      const color = getComputedStyle(dtab).getPropertyValue('--src').trim();
+      if (sbar.style.getPropertyValue('--src') !== color) sbar.style.setProperty('--src', color);
+      const b = dq('.dc-back'), f = dq('.dc-fwd');
+      backB.disabled = !b || b.disabled;
+      const canFwd = !!f && !f.disabled;
+      if (fwdB.classList.contains('on') !== canFwd) fwdB.classList.toggle('on', canFwd);
+      const n = dtab.querySelectorAll('.dc-src').length;
+      if (tabsN.textContent !== String(n)) tabsN.textContent = n;
+      const st = (dq('.dc-status') || {}).textContent || '';
+      const loading = /^Looking on|trying again/.test(st);
+      if (pill.classList.contains('loading') !== loading) pill.classList.toggle('loading', loading);
+    };
+    let fq = false;
+    new MutationObserver(() => { if (!fq) { fq = true; requestAnimationFrame(() => { fq = false; follow(); }); } })
+      .observe(dtab, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'disabled', 'style'] });
+    const inp = dq('.dc-search input');
+    if (inp) inp.addEventListener('input', follow);
+    follow();
+
+    // the filters: in the page menu's sheet (the default), or across the top
+    const filterNodes = ['.dc-lens', '.dc-rail', '.dc-marks'].map(dq).filter(Boolean);
+    const head = dq('.dc-head');
+    const fsheet = make('div', 'ios-dock ph-filters');
+    const fback = make('div', 'ios-back ios-dock-back');
+    fsheet.append(make('div', 'ios-grab'), make('h2', 'ios-sheet-title', 'Filters'));
+    const fbody = make('div', 'ph-filters-body');
+    fsheet.append(fbody);
+    dtab.append(fback, fsheet);
+    const showFilters = on => { fsheet.classList.toggle('in', on); fback.classList.toggle('in', on); html.classList.toggle('ios-dock-open', on); };
+    fback.onclick = () => showFilters(false);
+    function placeFilters() {
+      if (opt.filters === 'top') { if (head) head.append(...filterNodes); }
+      else fbody.append(...filterNodes);
+    }
+    placeFilters();
+    function openFilters() { if (opt.filters === 'top') { scrollTo({ top: 0, behavior: 'smooth' }); expand(); return; } showFilters(true); }
+
+    // the start page: the search box (the Browser's own, with its suggestions) over favourites,
+    // bookmarks and recent searches
+    const row = dq('.dc-searchrow');
+    const rowHome = row && row.parentNode, rowNext = row && row.nextSibling;
+    function startPage() {
+      if (!row) return;
+      const el = make('div', 'ph-start');
+      el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Search');
+      const scroll = make('div', 'ph-start-scroll');
+      const section = (title, cls) => { const s = make('section', 'ph-start-sec ' + (cls || '')); s.append(make('h3', '', title)); scroll.append(s); return s; };
+      const favs = section('Favourites', 'favs');
+      const grid = make('div', 'ph-favs');
+      dtab.querySelectorAll('.dc-src').forEach((s, k) => {
+        const b = make('button', 'ph-fav' + (s.classList.contains('on') ? ' on' : '') + (s.classList.contains('locked') ? ' locked' : ''));
+        b.type = 'button';
+        b.style.setProperty('--n', k);
+        const ic = make('span', 'ph-fav-ico');
+        const img = s.querySelector('img.dc-ico');
+        if (img) ic.style.backgroundImage = `url("${img.src}")`; else ic.textContent = s.textContent.trim().slice(0, 1);
+        ic.style.setProperty('--src', s.style.getPropertyValue('--src'));
+        b.append(ic, make('span', 'ph-fav-name', s.textContent.trim()));
+        b.onclick = () => { close(); s.click(); };
+        grid.append(b);
+      });
+      favs.append(grid);
+      const marks = [...dtab.querySelectorAll('.dc-mark-go')];
+      if (marks.length) {
+        const sec = section('Bookmarks', 'marks');
+        const list = make('div', 'ios-list');
+        for (const m of marks) {
+          const r = make('button', 'ios-row plain ph-mark', m.textContent.trim());
+          r.type = 'button';
+          r.onclick = () => { close(); m.click(); };
+          list.append(r);
+        }
+        sec.append(list);
+      }
+      const rec = recent();
+      if (rec.length) {
+        const sec = section('Recent searches', 'recent');
+        const chips = make('div', 'ph-recent');
+        rec.forEach(t => { const c = make('button', 'ios-chip', t); c.type = 'button'; c.onclick = () => { inp.value = t; go(); }; chips.append(c); });
+        const clear = make('button', 'ph-clear', 'Clear');
+        clear.type = 'button';
+        clear.onclick = () => { try { localStorage.removeItem(RECENT); } catch (e) {} sec.remove(); };
+        sec.querySelector('h3').append(clear);
+        sec.append(chips);
+      }
+      const dock = make('div', 'ph-start-dock glass');
+      const cancel = make('button', 'ph-cancel', 'Cancel');
+      cancel.type = 'button';
+      cancel.onclick = () => close();
+      dock.append(row, cancel);
+      el.append(scroll, dock);
+      // The search box goes back into the Browser before the Browser acts on Enter (it redraws its
+      // toolbar, the box's buttons included), so this listens first, on the way down to the box.
+      const go = () => inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      const onKey = e => { if (e.key === 'Enter' && e.target === inp) { remember(inp.value); close(); } };
+      el.addEventListener('keydown', onKey, true);
+      const sugg = dq('.dc-sugg');
+      let closed = false;
+      function close() {
+        if (closed) return;
+        closed = true;
+        unlayer(el);
+        // (at once: whatever runs next, a favourite's tab or the search, redraws the box's buttons)
+        if (rowHome) rowHome.insertBefore(row, rowNext && rowNext.parentNode === rowHome ? rowNext : null);
+        inp.blur();
+        el.classList.remove('in');
+        setTimeout(() => el.remove(), 280);
+      }
+      layer(el, close);
+      requestAnimationFrame(() => { el.classList.add('in'); inp.focus(); inp.select && inp.select(); });
+      if (sugg) sugg.classList.add('hidden');
+    }
+
+    // the tabs: every source as a card
+    function openTabs() {
+      const s = sheet('ph-tabsheet');
+      const top = make('div', 'ph-tabs-top');
+      top.append(make('h2', 'ios-sheet-title', 'Tabs'));
+      s.body.append(top);
+      const grid = make('div', 'ph-tabgrid');
+      dtab.querySelectorAll('.dc-src').forEach((src, k) => {
+        const c = make('button', 'ph-tabcard' + (src.classList.contains('on') ? ' on' : '') + (src.classList.contains('locked') ? ' locked' : ''));
+        c.type = 'button';
+        c.style.setProperty('--src', src.style.getPropertyValue('--src'));
+        c.style.setProperty('--n', k);
+        const ic = make('span', 'ph-fav-ico');
+        const img = src.querySelector('img.dc-ico');
+        if (img) ic.style.backgroundImage = `url("${img.src}")`; else ic.textContent = src.textContent.trim().slice(0, 1);
+        const dot = src.querySelector('.dc-health');
+        const h = make('i', 'ph-health ' + (dot ? dot.className.replace('dc-health', '').trim() : ''));
+        c.append(ic, make('b', '', src.textContent.trim()), make('small', '', src.classList.contains('locked') ? 'Needs a key' : src.title.split(' · ')[0].replace(/^https?:\/\//, '')), h);
+        c.onclick = () => { s.close(); src.click(); };
+        grid.append(c);
+      });
+      const add = make('button', 'ph-tabcard add');
+      add.type = 'button';
+      add.append(make('span', 'ph-fav-ico', '+'), make('b', '', 'Sources'), make('small', '', 'add, remove, keys'));
+      add.onclick = () => { s.close(); const m = dq('.dc-manage'); if (m) m.click(); };
+      grid.append(add);
+      s.body.append(grid);
+    }
+
+    // the page menu
+    function pageMenu() {
+      const s = sheet('ph-pagemenu');
+      const list = make('div', 'ios-list');
+      const row = (text, iconName, onTap, cls) => {
+        const r = make('button', 'ios-row' + (cls ? ' ' + cls : ''), text);
+        r.type = 'button';
+        if (iconName) r.style.setProperty('--icon', icon(iconName));
+        r.onclick = () => { s.close(); onTap(); };
+        list.append(r);
+      };
+      const f = dq('.dc-fwd');
+      if (f && !f.disabled) row('Forward', 'chevr', () => f.click());
+      row('Reload', 'reload', doReload);
+      // (it asks for a name: the answer replays the tap, so the tap must be the star's own)
+      row('Bookmark this search', 'star', () => { const m = dq('.dc-markbtn'); if (m) { lastTap = m; m.click(); } });
+      row('Filters', 'sliders', () => openFilters());
+      row('Sources and keys', 'tabs', () => { const m = dq('.dc-manage'); if (m) m.click(); });
+      row('Customise the Browser', 'brush', customise);
+      s.body.append(make('h2', 'ios-sheet-title', words.textContent || 'Browser'), list);
+    }
+
+    // Customise: how the Browser looks and behaves on this phone (kept in the vault)
+    function customise() {
+      const s = sheet('ph-custom');
+      s.body.append(make('h2', 'ios-sheet-title', 'Customise the Browser'));
+      const group = (title, choices, key) => {
+        const g = make('div', 'ph-opt');
+        g.append(make('span', 'ios-peek-label', title));
+        const seg = make('div', 'ph-optseg');
+        for (const [v, text] of choices) {
+          const b = make('button', 'ios-chip' + (opt[key] === v ? ' on' : ''), text);
+          b.type = 'button';
+          b.onclick = () => { opt[key] = v; seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); saveOpt(); };
+          seg.append(b);
+        }
+        g.append(seg);
+        s.body.append(g);
+      };
+      group('Address bar', [['bottom', 'Bottom'], ['top', 'Top']], 'bar');
+      group('Pictures', [['rows', 'Whole'], ['grid2', '2 across'], ['grid3', '3 across'], ['feed', 'Feed']], 'layout');
+      group('Filters', [['menu', 'In a sheet'], ['top', 'At the top']], 'filters');
+      const list = make('div', 'ios-list ph-toggles');
+      const toggle = (key, text, help) => {
+        const l = make('label', 'ios-row plain ph-toggle');
+        const w = make('span', 'ph-toggle-words');
+        w.append(make('b', '', text));
+        if (help) w.append(make('small', '', help));
+        const cb = make('input');
+        cb.type = 'checkbox'; cb.checked = !!opt[key];
+        cb.onchange = () => { opt[key] = cb.checked; saveOpt(); };
+        l.append(w, cb);
+        list.append(l);
+      };
+      toggle('autohide', 'Hide the bars while scrolling', 'Scroll back up, or tap the little pill, to bring them back.');
+      toggle('tint', 'Colour the bar like the site', 'Each site\'s own colour, like Safari\'s website tinting.');
+      toggle('edges', 'Swipe from the edges', 'From the left edge to go back, from the right to go forward.');
+      toggle('pull', 'Pull down to reload');
+      toggle('blur', 'Blur the previews', 'Pictures stay blurred in the grid until you open one.');
+      s.body.append(list);
+      const reset = make('button', 'btn ph-reset', 'Back to the defaults');
+      reset.type = 'button';
+      reset.onclick = () => { opt = { ...DEF }; saveOpt(); s.close(); setTimeout(customise, 260); };
+      s.body.append(reset);
+    }
+
+    function doReload() {
+      if (!inp) return;
+      inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      reload.classList.remove('spin'); void reload.offsetWidth; reload.classList.add('spin');
+    }
+
+    // shrinking while you scroll down; any scroll up (or a tap on the pill) brings it back
+    const on = () => !dtab.classList.contains('hidden');
+    const expand = () => { sbar.classList.remove('mini'); html.classList.remove('br-min'); };
+    let lastY = scrollY;
+    addEventListener('scroll', () => {
+      if (!on()) return;
+      const y = scrollY, d = y - lastY;
+      if (Math.abs(d) < 8) return;
+      lastY = y;
+      if (!opt.autohide) return;
+      const mini = d > 0 && y > 120;
+      if (sbar.classList.contains('mini') !== mini) { sbar.classList.toggle('mini', mini); html.classList.toggle('br-min', mini); }
+    }, { passive: true });
+    new MutationObserver(() => { if (!on()) expand(); html.classList.toggle('br-on', on()); }).observe(dtab, { attributes: true, attributeFilter: ['class'] });
+    html.classList.toggle('br-on', on());
+
+    // a post, opened: swipe sideways for the next one, down to close (its own arrows are hidden)
+    const view = dq('.dc-view'), stage = dq('.dc-stage');
+    if (view && stage) gestures(stage, {
+      left: () => { const n = dq('.dc-next'); if (n) n.click(); },
+      right: () => { const p = dq('.dc-prev'); if (p) p.click(); },
+      down: () => { if (view.scrollTop <= 0) document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); },
+      double: (x, y) => { const s = view.querySelector('.dc-side .btn.primary'); if (s) { s.click(); heartAt(x, y); } },
+      drag: (dx, dy, axis) => {
+        const m = stage.querySelector('.dc-media');
+        if (!m) return;
+        m.style.transition = 'none';
+        m.style.transform = axis === 'x' ? `translateX(${dx}px) rotate(${dx / 40}deg)` : dy > 0 && view.scrollTop <= 0 ? `translateY(${dy}px) scale(${Math.max(.8, 1 - dy / 900)})` : '';
+      },
+      settle: () => { const m = stage.querySelector('.dc-media'); if (m) { m.style.transition = 'transform .28s cubic-bezier(.2, .8, .2, 1)'; m.style.transform = ''; } }
+    }, 'button, video');
+
+    // pull down to reload, and swipes in from the edges
+    const ptr = make('div', 'ph-ptr');
+    dtab.prepend(ptr);
+    let touch = null;
+    dtab.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1 || e.target.closest('.dc-view:not(.hidden), .ios-dock, input')) { touch = null; return; }
+      const t = e.touches[0];
+      touch = { x: t.clientX, y: t.clientY, top: scrollY <= 0, edge: t.clientX < 22 ? 'l' : t.clientX > innerWidth - 22 ? 'r' : '' };
+    }, { passive: true });
+    dtab.addEventListener('touchmove', e => {
+      if (!touch) return;
+      const t = e.touches[0], dx = t.clientX - touch.x, dy = t.clientY - touch.y;
+      if (opt.pull && touch.top && dy > 0 && Math.abs(dy) > Math.abs(dx) && scrollY <= 0) {
+        ptr.style.setProperty('--p', String(Math.min(1, dy / 110)));
+        ptr.classList.add('show');
+      }
+      if (opt.edges && touch.edge) {
+        const d = touch.edge === 'l' ? dx : -dx;
+        sbar.style.setProperty('--edge', Math.max(0, Math.min(1, d / 120)));
+        dtab.style.setProperty('--edge-x', (touch.edge === 'l' ? 1 : -1) * Math.max(0, Math.min(60, d / 3)) + 'px');
+        dtab.classList.add('edging');
+      }
+    }, { passive: true });
+    dtab.addEventListener('touchend', e => {
+      if (!touch) return;
+      const t = e.changedTouches[0], dx = t.clientX - touch.x, dy = t.clientY - touch.y;
+      if (ptr.classList.contains('show')) {
+        if (dy > 110) { ptr.classList.add('go'); doReload(); setTimeout(() => ptr.classList.remove('go'), 900); }
+        ptr.classList.remove('show'); ptr.style.removeProperty('--p');
+      }
+      if (dtab.classList.contains('edging')) {
+        dtab.classList.remove('edging'); dtab.style.removeProperty('--edge-x');
+        if (touch.edge === 'l' && dx > 90) backB.click();
+        if (touch.edge === 'r' && dx < -90) { const f = dq('.dc-fwd'); if (f && !f.disabled) f.click(); }
+      }
+      touch = null;
+    }, { passive: true });
   }
 
   // ---------- 7. Android's back button ----------
