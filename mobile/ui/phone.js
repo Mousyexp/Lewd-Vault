@@ -15,7 +15,9 @@
 //   6. privacy: "Hide now" (and a three-finger tap) in place of the emergency key, as a lock screen or
 //      a working calculator that opens with your PIN, and a cover while the app is in the background,
 //   7. Android's back button: it closes what is open (a sheet, the details, the viewer, the slideshow),
-//      then goes back to the Library, and only then leaves the app.
+//      then goes back to the Library, and only then leaves the app,
+//   8. phone-only extras: the level dial, Stories (rings over the Library) and Sort (swipe the new
+//      ones into 1, 2 or 3 stars), and the motion that goes with them.
 // The look is mobile/ui/phone.css.
 (() => {
   'use strict';
@@ -38,6 +40,7 @@
     torch: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.800' stroke-linejoin='round'><path d='M8 3h8v3l-2 3v11a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1V9L8 6z'/><path d='M12 12v3' stroke-linecap='round'/></svg>",
     camera: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.800' stroke-linejoin='round'><path d='M3 8.500A1.500 1.500 0 0 1 4.500 7H8l1.500-2h5L16 7h3.500A1.500 1.500 0 0 1 21 8.500v9a1.500 1.500 0 0 1-1.500 1.500h-15A1.500 1.500 0 0 1 3 17.500z'/><circle cx='12' cy='13' r='3.500'/></svg>",
     search: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'><circle cx='11' cy='11' r='6.5'/><path d='M16 16l4.5 4.5'/></svg>",
+    cards: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'><rect x='6' y='3' width='12' height='16' rx='2.500' transform='rotate(-8 12 11)'/><rect x='6' y='5' width='12' height='16' rx='2.500' transform='rotate(7 12 13)'/></svg>",
     tags: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 12V4h8l10 10-8 8z'/><circle cx='7.500' cy='8.500' r='1.300' fill='black'/></svg>"
   };
   const icon = name => `url("data:image/svg+xml;utf8,${ICON[name].replace(/"/g, "'").replace(/#/g, '%23')}")`;
@@ -107,6 +110,7 @@
     for (const b of sideTabs) if (!PRIMARY.includes(b.dataset.tab)) tile(label(b), iconOf(b), () => b.click());
     if (window.vaultProfile) tile('You', icon('you'), () => window.vaultProfile.open());
     if (window.vaultCoach) tile('Coach', icon('coach'), () => window.vaultCoach.open());
+    if (window.vaultPhone) tile('Sort', icon('cards'), () => window.vaultPhone.openSort());
     tile('Hide now', icon('hide'), hideNow, 'wide danger').append(make('small', '', 'or tap anywhere with three fingers'));
     s.body.append(tiles);
   }
@@ -254,6 +258,15 @@
     h.style.setProperty('--icon', icon('heart'));
     document.body.append(h);
     setTimeout(() => h.remove(), 900);
+    // and a little burst of sparks around it
+    for (let k = 0; k < 8; k++) {
+      const p = make('i', 'ph-spark');
+      p.style.left = x + 'px'; p.style.top = y + 'px';
+      p.style.setProperty('--a', (k * 45 + Math.random() * 20) + 'deg');
+      p.style.setProperty('--r', (54 + Math.random() * 30) + 'px');
+      document.body.append(p);
+      setTimeout(() => p.remove(), 800);
+    }
   };
   // taps and swipes on `el`: { tap, double, left, right, up, down, drag(dx, dy, axis), settle() }
   function gestures(el, on, skip) {
@@ -501,7 +514,7 @@
   const dropSwallow = () => { if (eat) { const e = eat; eat = null; setTimeout(() => removeEventListener('click', e, true), 120); } };
   addEventListener('touchstart', e => {
     cancelHold();
-    if (e.touches.length !== 1 || e.target.closest('input, textarea, select, video, .ios-sheet, .pv-screen, .ios-calc')) return;
+    if (e.touches.length !== 1 || e.target.closest('input, textarea, select, video, .ios-sheet, .pv-screen, .ios-calc, .ph-story, .ph-sort, .ph-dial-back')) return;
     const t = e.touches[0], target = e.target;
     hold = { x: t.clientX, y: t.clientY, timer: setTimeout(() => {
       hold = null;
@@ -549,6 +562,7 @@
 
   function hideNow() {
     if (document.querySelector('.pv-screen, .ios-calc')) return;
+    overlays.slice().reverse().forEach(o => o._close()); // (Stories and Sort go at once, not under the cover)
     if (mode() === 'hide') { emit({ on: true, mode: 'hide' }); calculator(); } // (the message pauses everything that plays)
     else emit({ on: true, mode: mode() });
   }
@@ -633,6 +647,586 @@
   addEventListener('pagehide', () => setCover(true));
   addEventListener('pageshow', () => { if (document.visibilityState === 'visible') setCover(false); });
 
+  // ---------- 8. the level dial, Stories and Sort ----------
+  // Three phone-only ways in to the same library:
+  //   the level dial   NSFW 1-10 on a half circle you slide your thumb along (the viewer's toolbar,
+  //                    Stories and Sort open it); it saves the moment you let go
+  //   Stories          rings over the Library (New, Favourites, then the biggest categories): each
+  //                    plays full screen, one picture after another, tap for the next, hold to pause
+  //   Sort             the pictures you haven't sorted yet, as a stack of cards: swipe right to keep
+  //                    (2 stars), left for 1 star, up for a favourite (3 stars and a heart)
+  // All three write through the same calls the desktop uses (updateImage, recordView).
+  const all = () => (typeof library !== 'undefined' && Array.isArray(library) ? library : []);
+  const locked = it => typeof isLocked === 'function' && isLocked(it);
+  const moving = it => it.kind !== 'image' && !/\.gif$/i.test(it.file || '');
+  const fileUrl = it => (typeof vaultUrl === 'function' ? vaultUrl(it.id) : '');
+  const thumbOf = it => (typeof thumbUrl === 'function' ? thumbUrl(it).catch(() => '') : Promise.resolve(''));
+  const likes = it => (typeof likesOf === 'function' ? likesOf(it.id) : 0);
+  const buzz = () => { try { if (navigator.vibrate) navigator.vibrate(8); } catch (e) {} };
+  let redraw = null;
+  const renderSoon = () => { clearTimeout(redraw); redraw = setTimeout(() => { if (typeof renderLibrary === 'function') renderLibrary(); }, 500); };
+  // level and rating, saved the way the detail panel's Save does it (and the file is renamed to match)
+  async function setProps(item, f) {
+    const want = { category: item.category, nsfw: item.nsfw, quality: item.quality, ...f };
+    try {
+      const r = await api('updateImage', item.id, want);
+      Object.assign(item, want, { uid: r.item.uid, file: r.item.file });
+      libraryWritten(r);
+      return true;
+    } catch (e) { toast(errMsg(e), 'err'); return false; }
+  }
+  const appreciate = it => { if (typeof recordView === 'function') recordView(it, 'like'); };
+  const overlays = [];               // what is open, topmost last (Android's back closes the last)
+  const layer = (el, close) => { el._close = close; overlays.push(el); document.body.append(el); };
+  const unlayer = el => { const k = overlays.indexOf(el); if (k >= 0) overlays.splice(k, 1); };
+
+  // --- the dial ---
+  // A half circle from 1 (left) round the top to 10 (right). Slide anywhere on it; the number follows
+  // your thumb with a tick for each step, and letting go saves it.
+  function dial(value, onPick) {
+    const back = make('div', 'ph-dial-back');
+    const box = make('div', 'ph-dial');
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 340 190');
+    svg.setAttribute('aria-hidden', 'true');
+    const arc = cls => { const p = document.createElementNS(NS, 'path'); p.setAttribute('d', 'M20 170 A150 150 0 0 1 320 170'); p.setAttribute('pathLength', '100'); p.setAttribute('class', cls); svg.append(p); return p; };
+    arc('ph-dial-track');
+    const fill = arc('ph-dial-fill');
+    box.append(svg);
+    const ticks = [];
+    for (let l = 1; l <= 10; l++) {
+      const a = Math.PI * (1 - (l - 1) / 9);
+      const t = make('button', 'ph-dial-tick', String(l));
+      t.type = 'button';
+      t.setAttribute('aria-label', 'Level ' + l);
+      t.style.left = (170 + 150 * Math.cos(a)) + 'px';
+      t.style.top = (170 - 150 * Math.sin(a)) + 'px';
+      t.style.setProperty('--d', (l * 22) + 'ms');
+      box.append(t);
+      ticks.push(t);
+    }
+    const mid = make('div', 'ph-dial-mid');
+    const num = make('b', 'ph-dial-num');
+    mid.append(make('span', 'ph-dial-cap', 'Level'), num, make('span', 'ph-dial-hint', 'slide along the arc'));
+    box.append(mid);
+    back.append(box);
+    let level = Math.min(10, Math.max(1, Math.round(+value || 1))), dragging = false, done = false;
+    const draw = (bump) => {
+      fill.style.strokeDasharray = `${(level - 1) / 9 * 100} 100`;
+      box.style.setProperty('--heat', String((level - 1) / 9));
+      num.textContent = level;
+      ticks.forEach((t, i) => { t.classList.toggle('on', i + 1 <= level); t.classList.toggle('at', i + 1 === level); });
+      if (bump) { num.classList.remove('bump'); void num.offsetWidth; num.classList.add('bump'); }
+    };
+    const close = () => {
+      if (!back.isConnected) return;
+      unlayer(back);
+      back.classList.remove('in');
+      setTimeout(() => back.remove(), 300);
+    };
+    const pick = l => {
+      if (done) return;
+      done = true;
+      level = l; draw(true);
+      box.classList.add('set');
+      setTimeout(close, 260);
+      if (l !== +value) onPick(l);
+    };
+    const levelAt = (x, y) => {
+      const r = svg.getBoundingClientRect(), k = r.width / 340;
+      const ang = Math.atan2((170 * k + r.top) - y, x - (170 * k + r.left)); // (0 at the right, pi at the left)
+      const a = Math.min(Math.PI, Math.max(0, ang < -Math.PI / 2 ? Math.PI : ang));
+      return Math.min(10, Math.max(1, Math.round(1 + (1 - a / Math.PI) * 9)));
+    };
+    box.addEventListener('pointerdown', e => {
+      // (a drag may start on a number too: the numbers are buttons for keyboards and screen readers)
+      dragging = true; box.setPointerCapture(e.pointerId); box.classList.add('drag');
+      const l = levelAt(e.clientX, e.clientY);
+      if (l !== level) { level = l; draw(true); buzz(); }
+    });
+    box.addEventListener('pointermove', e => {
+      if (!dragging) return;
+      const l = levelAt(e.clientX, e.clientY);
+      if (l !== level) { level = l; draw(true); buzz(); }
+    });
+    box.addEventListener('pointerup', () => { if (dragging) { dragging = false; box.classList.remove('drag'); pick(level); } });
+    box.addEventListener('pointercancel', () => { dragging = false; box.classList.remove('drag'); });
+    ticks.forEach((t, i) => { t.onclick = e => { e.stopPropagation(); pick(i + 1); }; });
+    back.addEventListener('click', e => { if (e.target === back) close(); });
+    layer(back, close);
+    draw(false);
+    requestAnimationFrame(() => back.classList.add('in'));
+  }
+
+  // the viewer's toolbar gets the dial, as a button showing the level
+  if (detail) {
+    const bar = detail.querySelector('.ios-viewbar');
+    const bin = bar && bar.lastElementChild;
+    if (bar) {
+      const lv = make('button', 'ios-tool ph-lvtool');
+      lv.type = 'button'; lv.title = 'Level'; lv.setAttribute('aria-label', 'Level');
+      lv.onclick = e => {
+        e.stopPropagation();
+        const it = typeof current !== 'undefined' ? current : null;
+        if (!it) return;
+        dial(it.nsfw, async l => {
+          if (!(await setProps(it, { nsfw: l }))) return;
+          const field = $('dNsfw'); if (field) field.value = l;
+          lv.textContent = l; lv.classList.remove('pop'); void lv.offsetWidth; lv.classList.add('pop');
+          renderSoon();
+        });
+      };
+      bar.insertBefore(lv, bin);
+      const show = () => { const it = typeof current !== 'undefined' ? current : null; const t = it ? String(it.nsfw) : ''; if (lv.textContent !== t) lv.textContent = t; };
+      new MutationObserver(show).observe(detail, { attributes: true, attributeFilter: ['class'] });
+      const name = $('dName');
+      if (name) new MutationObserver(show).observe(name, { childList: true, characterData: true, subtree: true });
+    }
+  }
+
+  // --- Stories ---
+  const SEEN = 'lv.phone.stories';
+  const seen = () => { try { return JSON.parse(localStorage.getItem(SEEN)) || {}; } catch (e) { return {}; } };
+  const markSeen = key => { try { const s = seen(); s[key] = Date.now(); localStorage.setItem(SEEN, JSON.stringify(s)); } catch (e) {} };
+  const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const addedAt = it => Date.parse(it.added) || 0;
+  function storyGroups() {
+    const items = all().filter(it => !locked(it));
+    const groups = [];
+    const week = Date.now() - 7 * 864e5;
+    const fresh = items.filter(it => addedAt(it) >= week).sort((a, b) => addedAt(b) - addedAt(a));
+    if (fresh.length) groups.push({ key: 'new', name: 'New', items: fresh.slice(0, 30), newest: addedAt(fresh[0]) });
+    const favs = items.filter(it => +it.quality >= 3);
+    if (favs.length) groups.push({ key: 'fav', name: 'Favourites', items: shuffle(favs.slice()).slice(0, 24), newest: 0 });
+    const by = new Map();
+    for (const it of items) { const c = (it.category || '').trim(); if (c) (by.get(c) || by.set(c, []).get(c)).push(it); }
+    [...by].sort((a, b) => b[1].length - a[1].length).slice(0, 12).forEach(([name, list]) => {
+      groups.push({ key: 'c:' + name, name, items: shuffle(list.slice()).slice(0, 24), newest: Math.max(...list.map(addedAt)) });
+    });
+    return groups;
+  }
+  const isNew = g => { const s = seen()[g.key]; return !s || (g.newest && g.newest > s) || Date.now() - s > 20 * 3600e3; };
+
+  // the rings, over the Library's grid
+  let rings = null;
+  const gridEl = $('grid');
+  if (lib && gridEl) {
+    rings = make('div', 'ph-rings');
+    rings.setAttribute('role', 'list');
+    gridEl.before(rings);
+    const drawRings = () => {
+      const groups = storyGroups();
+      const left = toSort().length;
+      rings.replaceChildren();
+      rings.classList.toggle('hidden', !groups.length && !left);
+      let n = 0;
+      const ring = (cls, text, onTap, thumbItem) => {
+        const b = make('button', 'ph-ring ' + cls);
+        b.type = 'button';
+        b.setAttribute('role', 'listitem');
+        b.style.setProperty('--n', n++);
+        const face = make('span', 'ph-ring-face');
+        if (thumbItem) thumbOf(thumbItem).then(u => { if (u) face.style.backgroundImage = `url("${u}")`; });
+        b.append(face, make('span', 'ph-ring-name', text));
+        b.onclick = () => onTap(b);
+        rings.append(b);
+        return b;
+      };
+      if (left) {
+        const s = ring('sort', 'Sort', () => openSort());
+        s.firstChild.style.setProperty('--icon', icon('cards'));
+        s.firstChild.append(make('em', 'ph-ring-count', left > 99 ? '99+' : String(left)));
+      }
+      groups.forEach((g, i) => ring(isNew(g) ? 'fresh' : 'old', g.name, b => openStories(groups, i, b), g.items[0]));
+    };
+    rings._draw = drawRings;
+    // (re)drawn when the library loads or changes size, not on every render
+    let sig = '';
+    const maybe = () => {
+      const items = all();
+      const s = items.length + ':' + (items[0] && items[0].id) + ':' + (lib.classList.contains('hidden') ? 0 : 1);
+      if (s !== sig) { sig = s; drawRings(); }
+    };
+    new MutationObserver(() => requestAnimationFrame(maybe)).observe(gridEl, { childList: true });
+    if (typeof setupReady !== 'undefined') setupReady.then(() => setTimeout(maybe, 300));
+  }
+
+  function openStories(groups, gi, fromEl) {
+    const el = make('div', 'ph-story');
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'Stories');
+    if (fromEl) { const r = fromEl.getBoundingClientRect(); el.style.transformOrigin = `${r.left + r.width / 2}px ${r.top + r.height / 2}px`; }
+    const stage = make('div', 'ph-story-stage');
+    const bars = make('div', 'ph-story-bars');
+    const head = make('div', 'ph-story-head');
+    const face = make('span', 'ph-story-face');
+    const words = make('div', 'ph-story-words');
+    const title = make('b', '', ''), when = make('span', '', '');
+    words.append(title, when);
+    const x = make('button', 'ph-story-x');
+    x.type = 'button'; x.setAttribute('aria-label', 'Close'); x.style.setProperty('--icon', icon('close'));
+    head.append(face, words, x);
+    const rail = make('div', 'ph-story-rail');
+    const railBtn = (cls, label, iconName) => { const b = make('button', 'ph-rail ' + cls); b.type = 'button'; b.setAttribute('aria-label', label); if (iconName) b.style.setProperty('--icon', icon(iconName)); const t = make('span', '', ''); b.append(t); rail.append(b); return b; };
+    const heart = railBtn('heart', 'Appreciate', 'heart');
+    const lvBtn = railBtn('lv', 'Level', null);
+    const openBtn = railBtn('open', 'Open', 'info');
+    openBtn.lastChild.textContent = 'Open';
+    const cap = make('div', 'ph-story-cap');
+    el.append(stage, bars, head, rail, cap);
+
+    let g = gi, i = 0, t0 = 0, paused = false, pausedAt = 0, raf = 0, holdTimer = null, held = false, media = null, closed = false;
+    const DUR = 6000;
+    const group = () => groups[g];
+    const item = () => group().items[i];
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      cancelAnimationFrame(raf);
+      markSeen(group().key);
+      unlayer(el);
+      el.classList.add('out');
+      if (media && media.pause) try { media.pause(); } catch (e) {}
+      setTimeout(() => el.remove(), 320);
+      if (rings && rings._draw) rings._draw();
+    };
+    const drawBars = () => {
+      bars.replaceChildren(...group().items.map((_, k) => { const s = make('i', k < i ? 'done' : ''); s.append(make('b')); return s; }));
+    };
+    const show = async dir => {
+      cancelAnimationFrame(raf);
+      const it = item();
+      if (media && media.pause) try { media.pause(); } catch (e) {}
+      const slide = make('div', 'ph-story-slide' + (dir ? ' from-' + dir : ''));
+      const blur = make('div', 'ph-story-blur');
+      slide.append(blur);
+      if (moving(it)) {
+        const v = make('video');
+        Object.assign(v, { muted: true, playsInline: true, autoplay: true, loop: false, preload: 'auto' });
+        v.setAttribute('playsinline', ''); v.setAttribute('muted', '');
+        v.src = fileUrl(it);
+        media = v;
+      } else {
+        const img = make('img');
+        img.alt = '';
+        img.decoding = 'async';
+        img.src = fileUrl(it);
+        media = img;
+      }
+      slide.append(media);
+      thumbOf(it).then(u => { if (u) blur.style.backgroundImage = `url("${u}")`; });
+      const old = [...stage.children];
+      stage.append(slide);
+      old.forEach(o => { o.classList.add('leave'); setTimeout(() => o.remove(), 380); });
+      if (media.play) media.play().catch(() => {});
+      // the words
+      const g0 = group();
+      title.textContent = g0.name;
+      when.textContent = `${i + 1} of ${g0.items.length}` + (it.added ? ' · ' + new Date(addedAt(it)).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '');
+      thumbOf(g0.items[0]).then(u => { face.style.backgroundImage = u ? `url("${u}")` : ''; });
+      cap.replaceChildren();
+      cap.append(make('b', 'ph-story-name', it.name || ''));
+      const chips = make('div', 'ph-story-chips');
+      chips.append(make('span', 'hot', 'Level ' + it.nsfw));
+      if (it.category) chips.append(make('span', '', it.category));
+      if (+it.quality) chips.append(make('span', 'stars', '★'.repeat(+it.quality)));
+      cap.append(chips, make('span', 'ph-story-hint', 'Tap for the next · hold to pause · swipe up to open'));
+      const n = likes(it);
+      heart.lastChild.textContent = n ? String(n) : '';
+      heart.classList.toggle('on', n > 0);
+      lvBtn.lastChild.textContent = String(it.nsfw);
+      drawBars();
+      if (typeof recordView === 'function') recordView(it);
+      t0 = performance.now(); paused = false; pausedAt = 0;
+      tick();
+    };
+    const length = () => (media && media.tagName === 'VIDEO' && isFinite(media.duration) && media.duration > 0 ? Math.min(media.duration * 1000, 60000) : DUR);
+    const tick = () => {
+      raf = requestAnimationFrame(() => {
+        if (closed) return;
+        const bar = bars.children[i] && bars.children[i].firstChild;
+        let f;
+        if (media && media.tagName === 'VIDEO' && isFinite(media.duration) && media.duration > 0) f = media.currentTime / Math.min(media.duration, 60);
+        else f = paused ? (pausedAt - t0) / DUR : (performance.now() - t0) / DUR;
+        if (bar) bar.style.transform = `scaleX(${Math.min(1, f)})`;
+        if (!paused && (f >= 1 || (media && media.ended))) return next();
+        tick();
+      });
+    };
+    const pause = on => {
+      if (paused === on) return;
+      paused = on;
+      el.classList.toggle('paused', on);
+      if (on) { pausedAt = performance.now(); if (media && media.pause && media.tagName === 'VIDEO') media.pause(); }
+      else { t0 += performance.now() - pausedAt; if (media && media.play && media.tagName === 'VIDEO') media.play().catch(() => {}); }
+    };
+    const next = () => {
+      if (i < group().items.length - 1) { i++; show('right'); }
+      else nextGroup(1);
+    };
+    const prev = () => {
+      if (i > 0) { i--; show('left'); }
+      else if (g > 0) nextGroup(-1, true);
+      else { t0 = performance.now(); }
+    };
+    const nextGroup = (d, atEnd) => {
+      markSeen(group().key);
+      const k = g + d;
+      if (k < 0 || k >= groups.length) return close();
+      g = k; i = atEnd ? groups[k].items.length - 1 : 0;
+      el.classList.remove('cube-l', 'cube-r'); void el.offsetWidth; el.classList.add(d > 0 ? 'cube-r' : 'cube-l');
+      show(d > 0 ? 'right' : 'left');
+    };
+    x.onclick = e => { e.stopPropagation(); close(); };
+    heart.onclick = e => {
+      e.stopPropagation();
+      const it = item();
+      appreciate(it);
+      heart.lastChild.textContent = String(likes(it));
+      heart.classList.add('on'); heart.classList.remove('pop'); void heart.offsetWidth; heart.classList.add('pop');
+      const r = heart.getBoundingClientRect(); heartAt(r.left + r.width / 2, r.top);
+    };
+    lvBtn.onclick = e => {
+      e.stopPropagation();
+      const it = item();
+      pause(true);
+      dial(it.nsfw, async l => { if (await setProps(it, { nsfw: l })) { lvBtn.lastChild.textContent = String(l); cap.querySelector('.hot').textContent = 'Level ' + l; renderSoon(); } });
+      const wait = setInterval(() => { if (!document.querySelector('.ph-dial-back')) { clearInterval(wait); pause(false); } }, 200);
+    };
+    const openIt = () => {
+      const it = item(), list = group().items;
+      close();
+      if (typeof openDetail === 'function') openDetail(it, list);
+    };
+    openBtn.onclick = e => { e.stopPropagation(); openIt(); };
+    // touch: tap left/right, hold to pause, swipe sideways for another ring, down to close, up to open
+    let from = null;
+    stage.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1) return;
+      from = { x: e.touches[0].clientX, y: e.touches[0].clientY, axis: '' };
+      held = false;
+      holdTimer = setTimeout(() => { held = true; pause(true); }, 220);
+    }, { passive: true });
+    stage.addEventListener('touchmove', e => {
+      if (!from) return;
+      const dx = e.touches[0].clientX - from.x, dy = e.touches[0].clientY - from.y;
+      if (!from.axis && Math.hypot(dx, dy) > 12) { from.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'; clearTimeout(holdTimer); pause(true); }
+      if (from.axis === 'y' && dy > 0) { el.style.setProperty('--pull', dy + 'px'); el.classList.add('pulling'); }
+      if (from.axis === 'x') stage.style.transform = `translateX(${dx / 3}px)`;
+    }, { passive: true });
+    const end = e => {
+      clearTimeout(holdTimer);
+      if (!from) return;
+      const t = e.changedTouches[0], dx = t.clientX - from.x, dy = t.clientY - from.y, axis = from.axis;
+      from = null;
+      el.classList.remove('pulling'); el.style.removeProperty('--pull'); stage.style.transform = '';
+      if (axis === 'y' && dy > 110) return close();
+      if (axis === 'y' && dy < -80) return openIt();
+      if (axis === 'x' && Math.abs(dx) > 70) { pause(false); return nextGroup(dx < 0 ? 1 : -1); }
+      if (held || axis) { pause(false); return; }
+      if (t.clientX < innerWidth * 0.3) prev(); else next();
+    };
+    stage.addEventListener('touchend', end, { passive: true });
+    stage.addEventListener('touchcancel', () => { clearTimeout(holdTimer); from = null; pause(false); }, { passive: true });
+    // a mouse (iPad with a trackpad): a click is a tap
+    stage.addEventListener('click', e => { if (e.pointerType === 'mouse' || e.detail && !('ontouchstart' in window)) { if (e.clientX < innerWidth * 0.3) prev(); else next(); } });
+    layer(el, close);
+    requestAnimationFrame(() => el.classList.add('in'));
+    show('');
+  }
+
+  // --- Sort ---
+  let sortState = null;              // { done: Set of ids } (kept in the vault, so every device agrees)
+  const sortReady = (typeof setupReady !== 'undefined' ? setupReady : Promise.resolve()).then(async () => {
+    let v = null;
+    try { v = await api('kvGet', 'phone-sort'); } catch (e) {}
+    sortState = { done: new Set((v && v.done) || []) };
+  });
+  let sortSave = null;
+  const saveSort = () => { clearTimeout(sortSave); sortSave = setTimeout(() => api('kvSet', 'phone-sort', { done: [...sortState.done] }).catch(() => {}), 800); };
+  const toSort = () => (sortState ? all().filter(it => !sortState.done.has(it.id) && !locked(it)).sort((a, b) => addedAt(b) - addedAt(a)) : []);
+  sortReady.then(() => { if (rings && rings._draw) rings._draw(); });
+
+  async function openSort() {
+    await sortReady;
+    const queue = toSort();
+    if (!queue.length) { toast('Everything is sorted', 'ok'); return; }
+    const total = queue.length;
+    const el = make('div', 'ph-sort');
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'Sort');
+    const head = make('div', 'ph-sort-head');
+    const words = make('div', '');
+    const h = make('h2', '', 'Sort the new ones'), sub = make('span', '', '');
+    words.append(h, sub);
+    const doneBtn = make('button', 'ios-pill', 'Done');
+    doneBtn.type = 'button';
+    head.append(words, doneBtn);
+    const prog = make('div', 'ph-sort-prog'); const progFill = make('i'); prog.append(progFill);
+    const deck = make('div', 'ph-sort-deck');
+    const hints = make('div', 'ph-sort-hints');
+    hints.append(make('span', '', '← 1 star'), make('span', '', '↑ Favourite'), make('span', '', '2 stars →'));
+    const acts = make('div', 'ph-sort-acts');
+    const act = (cls, label, text) => { const b = make('button', 'ph-sort-act ' + cls); b.type = 'button'; b.setAttribute('aria-label', label); b.append(make('span', '', text)); acts.append(b); return b; };
+    const undoBtn = act('undo', 'Undo', '↶');
+    const meh = act('meh', 'One star', '★');
+    const fav = act('fav', 'Favourite', '♥');
+    const keep = act('keep', 'Two stars', '★★');
+    el.append(head, prog, deck, hints, acts);
+
+    let k = 0, sorted = 0, closed = false;
+    const history = [];
+    const card = it => {
+      const c = make('div', 'ph-card');
+      const pic = make('div', 'ph-card-pic');
+      if (moving(it)) thumbOf(it).then(u => { if (u) pic.style.backgroundImage = `url("${u}")`; });
+      else { pic.style.backgroundImage = `url("${fileUrl(it)}")`; thumbOf(it).then(u => { if (u && !c._loaded) c.style.setProperty('--ph', `url("${u}")`); }); }
+      c.append(pic);
+      const lv = make('button', 'ph-card-lv', 'Level ' + it.nsfw);
+      lv.type = 'button';
+      lv.onclick = e => { e.stopPropagation(); dial(it.nsfw, async l => { if (await setProps(it, { nsfw: l })) lv.textContent = 'Level ' + l; }); };
+      c.append(lv);
+      if (moving(it)) c.append(make('span', 'ph-card-play', '▶'));
+      const stamp = make('span', 'ph-stamp', '');
+      c.append(stamp, make('b', 'ph-card-name', it.name || ''));
+      c._item = it; c._stamp = stamp;
+      return c;
+    };
+    const drawDeck = () => {
+      deck.replaceChildren();
+      const top = queue[k], next = queue[k + 1];
+      if (next) deck.append(Object.assign(card(next), { className: 'ph-card under' }));
+      if (top) { const c = card(top); c.classList.add('top'); deck.append(c); drag(c); }
+      sub.textContent = top ? `${k + 1} of ${total} · ${sorted} sorted` : 'All done';
+      progFill.style.transform = `scaleX(${k / total})`;
+      undoBtn.disabled = !history.length;
+      if (!top) finish();
+    };
+    const finish = () => {
+      deck.replaceChildren();
+      const end = make('div', 'ph-sort-end');
+      end.append(make('b', '', '✓'), make('p', '', sorted ? `${sorted} sorted. Nice.` : 'Nothing changed.'));
+      deck.append(end);
+      setTimeout(close, 1200);
+    };
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      unlayer(el);
+      el.classList.remove('in');
+      setTimeout(() => el.remove(), 320);
+      if (sorted) renderSoon();
+      if (rings && rings._draw) setTimeout(() => rings._draw(), 350);
+    };
+    const STARS = { left: 1, right: 2, up: 3 };
+    const decide = async (dir, c) => {
+      const it = queue[k];
+      if (!it) return;
+      const before = { quality: it.quality };
+      c = c || deck.querySelector('.ph-card.top');
+      if (c) { c.classList.add('fly-' + dir); c._stamp.textContent = dir === 'up' ? '♥ ★★★' : dir === 'right' ? '★★ KEEP' : '★'; c.classList.add('stamped', 's-' + dir); }
+      buzz();
+      history.push({ it, before, k });
+      sortState.done.add(it.id); saveSort();
+      sorted++; k++;
+      setTimeout(drawDeck, 260);
+      if (dir === 'up') appreciate(it);
+      if (+it.quality !== STARS[dir]) await setProps(it, { quality: STARS[dir] });
+    };
+    const undo = async () => {
+      const last = history.pop();
+      if (!last) return;
+      sortState.done.delete(last.it.id); saveSort();
+      sorted--; k = last.k;
+      if (+last.it.quality !== +last.before.quality) await setProps(last.it, { quality: last.before.quality });
+      drawDeck();
+      const c = deck.querySelector('.ph-card.top'); if (c) c.classList.add('back');
+    };
+    // the top card follows your finger: a tilt, and a stamp that says what letting go will do
+    function drag(c) {
+      let from = null;
+      c.addEventListener('pointerdown', e => {
+        if (e.target.closest('button')) return;
+        from = { x: e.clientX, y: e.clientY, id: e.pointerId };
+        c.setPointerCapture(e.pointerId);
+        c.classList.add('held');
+      });
+      c.addEventListener('pointermove', e => {
+        if (!from) return;
+        const dx = e.clientX - from.x, dy = e.clientY - from.y;
+        c.style.transform = `translate(${dx}px, ${dy}px) rotate(${dx / 14}deg)`;
+        const dir = -dy > 90 && -dy > Math.abs(dx) ? 'up' : dx > 60 ? 'right' : dx < -60 ? 'left' : '';
+        c.classList.remove('s-up', 's-left', 's-right');
+        if (dir) { c.classList.add('s-' + dir, 'stamped'); c._stamp.textContent = dir === 'up' ? '♥ ★★★' : dir === 'right' ? '★★ KEEP' : '★'; }
+        else c.classList.remove('stamped');
+        c.style.setProperty('--tilt', String(Math.min(1, Math.hypot(dx, dy) / 140)));
+      });
+      const up = e => {
+        if (!from) return;
+        const dx = e.clientX - from.x, dy = e.clientY - from.y;
+        from = null;
+        c.classList.remove('held');
+        const dir = -dy > 110 && -dy > Math.abs(dx) ? 'up' : dx > 100 ? 'right' : dx < -100 ? 'left' : '';
+        if (dir) { c.style.setProperty('--x', dx + 'px'); c.style.setProperty('--y', dy + 'px'); c.style.transform = ''; decide(dir, c); }
+        else { c.style.transform = ''; c.classList.remove('stamped', 's-up', 's-left', 's-right'); }
+      };
+      c.addEventListener('pointerup', up);
+      c.addEventListener('pointercancel', () => { from = null; c.style.transform = ''; c.classList.remove('held', 'stamped'); });
+    }
+    meh.onclick = () => decide('left');
+    keep.onclick = () => decide('right');
+    fav.onclick = () => { decide('up'); const r = fav.getBoundingClientRect(); heartAt(r.left + r.width / 2, r.top - 20); };
+    undoBtn.onclick = undo;
+    doneBtn.onclick = close;
+    layer(el, close);
+    requestAnimationFrame(() => el.classList.add('in'));
+    drawDeck();
+  }
+  window.vaultPhone = { openSort, dial };
+
+  // --- motion ---
+  // A freshly drawn grid (a new filter, a new order) ripples in from the top left, diagonal by
+  // diagonal. Only whole redraws: a few cards added while scrolling just appear.
+  if (gridEl) new MutationObserver(list => {
+    const added = [];
+    for (const m of list) for (const n of m.addedNodes) if (n.nodeType === 1 && n.classList.contains('card')) added.push(n);
+    if (added.length < 6) return;
+    const cols = Math.max(1, Math.round(gridEl.clientWidth / (added[0].offsetWidth || 130)));
+    added.slice(0, 36).forEach((c, k) => {
+      c.style.setProperty('--d', ((Math.floor(k / cols) + k % cols) * 30) + 'ms');
+      c.classList.add('ph-in');
+      setTimeout(() => c.classList.remove('ph-in'), 900);
+    });
+  }).observe(gridEl, { childList: true });
+  // The viewer grows out of the picture you tapped, and closing it makes that picture land back.
+  let lastCard = null;
+  if (gridEl) gridEl.addEventListener('click', e => { const c = e.target.closest('.card'); if (c) lastCard = { el: c, r: c.getBoundingClientRect(), at: Date.now() }; }, true);
+  if (detail) {
+    let wasOpen = false;
+    new MutationObserver(() => {
+      const open = !detail.classList.contains('hidden');
+      if (open === wasOpen) return;
+      wasOpen = open;
+      const big = detail.querySelector('.big');
+      if (open && big && lastCard && Date.now() - lastCard.at < 900 && big.animate && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        const b = big.getBoundingClientRect(), r = lastCard.r;
+        if (b.width && r.width) {
+          const k = Math.max(r.width / b.width, r.height / b.height);
+          big.animate([
+            { transform: `translate(${r.left + r.width / 2 - (b.left + b.width / 2)}px, ${r.top + r.height / 2 - (b.top + b.height / 2)}px) scale(${k})`, opacity: .4, clipPath: `inset(${Math.max(0, (b.height - r.height / k) / 2)}px ${Math.max(0, (b.width - r.width / k) / 2)}px round ${14 / k}px)` },
+            { transform: 'none', opacity: 1, clipPath: 'inset(0px 0px round 0px)' }
+          ], { duration: 420, easing: 'cubic-bezier(.2, .9, .25, 1)' });
+        }
+      }
+      if (!open && lastCard && lastCard.el.isConnected) {
+        const c = lastCard.el;
+        c.classList.remove('ph-land'); void c.offsetWidth; c.classList.add('ph-land');
+        setTimeout(() => c.classList.remove('ph-land'), 700);
+      }
+    }).observe(detail, { attributes: true, attributeFilter: ['class'] });
+  }
+
   // ---------- 7. Android's back button ----------
   // The web view goes back in its history when there is some, and leaves the app when there isn't.
   // So while anything is open, one history entry is kept pushed; back pops it, and the topmost thing
@@ -647,6 +1241,7 @@
       if (document.querySelector('.pv-screen, .ios-calc, .pin-lock:not(.hidden)')) return null; // (never: those are the privacy covers)
       const back = [...document.querySelectorAll('.ios-back.in')].pop();
       if (back) return () => back.click();
+      if (overlays.length) { const o = overlays[overlays.length - 1]; return () => o._close(); } // (the dial, Stories, Sort)
       const sheetClose = [...document.querySelectorAll('.dc-sheet:not(.hidden) .dc-sheet-head .btn')].pop(); // (Discover keeps a hidden one)
       if (sheetClose) return () => sheetClose.click();
       if (visible('#detail')) return () => {

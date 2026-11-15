@@ -469,3 +469,268 @@ html.phone .tag-panel .tl-name { text-align: left; font-size: 16px; }
   html.phone .mt-row .s-label { flex: 1 1 100%; }
   html.phone .pv-keyrow { flex-wrap: wrap; }
 }
+
+/* =====================================================================================
+   Phone extras (phone.js section 8): the level dial, Stories, Sort, and the motion around them
+   ===================================================================================== */
+html.phone { --pop: cubic-bezier(.3, 1.5, .5, 1); --heat-a: #ffc2d8; --heat-b: #ff3d7f; }
+
+/* ---------- the level dial ---------- */
+html.phone .ph-dial-back {
+  position: fixed; inset: 0; z-index: 500; display: flex; align-items: flex-end; justify-content: center;
+  background: rgba(8, 4, 6, 0); transition: background-color .3s; touch-action: none;
+}
+html.phone .ph-dial-back.in { background: rgba(8, 4, 6, .45); }
+html.phone .ph-dial {
+  position: relative; width: 340px; height: 190px; margin-bottom: calc(var(--safe-b) + 18px); transform: translateY(130%) scale(.9);
+  transition: transform .5s var(--pop); touch-action: none; user-select: none; -webkit-user-select: none;
+}
+html.phone .ph-dial::before {          /* the glass disc behind it */
+  content: ''; position: absolute; left: -10px; right: -10px; top: -10px; bottom: -40px; border-radius: 180px 180px 36px 36px;
+  background: color-mix(in srgb, var(--panel) 78%, transparent); border: 1px solid var(--glass-edge);
+  -webkit-backdrop-filter: blur(22px) saturate(1.7); backdrop-filter: blur(22px) saturate(1.7); box-shadow: 0 30px 70px -20px rgba(0, 0, 0, .7);
+}
+html.phone .ph-dial-back.in .ph-dial { transform: none; }
+html.phone .ph-dial svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+html.phone .ph-dial-track { fill: none; stroke: color-mix(in srgb, var(--text) 13%, transparent); stroke-width: 16; stroke-linecap: round; }
+html.phone .ph-dial-fill {
+  fill: none; stroke-width: 16; stroke-linecap: round; transition: stroke-dasharray .22s var(--spring);
+  stroke: color-mix(in srgb, var(--heat-b) calc(var(--heat, 0) * 100%), var(--heat-a));
+  filter: drop-shadow(0 0 calc(4px + var(--heat, 0) * 14px) color-mix(in srgb, var(--heat-b) 70%, transparent));
+}
+html.phone .ph-dial-tick {
+  position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px; border: 0; border-radius: 50%; padding: 0;
+  display: grid; place-items: center; font: inherit; font-size: 13px; font-weight: 800; color: color-mix(in srgb, var(--text) 70%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, #000); box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
+  opacity: 0; transform: scale(.4); transition: transform .35s var(--pop) var(--d, 0ms), opacity .25s var(--d, 0ms), background-color .2s, color .2s;
+}
+html.phone .ph-dial-back.in .ph-dial-tick { opacity: 1; transform: none; }
+html.phone .ph-dial-tick.on { color: #fff; background: color-mix(in srgb, var(--heat-b) 55%, var(--panel)); }
+html.phone .ph-dial-back.in .ph-dial-tick.at { transform: scale(1.32); background: var(--heat-b); box-shadow: 0 0 0 4px color-mix(in srgb, var(--heat-b) 30%, transparent), 0 6px 18px rgba(0, 0, 0, .4); }
+html.phone .ph-dial-mid { position: absolute; left: 0; right: 0; top: 58px; display: flex; flex-direction: column; align-items: center; pointer-events: none; }
+html.phone .ph-dial-cap { font-size: 11.5px; font-weight: 800; letter-spacing: .22em; text-transform: uppercase; opacity: .65; }
+html.phone .ph-dial-num { font-size: 62px; line-height: 1; font-weight: 800; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+html.phone .ph-dial-num.bump { animation: ph-bump .32s var(--pop); }
+html.phone .ph-dial-hint { font-size: 12.5px; opacity: .6; margin-top: 2px; }
+html.phone .ph-dial.drag .ph-dial-hint { opacity: 0; }
+html.phone .ph-dial.set .ph-dial-num { animation: ph-set .3s var(--pop); color: var(--heat-b); }
+@keyframes ph-bump { 0% { transform: scale(1); } 40% { transform: scale(1.22); } 100% { transform: scale(1); } }
+@keyframes ph-set { 0% { transform: scale(1); } 50% { transform: scale(1.35); } 100% { transform: scale(1.1); } }
+/* the viewer's level button: the number itself */
+html.phone .ios-tool.ph-lvtool { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
+html.phone .ios-tool.ph-lvtool::before { display: none; }
+html.phone .ios-tool.ph-lvtool::after {
+  content: ''; position: absolute; width: 30px; height: 30px; border-radius: 50%; border: 2.5px solid var(--heat-b);
+  border-bottom-color: transparent; transform: rotate(45deg); pointer-events: none;
+}
+html.phone .ios-tool.ph-lvtool { position: relative; }
+html.phone .ios-tool.ph-lvtool.pop { animation: ios-tool-pop .45s var(--spring); }
+
+/* ---------- Stories: the rings over the Library ---------- */
+html.phone .ph-rings {
+  display: flex; gap: 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  padding: calc(var(--safe-t) + 92px) 16px 14px; margin-bottom: 2px; scroll-padding: 16px;
+}
+html.phone .ph-rings::-webkit-scrollbar { display: none; }
+html.phone .ph-rings.hidden, html.phone #tab-library.hidden .ph-rings { display: none; }
+html.phone .ph-ring {
+  flex: none; width: 72px; display: flex; flex-direction: column; align-items: center; gap: 6px; border: 0; padding: 0; background: none; color: inherit; font: inherit;
+  animation: ph-ring-in .5s var(--pop) both; animation-delay: calc(var(--n, 0) * 45ms);
+}
+html.phone .ph-ring-face {
+  position: relative; width: 68px; height: 68px; border-radius: 50%; background: var(--ios-fill) center / cover no-repeat;
+  box-shadow: 0 0 0 3px var(--bg), 0 0 0 5.5px color-mix(in srgb, var(--text) 22%, transparent); transition: transform .25s var(--spring);
+}
+html.phone .ph-ring.fresh .ph-ring-face::before {   /* the bright ring, turning slowly */
+  content: ''; position: absolute; inset: -6px; border-radius: 50%; z-index: -1;
+  background: conic-gradient(from var(--spin, 0deg), var(--accent), #ffb347, #ff3d7f, var(--accent));
+  animation: ph-spin 4s linear infinite;
+}
+html.phone .ph-ring.fresh .ph-ring-face { box-shadow: 0 0 0 3px var(--bg); }
+html.phone .ph-ring.sort .ph-ring-face {
+  box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent); background: color-mix(in srgb, var(--accent) 22%, var(--panel));
+  display: grid; place-items: center;
+}
+html.phone .ph-ring.sort .ph-ring-face::before {
+  content: ''; width: 32px; height: 32px; background: var(--accent);
+  -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat;
+  animation: ph-wiggle 3.2s ease-in-out infinite;
+}
+html.phone .ph-ring-count {
+  position: absolute; right: -4px; bottom: -2px; min-width: 22px; height: 22px; padding: 0 6px; box-sizing: border-box; border-radius: 99px;
+  background: var(--accent); color: #fff; font-style: normal; font-size: 11.5px; font-weight: 800; line-height: 22px; text-align: center; box-shadow: 0 0 0 2.5px var(--bg);
+}
+html.phone .ph-ring-name { max-width: 72px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .9; }
+html.phone .ph-ring:active .ph-ring-face { transform: scale(.9); }
+@property --spin { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+@keyframes ph-spin { to { --spin: 360deg; } }
+@keyframes ph-ring-in { from { opacity: 0; transform: translateY(14px) scale(.6); } }
+@keyframes ph-wiggle { 0%, 70%, 100% { transform: rotate(0); } 78% { transform: rotate(-10deg); } 86% { transform: rotate(8deg); } 93% { transform: rotate(-4deg); } }
+
+/* ---------- Stories: the player ---------- */
+html.phone .ph-story {
+  position: fixed; inset: 0; z-index: 400; background: #000; color: #fff; overflow: hidden; touch-action: none;
+  transform: scale(.2); opacity: 0; border-radius: 40px; transition: transform .42s var(--pop), opacity .25s, border-radius .42s;
+  user-select: none; -webkit-user-select: none;
+}
+html.phone .ph-story.in { transform: none; opacity: 1; border-radius: 0; }
+html.phone .ph-story.out { transform: scale(.86); opacity: 0; transition: transform .3s ease-in, opacity .3s; }
+html.phone .ph-story.pulling { transform: translateY(var(--pull)) scale(calc(1 - var(--pull) / 1600px)); border-radius: 28px; transition: none; }
+html.phone .ph-story.cube-r .ph-story-stage { animation: ph-cube-r .5s var(--spring); }
+html.phone .ph-story.cube-l .ph-story-stage { animation: ph-cube-l .5s var(--spring); }
+html.phone .ph-story-stage { position: absolute; inset: 0; transition: transform .25s var(--spring); transform-origin: center; perspective: 1000px; }
+html.phone .ph-story-slide { position: absolute; inset: 0; display: grid; place-items: center; animation: ph-fade .35s ease both; }
+html.phone .ph-story-slide.from-right { animation: ph-from-r .38s var(--spring) both; }
+html.phone .ph-story-slide.from-left { animation: ph-from-l .38s var(--spring) both; }
+html.phone .ph-story-slide.leave { animation: ph-fade-out .36s ease both; }
+html.phone .ph-story-blur { position: absolute; inset: -40px; background: center / cover no-repeat; filter: blur(34px) brightness(.55) saturate(1.3); transform: scale(1.1); }
+html.phone .ph-story-slide img, html.phone .ph-story-slide video { position: relative; max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; animation: ph-kenburns 7s ease-out both; }
+html.phone .ph-story.paused .ph-story-slide img { animation-play-state: paused; }
+html.phone .ph-story::after {        /* shade top and bottom, so the words read on any picture */
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(rgba(0, 0, 0, .5), transparent 22%, transparent 62%, rgba(0, 0, 0, .72));
+}
+html.phone .ph-story-bars { position: absolute; z-index: 2; left: 10px; right: 10px; top: calc(var(--safe-t) + 8px); display: flex; gap: 4px; }
+html.phone .ph-story-bars i { flex: 1; height: 3px; border-radius: 3px; background: rgba(255, 255, 255, .32); overflow: hidden; }
+html.phone .ph-story-bars i b { display: block; height: 100%; background: #fff; transform-origin: left; transform: scaleX(0); }
+html.phone .ph-story-bars i.done b { transform: scaleX(1) !important; }
+html.phone .ph-story-head { position: absolute; z-index: 2; left: 14px; right: 10px; top: calc(var(--safe-t) + 20px); display: flex; align-items: center; gap: 10px; }
+html.phone .ph-story-face { width: 36px; height: 36px; border-radius: 50%; flex: none; background: #333 center / cover; box-shadow: 0 0 0 2px #fff; }
+html.phone .ph-story-words { flex: 1; min-width: 0; display: flex; flex-direction: column; text-shadow: 0 1px 6px rgba(0, 0, 0, .5); }
+html.phone .ph-story-words b { font-size: 15.5px; }
+html.phone .ph-story-words span { font-size: 12.5px; opacity: .85; }
+html.phone .ph-story-x, html.phone .ph-rail {
+  border: 0; color: #fff; background: rgba(0, 0, 0, .3); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  display: grid; place-items: center; transition: transform .2s var(--spring);
+}
+html.phone .ph-story-x { width: 44px; height: 44px; border-radius: 50%; }
+html.phone .ph-story-x::before, html.phone .ph-rail::before { content: ''; width: 22px; height: 22px; background: currentColor; -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
+html.phone .ph-story-x:active, html.phone .ph-rail:active { transform: scale(.86); }
+html.phone .ph-story-rail { position: absolute; z-index: 2; right: 10px; bottom: calc(var(--safe-b) + 120px); display: flex; flex-direction: column; gap: 18px; }
+html.phone .ph-story-rail .ph-rail { width: 50px; height: 50px; border-radius: 50%; position: relative; animation: ph-rail-in .5s var(--pop) both; }
+html.phone .ph-story-rail .ph-rail:nth-child(2) { animation-delay: .06s; } html.phone .ph-story-rail .ph-rail:nth-child(3) { animation-delay: .12s; }
+html.phone .ph-rail span { position: absolute; top: 100%; margin-top: 3px; font-size: 12px; font-weight: 700; text-shadow: 0 1px 4px rgba(0, 0, 0, .6); white-space: nowrap; }
+html.phone .ph-rail::before { width: 26px; height: 26px; }
+html.phone .ph-rail.heart.on { color: var(--accent); }
+html.phone .ph-rail.heart.pop::before { animation: ios-tool-pop .45s var(--spring); }
+html.phone .ph-rail.lv::before { display: none; }
+html.phone .ph-rail.lv span { position: static; margin: 0; font-size: 19px; font-weight: 800; }
+html.phone .ph-rail.lv { box-shadow: inset 0 0 0 2.5px var(--heat-b); }
+html.phone .ph-story-cap { position: absolute; z-index: 2; left: 16px; right: 80px; bottom: calc(var(--safe-b) + 26px); text-shadow: 0 1px 8px rgba(0, 0, 0, .55); }
+html.phone .ph-story-name { display: block; font-size: 21px; font-weight: 800; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; animation: ph-in-up .4s var(--spring) both; }
+html.phone .ph-story-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; animation: ph-in-up .4s var(--spring) .05s both; }
+html.phone .ph-story-chips span { padding: 5px 11px; border-radius: 99px; background: rgba(255, 255, 255, .2); font-size: 12.5px; font-weight: 700; text-shadow: none; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+html.phone .ph-story-chips .hot { background: var(--heat-b); }
+html.phone .ph-story-chips .stars { color: #ffd36b; letter-spacing: .1em; }
+html.phone .ph-story-hint { display: block; margin-top: 10px; font-size: 12.5px; font-weight: 600; opacity: .75; }
+html.phone .ph-story.paused .ph-story-head, html.phone .ph-story.paused .ph-story-rail, html.phone .ph-story.paused .ph-story-cap, html.phone .ph-story.paused .ph-story-bars { opacity: 0; transition: opacity .25s; }
+html.phone .ph-story-head, html.phone .ph-story-rail, html.phone .ph-story-cap, html.phone .ph-story-bars { transition: opacity .25s; }
+@keyframes ph-from-r { from { transform: translateX(28%) scale(.94); opacity: 0; } }
+@keyframes ph-from-l { from { transform: translateX(-28%) scale(.94); opacity: 0; } }
+@keyframes ph-fade { from { opacity: 0; } }
+@keyframes ph-fade-out { to { opacity: 0; transform: scale(1.04); } }
+@keyframes ph-kenburns { from { transform: scale(1.06); } to { transform: scale(1); } }
+@keyframes ph-cube-r { 0% { transform: rotateY(-38deg) translateX(30%) scale(.86); } 100% { transform: none; } }
+@keyframes ph-cube-l { 0% { transform: rotateY(38deg) translateX(-30%) scale(.86); } 100% { transform: none; } }
+@keyframes ph-rail-in { from { opacity: 0; transform: translateX(30px) scale(.6); } }
+@keyframes ph-in-up { from { opacity: 0; transform: translateY(14px); } }
+
+/* ---------- Sort: swipe the cards ---------- */
+html.phone .ph-sort {
+  position: fixed; inset: 0; z-index: 400; display: flex; flex-direction: column; background: var(--bg); color: var(--text);
+  padding: calc(var(--safe-t) + 14px) 18px calc(var(--safe-b) + 22px); box-sizing: border-box; overflow: hidden; touch-action: none;
+  transform: translateY(100%); transition: transform .48s var(--pop); user-select: none; -webkit-user-select: none;
+}
+html.phone .ph-sort.in { transform: none; }
+html.phone .ph-sort-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+html.phone .ph-sort-head h2 { margin: 0; font-size: 25px; font-weight: 800; letter-spacing: -.02em; }
+html.phone .ph-sort-head span { font-size: 13.5px; opacity: .65; font-variant-numeric: tabular-nums; }
+html.phone .ph-sort-prog { height: 4px; margin: 14px 0 0; border-radius: 4px; background: var(--ios-fill); overflow: hidden; }
+html.phone .ph-sort-prog i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--heat-b)); transform-origin: left; transition: transform .45s var(--spring); }
+html.phone .ph-sort-deck { position: relative; flex: 1; margin: 22px 6px 10px; }
+html.phone .ph-card {
+  position: absolute; inset: 0; border-radius: 28px; overflow: hidden; background: var(--ph, none) center / cover no-repeat, var(--panel);
+  box-shadow: 0 26px 60px -22px rgba(0, 0, 0, .75); touch-action: none; will-change: transform;
+}
+html.phone .ph-card.under { transform: scale(.93) translateY(18px); opacity: .7; filter: brightness(.8); transition: transform .35s var(--spring), opacity .35s, filter .35s; }
+html.phone .ph-card.top { animation: ph-card-rise .38s var(--spring); transition: transform .3s var(--pop); }
+html.phone .ph-card.top.held { transition: none; }
+html.phone .ph-card.top.back { animation: ph-card-back .45s var(--pop); }
+html.phone .ph-card-pic { position: absolute; inset: 0; background: center / cover no-repeat; }
+html.phone .ph-card::after { content: ''; position: absolute; inset: 0; background: linear-gradient(transparent 60%, rgba(0, 0, 0, .65)); pointer-events: none; }
+html.phone .ph-card-name { position: absolute; z-index: 1; left: 18px; right: 18px; bottom: 16px; color: #fff; font-size: 18px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.phone .ph-card-lv {
+  position: absolute; z-index: 2; left: 14px; top: 14px; height: 34px; padding: 0 13px; border: 0; border-radius: 99px; color: #fff; font: inherit; font-size: 14px; font-weight: 800;
+  background: color-mix(in srgb, var(--heat-b) 80%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+html.phone .ph-card-play { position: absolute; z-index: 1; right: 16px; top: 16px; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: rgba(0, 0, 0, .45); color: #fff; font-size: 14px; }
+html.phone .ph-stamp {
+  position: absolute; z-index: 3; top: 26%; left: 50%; padding: 8px 16px; border: 4px solid currentColor; border-radius: 14px;
+  font-size: 30px; font-weight: 900; letter-spacing: .04em; white-space: nowrap; background: rgba(0, 0, 0, .18);
+  opacity: 0; transform: translateX(-50%) rotate(-12deg) scale(1.6); transition: opacity .15s, transform .25s var(--pop);
+}
+html.phone .ph-card.stamped .ph-stamp { opacity: calc(.35 + var(--tilt, 1) * .65); transform: translateX(-50%) rotate(-12deg) scale(1); }
+html.phone .ph-card.s-right .ph-stamp { color: #5ef2a4; }
+html.phone .ph-card.s-left .ph-stamp { color: #ffb86b; transform: translateX(-50%) rotate(12deg) scale(1); }
+html.phone .ph-card.s-up .ph-stamp { color: #ff5b95; transform: translateX(-50%) rotate(-4deg) scale(1); }
+html.phone .ph-card.fly-right { transition: transform .4s cubic-bezier(.3, .4, .5, 1), opacity .4s; transform: translate(calc(var(--x, 0px) + 120vw), calc(var(--y, 0px) + 40px)) rotate(28deg) !important; opacity: 0; }
+html.phone .ph-card.fly-left { transition: transform .4s cubic-bezier(.3, .4, .5, 1), opacity .4s; transform: translate(calc(var(--x, 0px) - 120vw), calc(var(--y, 0px) + 40px)) rotate(-28deg) !important; opacity: 0; }
+html.phone .ph-card.fly-up { transition: transform .45s cubic-bezier(.3, .4, .5, 1), opacity .45s; transform: translate(var(--x, 0px), -120vh) rotate(-6deg) scale(.9) !important; opacity: 0; }
+html.phone .ph-sort-hints { display: flex; justify-content: space-between; padding: 0 8px; font-size: 12.5px; font-weight: 700; opacity: .55; }
+html.phone .ph-sort-acts { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 16px; }
+html.phone .ph-sort-act {
+  width: 62px; height: 62px; border: 0; border-radius: 50%; display: grid; place-items: center; font: inherit; font-size: 19px; font-weight: 800;
+  background: var(--ios-fill); color: var(--text); transition: transform .25s var(--pop), opacity .2s; animation: ph-rail-in .5s var(--pop) both;
+}
+html.phone .ph-sort-act:active { transform: scale(.85); }
+html.phone .ph-sort-act.undo { width: 48px; height: 48px; font-size: 22px; opacity: .8; animation-delay: 0s; }
+html.phone .ph-sort-act.undo:disabled { opacity: .25; }
+html.phone .ph-sort-act.meh { color: #ffb86b; animation-delay: .05s; }
+html.phone .ph-sort-act.fav { width: 76px; height: 76px; font-size: 32px; background: var(--accent); color: #fff; box-shadow: 0 12px 30px -10px var(--accent); animation-delay: .1s; }
+html.phone .ph-sort-act.keep { color: #5ef2a4; animation-delay: .15s; }
+html.phone .ph-sort-end { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; animation: ph-ring-in .5s var(--pop); }
+html.phone .ph-sort-end b { width: 96px; height: 96px; border-radius: 50%; display: grid; place-items: center; font-size: 46px; background: var(--accent); color: #fff; }
+html.phone .ph-sort-end p { margin: 8px 0 0; font-size: 18px; font-weight: 700; }
+@keyframes ph-card-rise { from { transform: scale(.93) translateY(18px); opacity: .7; } }
+@keyframes ph-card-back { from { transform: translateX(-110%) rotate(-18deg); opacity: 0; } }
+
+/* ---------- motion around the app ---------- */
+/* the grid ripples in after a redraw; the picture you closed lands back in place */
+html.phone #grid .card.ph-in { animation: ph-tile-in .55s var(--pop) both; animation-delay: var(--d, 0ms); }
+html.phone #grid .card.ph-land { animation: ph-land .6s var(--pop); z-index: 2; }
+@keyframes ph-tile-in { from { opacity: 0; transform: scale(.7); filter: blur(6px); } }
+@keyframes ph-land { 0% { transform: scale(1.12); box-shadow: 0 0 0 3px var(--accent); } 100% { transform: none; box-shadow: 0 0 0 0 transparent; } }
+/* the tab bar: the chosen icon hops */
+html.phone .ios-tabbar button.on::before { animation: ph-hop .5s var(--pop); }
+@keyframes ph-hop { 0% { transform: scale(1); } 35% { transform: translateY(-5px) scale(1.18); } 70% { transform: translateY(1px) scale(.96); } 100% { transform: scale(1.08); } }
+/* the tab bar and the switcher float up when the app opens */
+html.phone .ios-tabbar { animation: ph-float-up .6s var(--pop) .1s both; }
+html.phone .ios-seg { animation: ph-float-up-c .6s var(--pop) .18s both; }
+@keyframes ph-float-up { from { opacity: 0; transform: translateY(40px) scale(.9); } }
+@keyframes ph-float-up-c { from { opacity: 0; transform: translateX(-50%) translateY(40px) scale(.9); } }
+/* More's tiles pop in one after another */
+html.phone .ios-back.in .ios-tile { animation: ph-pop-in .42s var(--pop) both; }
+html.phone .ios-back.in .ios-tile:nth-child(2) { animation-delay: .03s; } html.phone .ios-back.in .ios-tile:nth-child(3) { animation-delay: .06s; }
+html.phone .ios-back.in .ios-tile:nth-child(4) { animation-delay: .09s; } html.phone .ios-back.in .ios-tile:nth-child(5) { animation-delay: .12s; }
+html.phone .ios-back.in .ios-tile:nth-child(6) { animation-delay: .15s; } html.phone .ios-back.in .ios-tile:nth-child(7) { animation-delay: .18s; }
+html.phone .ios-back.in .ios-tile:nth-child(8) { animation-delay: .21s; } html.phone .ios-back.in .ios-tile:nth-child(n+9) { animation-delay: .24s; }
+/* the long-press sheet's strips slide in, the chips follow */
+html.phone .ios-back.in .ios-peek-block { animation: ph-in-up .4s var(--spring) both; }
+html.phone .ios-back.in .ios-peek-block:nth-of-type(2) { animation-delay: .05s; } html.phone .ios-back.in .ios-peek-block:nth-of-type(3) { animation-delay: .1s; }
+html.phone .ios-back.in .ios-peek-block:nth-of-type(n+4) { animation-delay: .15s; }
+html.phone .ios-chip.on { animation: ph-bump .35s var(--pop); }
+@keyframes ph-pop-in { from { opacity: 0; transform: scale(.6) translateY(16px); } }
+/* sheets land with a little bounce */
+html.phone .ios-back.in .ios-sheet { transition: transform .46s var(--pop); }
+/* the toast drops in from the top with a spring (and stays above Stories and Sort) */
+html.phone #toast:not(.hidden) { animation: ph-toast .5s var(--pop); z-index: 700; }
+@keyframes ph-toast { from { opacity: 0; transform: translateX(-50%) translateY(-28px) scale(.85); } }
+/* the double-tap heart throws sparks */
+html.phone .ph-spark {
+  position: fixed; z-index: 2147483000; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; pointer-events: none;
+  background: var(--accent); box-shadow: 0 0 10px var(--accent); animation: ph-spark .7s cubic-bezier(.2, .8, .3, 1) forwards;
+}
+html.phone .ph-spark:nth-child(odd) { background: #ffd36b; box-shadow: 0 0 10px #ffd36b; }
+@keyframes ph-spark { 0% { transform: rotate(var(--a)) translateX(0) scale(1.2); opacity: 1; } 100% { transform: rotate(var(--a)) translateX(var(--r)) scale(0); opacity: 0; } }
+/* pressing a viewer tool or a round button gives a soft ring */
+html.phone .ios-round:active, html.phone .ios-pill:active { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 25%, transparent); }

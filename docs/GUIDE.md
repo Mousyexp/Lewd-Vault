@@ -150,6 +150,14 @@ On a phone the app is laid out like Photos:
   screen, a cat video, or a working calculator (Settings → Privacy). To come back: swipe up on the
   lock screen and enter your PIN, or type your PIN into the calculator and press `=`. With no PIN
   set, hold the clock (or the calculator's display) for a second.
+- **Stories**: rings over the Library (New, Favourites, then your biggest categories). Each plays full
+  screen, one after another: tap for the next, hold to pause, swipe sideways for another ring, up to
+  open it, down to close.
+- **Sort** (the first ring, or More → Sort): the pictures you haven't sorted yet, as a stack of cards.
+  Swipe right for 2 stars, left for 1, up for a favourite (3 stars and a heart); Undo takes one back.
+  What's sorted is kept in the vault (`_app/kv/phone-sort.json`), so every device agrees.
+- **The level dial**: tap the level in the viewer's toolbar (or in Stories and Sort) and slide your
+  thumb along the half circle; it saves when you let go.
 - The app covers itself while it is in the background, so the app switcher shows nothing.
 
 Not on the phones: the global emergency shortcut, opening files in other apps, cloud-folder choices,
