@@ -1,4 +1,4 @@
-// The media server (iOS): the vault's files, served over loopback HTTP.
+// The media server (iOS and Android): the vault's files, served over loopback HTTP.
 //
 // A custom URL scheme (vault://, spelled http://vault.localhost on WebView2) is what the desktop
 // app uses, but on WKWebView a custom scheme does not feed <img>, <video> and <audio> reliably
@@ -10,7 +10,7 @@
 // token made at start, which the page gets through window.__VAULT_ORIGIN; nothing off this device
 // can reach 127.0.0.1, and the port is picked at random each launch.
 //
-// On the desktop none of this runs (media.rs is only compiled for iOS): vault:// stays.
+// On the desktop none of this runs (media.rs is only compiled for the phones): vault:// stays.
 
 use super::{serve, Vault};
 use std::collections::hash_map::RandomState;

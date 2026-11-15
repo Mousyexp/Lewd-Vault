@@ -39,7 +39,7 @@ mod excel;
 mod fastlane;
 mod gdrive;
 mod maint;
-#[cfg(target_os = "ios")]
+#[cfg(mobile)]
 mod media;
 mod pack;
 mod recycle;
@@ -359,12 +359,12 @@ fn file_name(uid: &str, added: &str, kind: &str, category: &str, nsfw: i64, qual
 // (Windows) and WKWebView serves on a loopback HTTP origin (iOS). `vault_origin()` is the one place
 // that difference lives; the page gets it through window.__VAULT_ORIGIN (see the window setup).
 fn vault_origin() -> String {
-    #[cfg(target_os = "ios")]
+    #[cfg(mobile)]
     {
         // the loopback media server's base, filled in at start (see media::start)
         return media::origin();
     }
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(not(mobile))]
     {
         "http://vault.localhost".to_string()
     }
@@ -2081,9 +2081,10 @@ pub fn run() {
     }
     gdrive::ask_sign_in(start.drive_setup);
     let vault = Arc::new(Vault::new(start.root, start.first_run));
-    // iOS: media goes over loopback HTTP (custom schemes don't feed <img>/<video> on WKWebView);
-    // desktop: the vault:// protocol handler below
-    #[cfg(target_os = "ios")]
+    // phones: media goes over loopback HTTP (custom schemes don't feed <img>/<video> on WKWebView,
+    // and Android's request interception can't stream a seekable video); desktop: the vault://
+    // protocol handler below
+    #[cfg(mobile)]
     media::start(vault.clone());
     let for_files = vault.clone();
     let for_window = vault.clone();
@@ -2132,11 +2133,13 @@ pub fn run() {
             // the page builds every media URL from this one value (vaultUrl in sync-ui.mjs): on the
             // desktop the vault:// origin, on iOS the loopback media server's base (with its token)
             window = window.initialization_script(format!("window.__VAULT_ORIGIN = {};", serde_json::to_string(&vault_origin()).unwrap_or_else(|_| "\"\"".into())));
-            // iOS: the page keys its iOS layout (the bottom tab bar, the Apple Photos chrome) off
-            // html.ios. Done here, before the page's own scripts, so nothing flashes in desktop shape.
-            #[cfg(target_os = "ios")]
+            // Phones: the page keys its phone layout (the bottom tab bar, the Photos-style chrome) off
+            // html.phone, plus html.ios / html.android for what differs between the two. Done here,
+            // before the page's own scripts, so nothing flashes in desktop shape.
+            #[cfg(mobile)]
             {
-                window = window.initialization_script("document.documentElement.classList.add('ios');");
+                let os = if cfg!(target_os = "android") { "android" } else { "ios" };
+                window = window.initialization_script(format!("document.documentElement.classList.add('phone', '{os}');"));
             }
             // Untraceable: the browser engine keeps nothing (private mode), and what it must have on
             // disk goes inside the app's hidden folder instead of %LOCALAPPDATA%

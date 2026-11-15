@@ -2,8 +2,8 @@
 //   - applies the few changes the desktop needs to Index.html (the Drive / Apps Script calls go to
 //     the Rust backend and the local files instead, plus hooks for the tags feature),
 //   - adds the desktop layer: ui/desktop.css (the desktop look) and ui/desktop.js (tags, search,
-//     desktop-only settings), plus the iOS layer from mobile/ (mobile/ui/ios.css, folded into the
-//     same stylesheet, and mobile/ui/ios.js),
+//     desktop-only settings), plus the phone layer from mobile/ (mobile/ui/phone.css, folded into
+//     the same stylesheet, and mobile/ui/phone.js; it only acts under html.phone, on iOS and Android),
 //   - copies the libraries and fonts the page loads from the internet in the web version, so the
 //     app works offline.
 // The web version stays the one source of the shared UI: run this (npm run sync) after changing
@@ -306,7 +306,7 @@ patch(`</body>`, `<script src="/desktop.js"></script>
 <script src="/share.js"></script>
 <script src="/extras.js"></script>
 <script src="/streamline.js"></script>
-<script src="/ios.js"></script>
+<script src="/phone.js"></script>
 </body>`);
 patch(`<head>`, `<head>\n<title>Lewd Vault</title>
 <meta name="referrer" content="no-referrer">`); // (no page address goes out with requests: RedGifs refuses a foreign one)
@@ -321,12 +321,12 @@ const mod = p => new URL(`node_modules/${p}`, here);
 fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(new URL('vendor/', out), { recursive: true });
 fs.writeFileSync(new URL('index.html', out), page);
-// One stylesheet for the page: the desktop look, then the iOS skin appended after it (mobile/ui/ios.css
-// must come second so its html.ios rules win). Keeping it one file means the page keeps its single
+// One stylesheet for the page: the desktop look, then the phone skin appended after it (mobile/ui/phone.css
+// must come second so its html.phone rules win). Keeping it one file means the page keeps its single
 // <link> and Windows and iOS load exactly the same bytes plus the iOS-only tail.
 fs.writeFileSync(new URL('mobile.css', out),
   fs.readFileSync(new URL('ui/desktop.css', here), 'utf8') + '\n' +
-  fs.readFileSync(new URL('mobile/ui/ios.css', here), 'utf8'));
+  fs.readFileSync(new URL('mobile/ui/phone.css', here), 'utf8'));
 copy(new URL('ui/desktop.js', here), new URL('desktop.js', out));
 copy(new URL('ui/discover.js', here), new URL('discover.js', out));
 copy(new URL('ui/sites.js', here), new URL('sites.js', out));
@@ -344,7 +344,7 @@ copy(new URL('ui/coach.js', here), new URL('coach.js', out));
 copy(new URL('ui/share.js', here), new URL('share.js', out));
 copy(new URL('ui/extras.js', here), new URL('extras.js', out));
 copy(new URL('ui/streamline.js', here), new URL('streamline.js', out));
-copy(new URL('mobile/ui/ios.js', here), new URL('ios.js', out)); // the iOS layer (mobile/ui/ios.css is folded into mobile.css above)
+copy(new URL('mobile/ui/phone.js', here), new URL('phone.js', out)); // the phone layer (mobile/ui/phone.css is folded into mobile.css above)
 copy(new URL('src-tauri/icons/128x128@2x.png', here), new URL('app-icon.png', out)); // the brand mark in the sidebar
 for (const f of fs.readdirSync(new URL('art/decor/', here))) copy(new URL(`art/decor/${f}`, here), new URL(`decor/${f}`, out)); // see ui/desktop.js
 // her moans (MagicalMysticVA on Freesound, CC BY 4.0): Appreciate's like-*.ogg, the coach's coach-*.ogg

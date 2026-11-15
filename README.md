@@ -78,6 +78,17 @@ and drop a vault in. Untraceable mode's encryption works the same on both. The e
 only opens with your PIN, and it covers itself in the app switcher. A few PC-only things are left
 out (cloud folders, Drive sign-in, in-app updates); the list is in [mobile/README.md](mobile/README.md).
 
+## 🤖 On Android
+
+The same phone app, as an APK for 64-bit (arm64) Android phones, with the back button doing what
+you'd expect. Download **Lewd.Vault.Android.apk** from the latest release (or run **Actions → Build
+Android** and take the **LewdVault-apk** artifact), open it, and allow installing from your browser
+or file manager when Android asks.
+
+The vault lives in the app's private storage. To bring your PC's vault over, use **Google Drive over
+the web** (Settings → Storage) on both: it works on Android. Hide now, the calculator and the lock
+screen work as on iPhone.
+
 ## 🧑‍💻 Build it yourself
 
 ```bash

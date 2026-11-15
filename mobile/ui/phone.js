@@ -1,7 +1,8 @@
-// The iOS layer: what the shared page needs to be a phone app.
+// The phone layer: what the shared page needs to be a phone app (iPhone, iPad and Android).
 //
-// Only runs on iOS (the app sets html.ios there, before any script). The shared page keeps doing all
-// the work; this file re-presents its features the way a phone expects them:
+// Only runs on a phone (the app sets html.phone there, plus html.ios or html.android, before any
+// script). The shared page keeps doing all the work; this file re-presents its features the way a
+// phone expects them:
 //   1. a floating tab bar (Library, Browser, Add, Slideshow, More) and the More tiles,
 //   2. the Library laid out like Photos, with search, filters and tags in sheets,
 //   3. long-press a picture: it lifts into a preview with its actions under it (stars, level and
@@ -9,14 +10,18 @@
 //   4. the viewer: the picture full screen, a glass toolbar, details as a pull-up sheet, swipes and
 //      double-tap to appreciate; the slideshow takes the same gestures,
 //   5. confirm() and prompt(): WKWebView silently drops them (confirm is always "no"), so every
-//      "are you sure?" would block its action for good; they become in-app sheets,
+//      "are you sure?" would block its action for good; they become in-app sheets (on Android too,
+//      so both look the same),
 //   6. privacy: "Hide now" (and a three-finger tap) in place of the emergency key, as a lock screen or
-//      a working calculator that opens with your PIN, and a cover while the app is in the background.
-// The look is mobile/ui/ios.css.
+//      a working calculator that opens with your PIN, and a cover while the app is in the background,
+//   7. Android's back button: it closes what is open (a sheet, the details, the viewer, the slideshow),
+//      then goes back to the Library, and only then leaves the app.
+// The look is mobile/ui/phone.css.
 (() => {
   'use strict';
   const html = document.documentElement;
-  if (!html.classList.contains('ios')) return;
+  if (!html.classList.contains('phone')) return;
+  const android = html.classList.contains('android');
   const $ = id => document.getElementById(id);
   const make = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const ICON = {
@@ -68,7 +73,7 @@
   const label = b => (b.querySelector('.nt-title') || b).textContent.trim();
   const iconOf = b => getComputedStyle(b).getPropertyValue('--icon').trim(); // (the sidebar's own icon)
   const PRIMARY = ['library', 'discover', 'add', 'slideshow'].filter(side);
-  // (a <div>, not a <nav>: the desktop's sidebar rules are `html.desktop nav …`, and iOS carries both classes)
+  // (a <div>, not a <nav>: the desktop's sidebar rules are `html.desktop nav …`, and a phone carries both classes)
   const tabbar = make('div', 'ios-tabbar glass');
   tabbar.setAttribute('role', 'navigation');
   tabbar.setAttribute('aria-label', 'Sections');
@@ -373,8 +378,9 @@
   if (openInApp) openInApp.classList.add('ios-no');
 
   // Settings' jump chips are made from its headings: drop the one for the section hidden on iOS
+  // (Drive's browser sign-in: iOS suspends the app while Safari is in front; Android doesn't)
   const settingsTab = $('tab-settings');
-  if (settingsTab) new MutationObserver(() => {
+  if (settingsTab && !android) new MutationObserver(() => {
     for (const b of settingsTab.querySelectorAll('.st-jump')) if (/Google Drive/.test(b.textContent)) b.remove();
   }).observe(settingsTab, { childList: true, subtree: true });
 
@@ -626,4 +632,49 @@
   document.addEventListener('visibilitychange', () => setCover(document.visibilityState !== 'visible'));
   addEventListener('pagehide', () => setCover(true));
   addEventListener('pageshow', () => { if (document.visibilityState === 'visible') setCover(false); });
+
+  // ---------- 7. Android's back button ----------
+  // The web view goes back in its history when there is some, and leaves the app when there isn't.
+  // So while anything is open, one history entry is kept pushed; back pops it, and the topmost thing
+  // closes (and if more is open, the entry goes back on). With nothing open it goes, and the next
+  // back leaves the app, as on any Android app.
+  if (android) {
+    const visible = sel => { const e = document.querySelector(sel); return !!e && !e.classList.contains('hidden'); };
+    const libTab = () => document.querySelector('header nav button[data-tab="library"]');
+    const onTab = () => { const b = document.querySelector('header nav button.on'); return b ? b.dataset.tab : 'library'; };
+    // the topmost open thing, as a function that closes it (or null)
+    const top = () => {
+      if (document.querySelector('.pv-screen, .ios-calc, .pin-lock:not(.hidden)')) return null; // (never: those are the privacy covers)
+      const back = [...document.querySelectorAll('.ios-back.in')].pop();
+      if (back) return () => back.click();
+      const sheetClose = [...document.querySelectorAll('.dc-sheet:not(.hidden) .dc-sheet-head .btn')].pop(); // (Discover keeps a hidden one)
+      if (sheetClose) return () => sheetClose.click();
+      if (visible('#detail')) return () => {
+        const d = $('detail');
+        if (d.classList.contains('ios-info')) d.classList.remove('ios-info'); else $('closeDetail').click();
+      };
+      if (visible('#show')) return () => { const b = $('sClose'); if (b) b.click(); };
+      if (visible('#collage')) return () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      if (document.querySelector('.dc-view:not(.hidden)')) return () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      if (document.querySelector('#tab-profile:not(.hidden)') || onTab() !== 'library') return () => { const b = libTab(); if (b) b.click(); };
+      return null;
+    };
+    let pushed = false, popping = false;
+    const sync = () => {
+      if (popping) return;
+      const open = !!top();
+      if (open && !pushed) { history.pushState({ lv: 1 }, ''); pushed = true; }
+      else if (!open && pushed) { pushed = false; popping = true; history.back(); setTimeout(() => { popping = false; }, 60); }
+    };
+    addEventListener('popstate', () => {
+      if (popping) { popping = false; return; }
+      pushed = false;
+      const close = top();
+      if (close) close();
+      setTimeout(sync, 80);
+    });
+    let queued = false;
+    new MutationObserver(() => { if (!queued) { queued = true; requestAnimationFrame(() => { queued = false; sync(); }); } })
+      .observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+  }
 })();

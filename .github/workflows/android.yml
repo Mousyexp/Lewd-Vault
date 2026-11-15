@@ -1,0 +1,144 @@
+# Builds the Android app (an APK for arm64 phones) on a Linux runner.
+#
+# The phone page is the same one the iOS app uses (mobile/ui/phone.js + phone.css, keyed off
+# html.phone; html.android adds the back button). The Rust backend is the same crate, built for
+# aarch64-linux-android with the runner's NDK.
+#
+# Signing: an APK must be signed to install. With the four ANDROID_* secrets below set, every build
+# is signed with your key, so a new APK installs over the old one and keeps the vault. Without them a
+# throwaway key is made for the run: that APK installs fine, but the next one (a different key)
+# won't update it; Android makes you uninstall first, which deletes the app's data. See mobile/README.md.
+#
+# Trigger it by hand (Actions -> Build Android -> Run workflow), on a push to main or a pull request
+# that touches the app.
+name: Build Android
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Also attach the APK to this release (its tag, e.g. v1.2.0), replacing an APK already there'
+        type: string
+        default: ''
+  push:
+    branches: [main]
+    paths:
+      - 'src-tauri/**'
+      - 'ui/**'
+      - 'mobile/**'
+      - 'tools/**'
+      - 'sync-ui.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'art/app-icon.png'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'src-tauri/**'
+      - 'ui/**'
+      - 'mobile/**'
+      - 'tools/**'
+      - 'sync-ui.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'art/app-icon.png'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    # (write, only to attach the APK to a release when the run asks for it; see the last step)
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      # the Gradle build of Tauri's Android project wants JDK 17
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      # The runner ships the Android SDK and an NDK; the Tauri CLI finds the NDK through NDK_HOME.
+      - name: Point Tauri at the NDK
+        run: |
+          echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          echo "SDK: $ANDROID_HOME"; echo "NDK: $ANDROID_NDK_LATEST_HOME"
+      - run: npm ci
+      # writes the gitignored src/ and checks the page hangs together
+      - run: npm test
+      - run: npm run sync
+      # Creates src-tauri/gen/android (the Gradle project) once; then the real icon into its res/.
+      - run: npx tauri android init --ci
+      - run: npx tauri icon art/app-icon.png
+      # The page reads every picture and video from the app's own server on 127.0.0.1 (media.rs), over
+      # plain http. Android blocks cleartext traffic in release builds, so allow it (nothing leaves
+      # the phone: the server only listens on loopback and wants a per-launch token).
+      - name: Allow the loopback media server (cleartext to 127.0.0.1)
+        run: |
+          cd src-tauri/gen/android
+          grep -rn 'usesCleartextTraffic' app/build.gradle.kts app/src/main/AndroidManifest.xml || true
+          sed -i 's/manifestPlaceholders\["usesCleartextTraffic"\] = "false"/manifestPlaceholders["usesCleartextTraffic"] = "true"/' app/build.gradle.kts
+          if ! grep -q 'usesCleartextTraffic' app/src/main/AndroidManifest.xml; then
+            sed -i 's/<application /<application android:usesCleartextTraffic="true" /' app/src/main/AndroidManifest.xml
+          fi
+          grep -rn 'usesCleartextTraffic' app/build.gradle.kts app/src/main/AndroidManifest.xml
+      - name: Build the APK
+        run: npx tauri android build --apk --target aarch64
+      - name: Sign the APK
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+          apk=$(find src-tauri/gen/android/app/build/outputs/apk -name '*release*.apk' | head -1)
+          echo "built: $apk"
+          test -n "$apk"
+          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          ks="$RUNNER_TEMP/release.jks"
+          if [ -n "$ANDROID_KEYSTORE_B64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ]; then
+            echo "Signing with the release key from the secrets"
+            printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$ks"
+            pass="$ANDROID_KEYSTORE_PASSWORD"; alias="$ANDROID_KEY_ALIAS"; keypass="${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+          else
+            echo "::warning::No ANDROID_* signing secrets: signing with a throwaway key (the next build won't install over this one)"
+            pass=throwaway; alias=lewdvault; keypass=throwaway
+            keytool -genkeypair -keystore "$ks" -storepass "$pass" -keypass "$keypass" -alias "$alias" \
+              -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Lewd Vault"
+          fi
+          "$tools/zipalign" -f -p 4 "$apk" aligned.apk
+          "$tools/apksigner" sign --ks "$ks" --ks-pass "pass:$pass" --ks-key-alias "$alias" --key-pass "pass:$keypass" \
+            --out Lewd.Vault.Android.apk aligned.apk
+          "$tools/apksigner" verify --print-certs Lewd.Vault.Android.apk
+          rm -f "$ks" aligned.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LewdVault-apk
+          path: Lewd.Vault.Android.apk
+          if-no-files-found: error
+      # Run workflow with "release" set: the APK goes onto that release as Lewd.Vault.Android.apk,
+      # replacing the one there (--clobber), next to the Windows and iOS downloads.
+      - name: Attach the APK to the release
+        if: github.event_name == 'workflow_dispatch' && inputs.release != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release }}
+        run: gh release upload "$TAG" Lewd.Vault.Android.apk --clobber --repo "$GITHUB_REPOSITORY"

@@ -73,7 +73,7 @@ const unpairedBackdrop = (css, where) => {
   if (bad.length) throw new Error(`${where}: ${bad.length} without the prefix, e.g. ${bad[0].trim()}`);
 };
 step('every backdrop-filter has its -webkit- pair (iOS WebKit)', () => {
-  // The desktop look and the iOS skin are two files (ui/desktop.css and mobile/ui/ios.css) that
+  // The desktop look and the phone skin are two files (ui/desktop.css and mobile/ui/phone.css) that
   // sync-ui concatenates into src/mobile.css; check the built file so neither half can drift.
   const css = fs.readFileSync(path.join(src, 'mobile.css'), 'utf8');
   unpairedBackdrop(css, 'mobile.css');
@@ -163,26 +163,26 @@ step('the iOS port pieces the platform turns on are in place', () => {
   for (const key of ['UIFileSharingEnabled', 'NSAllowsLocalNetworking', '127.0.0.1']) {
     if (!plist.includes(key)) throw new Error(`Info.plist is missing ${key}`);
   }
-  // The iOS layer runs only under html.ios, which the Rust side adds as an initialization script
-  // before the page's own scripts; if that ever disappears, mobile/ui/ios.js silently does nothing.
+  // The phone layer runs only under html.phone, which the Rust side adds as an initialization script
+  // before the page's own scripts; if that ever disappears, mobile/ui/phone.js silently does nothing.
   const lib = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'lib.rs'), 'utf8');
-  if (!/classList\.add\((['"])ios\1\)/.test(lib)) throw new Error("nothing adds the html.ios class, so mobile/ui/ios.js never runs");
-  if (!page.includes('src="/ios.js"')) throw new Error('the page does not load /ios.js');
-  // The iOS skin (mobile/ui/ios.css) is appended after the desktop look into the single /mobile.css
+  if (!/classList\.add\((['"])phone\1/.test(lib)) throw new Error("nothing adds the html.phone class, so mobile/ui/phone.js never runs");
+  if (!page.includes('src="/phone.js"')) throw new Error('the page does not load /phone.js');
+  // The phone skin (mobile/ui/phone.css) is appended after the desktop look into the single /mobile.css
   // the page loads. If sync-ui stops folding it in, iOS would run the desktop look with no iOS styling.
   if (!page.includes('href="/mobile.css"')) throw new Error('the page does not load /mobile.css');
   const builtCss = fs.readFileSync(path.join(src, 'mobile.css'), 'utf8');
-  if (!builtCss.includes('html.ios .ios-tabbar')) throw new Error('mobile.css has no iOS skin (mobile/ui/ios.css was not folded in)');
-  // Every rule of the iOS skin must start with `html.ios`: the file is appended to the stylesheet
+  if (!builtCss.includes('html.phone .ios-tabbar')) throw new Error('mobile.css has no phone skin (mobile/ui/phone.css was not folded in)');
+  // Every rule of the phone skin must start with `html.phone`: the file is appended to the stylesheet
   // Windows loads too, so one unscoped (or `html.desktop`) rule restyles the desktop app.
-  const skin = fs.readFileSync(path.join(root, 'mobile', 'ui', 'ios.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const skin = fs.readFileSync(path.join(root, 'mobile', 'ui', 'phone.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   for (const m of skin.matchAll(/(^|[{}])\s*([^{}@]+?)\s*\{/g)) {
     // (split on the commas between selectors, not the ones inside :is(...) / :has(...))
     const parts = []; let depth = 0, cur = '';
     for (const ch of m[2]) { if (ch === '(') depth++; if (ch === ')') depth--; if (ch === ',' && !depth) { parts.push(cur); cur = ''; } else cur += ch; }
     parts.push(cur);
-    const loose = parts.map(x => x.trim()).filter(x => x && !x.startsWith('html.ios') && !/^(from|to|\d+%)$/.test(x));
-    if (loose.length) throw new Error(`mobile/ui/ios.css: "${loose[0]}" is not scoped to html.ios (it would apply on Windows)`);
+    const loose = parts.map(x => x.trim()).filter(x => x && !x.startsWith('html.phone') && !/^(from|to|\d+%)$/.test(x));
+    if (loose.length) throw new Error(`mobile/ui/phone.css: "${loose[0]}" is not scoped to html.phone (it would apply on Windows)`);
   }
   // The iOS app launches through `main.mm`'s `ffi::start_app()`: `mobile_entry_point` turns `run()`
   // into an exported `start_app` symbol (a #[no_mangle] extern "C"). Rename `run` and the build still

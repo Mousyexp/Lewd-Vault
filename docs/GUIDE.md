@@ -126,11 +126,16 @@ changed), **Health check** finds missing files and broken previews and fixes the
 installs a newer release in one click. The app also keeps 14 days of `index.csv`, `views.csv` and
 settings in `_app/backups`. **Export to Excel** writes the library as a spreadsheet.
 
-## iPhone and iPad
+## iPhone, iPad and Android
 
 The same app runs on iOS 26 as a sideloaded IPA; see the [README](../README.md#-on-iphone--ipad-sideloaded)
 for installing it and [mobile/README.md](../mobile/README.md) for how it is built. A vault is the
 same folder on both: put one in the app's **Documents** folder with the Files app.
+
+Android phones get the same phone app as an APK (**Actions → Build Android**, or the release's
+`Lewd.Vault.Android.apk`), with the system back button closing whatever is on top. There the vault
+lives in the app's private storage; bring one over with Google Drive over the web (Settings →
+Storage), which works on Android.
 
 On a phone the app is laid out like Photos:
 
@@ -147,8 +152,9 @@ On a phone the app is laid out like Photos:
   set, hold the clock (or the calculator's display) for a second.
 - The app covers itself while it is in the background, so the app switcher shows nothing.
 
-Not on iOS: the global emergency shortcut, opening files in other apps, cloud-folder choices,
-Google Drive's browser sign-in, and in-app updates (install a newer IPA instead).
+Not on the phones: the global emergency shortcut, opening files in other apps, cloud-folder choices,
+Google Drive's browser sign-in (iOS only; Android has it), and in-app updates (install a newer IPA
+or APK instead).
 
 ## The vault folder
 
@@ -186,7 +192,8 @@ cd src-tauri && cargo test    # the backend's tests
 A release is a version tag: bump the version in `package.json`, `src-tauri/Cargo.toml` and
 `src-tauri/tauri.conf.json`, then push a tag such as `v1.2.0` (or create the release on GitHub and
 run **Actions → Build → Run workflow** with the tag). The workflow builds the installer and the
-portable zip and attaches them. The iOS IPA is built by **Actions → Build iOS**.
+portable zip and attaches them. The iOS IPA is built by **Actions → Build iOS**, the Android APK by **Actions → Build Android**
+(both take the release's tag to attach to it).
 
 `node tools/screenshots.mjs <folder with 5 pictures>` retakes the README's screenshots from the
 real page and the real backend (an opt-in test, `screenshot_server`, serves the backend locally).
@@ -204,7 +211,8 @@ real page and the real backend (an opt-in test, `screenshot_server`, serves the 
   | `player.js`, `videos.js`, `audio.js`, `slideshow.js` | playing things |
   | `profile.js`, `lust.js`, `coach.js`, `share.js` | You, levels, the coach, share packs |
   | `privacy.js`, `drivesync.js`, `look.js` | discreet names, the emergency key, Drive sync, themes |
-- **`mobile/ui/`** is the iOS layer (`ios.js`, `ios.css`), applied only under `html.ios`.
+- **`mobile/ui/`** is the phone layer for iOS and Android (`phone.js`, `phone.css`), applied only
+  under `html.phone`.
 - **`sync-ui.mjs`** builds `src/` from those: it patches `Index.html` for the app (every patch must
   match exactly once, or the build stops) and copies the fonts and libraries so the app works
   offline. Never edit `src/`.
@@ -219,7 +227,7 @@ real page and the real backend (an opt-in test, `screenshot_server`, serves the 
   | `crypt.rs` | Untraceable: encryption and the password |
   | `gdrive.rs` | Google Drive in your browser |
   | `web.rs` | the Browser's requests and cache |
-  | `fastlane.rs`, `media.rs` | fast local uploads; the iOS media server |
+  | `fastlane.rs`, `media.rs` | fast local uploads; the phones' media server |
   | `discreet.rs`, `dupes.rs`, `excel.rs`, `pack.rs`, `maint.rs` | discreet names, duplicates, Excel, share packs, backup/health/updates |
 
 ## Credits
