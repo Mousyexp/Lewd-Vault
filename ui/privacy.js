@@ -1,4 +1,4 @@
-// Lewd Vault desktop: privacy (Phase 8 of PLAN.md).
+// Lewd Vault desktop: privacy.
 //   - Discreet names (Settings → Storage; asked on the welcome screen, on by default for a new vault):
 //     every file in one neutral folder, Media, named by its number only (src-tauri/src/discreet.rs)
 //   - the emergency key (Ctrl+Shift+Space by default, works even when another app is in front):

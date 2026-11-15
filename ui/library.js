@@ -1,4 +1,4 @@
-// Lewd Vault desktop: the Library (Phase 3 of PLAN.md). Loaded after desktop.js and look.js; uses the
+// Lewd Vault desktop: the Library. Loaded after desktop.js and look.js; uses the
 // page's own functions (library, api, renderLibrary, openDetail, setCollectionOf, ...).
 //   - preview clips: from 2/5 of the way in (past the intro), the short side capped at 320 px instead of
 //     the width, so landscape clips are as sharp as portrait ones; older clips are remade in the background

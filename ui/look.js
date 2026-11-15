@@ -1,4 +1,4 @@
-// Lewd Vault desktop: the look (Phase 2 of PLAN.md). Loaded after desktop.js and uses the page's own
+// Lewd Vault desktop: the look. Loaded after desktop.js and uses the page's own
 // settings (SETTINGS, settings, S, saveSettingsSoon, renderSettings, applyTheme). It adds:
 //   - Font: Nunito (round) by default, or another round font
 //   - Mouse pointer: Windows' own by default, or a heart or a paw in the theme's colour (also asked

@@ -1,4 +1,4 @@
-// Lewd Vault desktop: the NSFW faces and the Appreciate button (Phase 7 of PLAN.md).
+// Lewd Vault desktop: the NSFW faces and the Appreciate button.
 //   - ten faces, one for each NSFW level, drawn here (original anime-style vector art of a grown woman):
 //     sweet, shy, blushing, flirty, flustered, biting her lip, heart eyes, panting, lewd, ahegao.
 //     They're the NSFW picker in the details (click a level) and show on the Library's detailed layouts.

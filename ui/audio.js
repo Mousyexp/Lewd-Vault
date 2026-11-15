@@ -1,4 +1,4 @@
-// Lewd Vault desktop: Audio (Phase 5 of PLAN.md), a sidebar section of its own.
+// Lewd Vault desktop: Audio, a sidebar section of its own.
 //   - Yours: your audio (JOI, hypno, ASMR, erotic stories, ...), in categories. Add files by dropping
 //     them on the page or with the button; they're kept in the vault (_app/audio), listed in
 //     _app/kv/audio.json.

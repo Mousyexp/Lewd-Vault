@@ -1,4 +1,4 @@
-// Lewd Vault desktop: the slideshow (Phase 6 of PLAN.md), on top of the page's own.
+// Lewd Vault desktop: the slideshow, on top of the page's own.
 //   - Motion: none by default (no more slow zoom), or slow pan, hypnotic bounce (slow or fast),
 //     breathing, drifting, or the old zoom; on videos too
 //   - full screen is the window's own, so it covers the whole monitor (the taskbar too)

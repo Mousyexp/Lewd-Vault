@@ -1,7 +1,8 @@
 [package]
 name = "image-vault"
 version = "1.1.0"
-description = "Image Vault, as a portable desktop app over a local folder"
+description = "Lewd Vault: collect, tag and enjoy your pictures, GIFs, videos and audio, privately, in a plain folder"
+license = "MIT"
 edition = "2021"
 
 # The app is a library so the same code builds for iOS too (where the platform owns the entry point

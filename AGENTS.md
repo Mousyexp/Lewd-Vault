@@ -1,211 +1,34 @@
 # AGENTS.md
 
-Repository-specific knowledge for future sessions. Keep this short and factual.
+Notes for anyone (person or AI) working in this repository. Keep it short and true.
 
 ## What this is
 
-Lewd Vault (formerly "Image Vault"): a Windows-only Tauri 2 desktop app for collecting, tagging and
-viewing NSFW media, shipped as a portable `~6 MB` `Lewd Vault.exe` (or an MSI). The frontend is a
-shared page (`ui/Index.html` + `ui/*.js` + `ui/desktop.css`) that is also the Google Apps Script web
-version; `sync-ui.mjs` patches it into `src/`, which Tauri serves. iOS is a second target of the same
-crate; its only iOS-specific code is the `mobile/` layer (see `mobile/README.md`).
+Lewd Vault: a Tauri 2 app for collecting, tagging and viewing NSFW media, for Windows (a portable
+`.exe` or an MSI) and iOS (a sideloaded IPA). One crate, one page. `docs/GUIDE.md` describes the
+features, the vault folder and the code layout; `mobile/README.md` covers iOS.
 
-## Build
+## Rules
 
-- `npm install`, then `npm run dist` (needs Rust + VS C++ Build Tools + Node).
-- `npm run sync` regenerates `src/` from `ui/`. Never edit `src/` by hand.
-- Every patch in `sync-ui.mjs` must match exactly once, or the build stops.
-- Edit the shared page in `ui/Index.html`; edit desktop-only additions in `ui/*.js`; edit the iOS layer
-  in `mobile/ui/` (`ios.js`, `ios.css`). `sync-ui.mjs` builds one stylesheet, `src/mobile.css`
-  (`ui/desktop.css` + `mobile/ui/ios.css` appended after it), so the iOS skin always wins on iOS.
-- Tests: `npm test` runs `tools/check.mjs`; `cargo test` covers the Rust pieces (`src-tauri`).
-- Build output (`src/`, `src-tauri/target/`, `src-tauri/gen/`, `dist/`) is git-ignored.
+- **Never edit `src/`.** It is built from `ui/` and `mobile/ui/` by `npm run sync` (`sync-ui.mjs`).
+  Every patch in `sync-ui.mjs` must match exactly once, or the build stops.
+- **The vault format must not change.** `index.csv`/`views.csv` (BOM, CRLF), the `_app/` layout, the
+  file names and the `LVX1` encryption are shared by Windows and iOS; the tests compare bytes.
+  `src-tauri/tests/fixtures/**` is `-text` in `.gitattributes` for that reason.
+- **Do not rename** the bundle identifier (`local.imagevault.desktop`), the data folder names
+  ("Image Vault data", "Image Vault Desktop") or the config file: existing installs would lose
+  their vault.
+- **`mobile/ui/ios.css`: every rule starts with `html.ios`.** The file ships in the Windows build.
+- Platform splits in Rust: `cfg(desktop)` / `cfg(windows)` for the PC, `cfg(target_os = "ios")` /
+  `cfg(mobile)` for the phone.
+- No secrets in the repository. The Google key is a build-time secret
+  (`LEWD_VAULT_GOOGLE_CLIENT_ID` / `_SECRET`).
 
-## Architecture notes
+## Checking your work
 
-- **One Rust binary today**: `src-tauri/src/main.rs` has `fn main()`. Tauri **mobile** needs a
-  `[lib] crate-type = ["staticlib", "cdylib", "rlib"]` plus `lib.rs::run()` and a thin `main.rs`.
-- **The page talks to Rust through one command**: `api(fn, ...args)` → `tauri::generate_handler![api,
-  ...]` in `main.rs`, which mirrors the Apps Script `Code.gs` calls.
-- **Custom protocol**: files are served by a `vault` protocol registered with
-  `register_asynchronous_uri_scheme_protocol`; `serve()` in `main.rs` handles byte ranges (`206`,
-  `Content-Range`, a 4 MB `RANGE_PIECE`). On Windows/Android the origin is
-  `http://vault.localhost`, **elsewhere `vault://localhost`** (see
-  `crates/tauri/src/protocol/mod.rs`). The frontend currently hardcodes the Windows form in
-  `sync-ui.mjs` (`vaultUrl`) and the Rust side emits it in `getThumb`/the item list.
-- **Loopback server**: `fastlane.rs` binds `127.0.0.1:0`, picks a free port, requires a random
-  `x-key` on every request, and checks `Origin`. Reusable pattern for any local HTTP need.
-- **Windows-only paths**: `explorer` (open links/folders), `trash` crate (no iOS backend),
-  `%LOCALAPPDATA%`/`%APPDATA%`/`USERPROFILE` paths, `attrib +h +s`, and the
-  `tauri-plugin-global-shortcut` emergency key (`Ctrl+Shift+Space`).
-- **Plugins**: `single-instance` (desktop-only), `dialog` (iOS ok), `global-shortcut` (desktop-only).
-- **Crypto**: `crypt.rs` (ChaCha20 + PBKDF2) is pure Rust and portable. `getrandom` 0.2 uses
-  `CCRandomGenerateBytes` on iOS. `ureq` + `rustls` + `ring` build for `aarch64-apple-ios`.
-- `tauri.conf.json` sets `withGlobalTauri: true` and `csp: null`.
-
-## iOS port research
-
-The iOS port lives in `mobile/` (see `mobile/README.md` for the map). Its research docs are
-`mobile/docs/PORT.md` (research) and `mobile/docs/PHASE-1.md` (detailed Phase 1 plan). The iOS
-front-end layer is `mobile/ui/ios.js` + `mobile/ui/ios.css` (the latter folded into the built
-`src/mobile.css` after `ui/desktop.css`); everything else is shared with Windows and branched in
-place. Key conclusions: feasible as a sideloaded IPA; serve media over a loopback HTTP server
-(custom-scheme `<video>`/`<audio>` is fragile on iOS — WebKit bugs 146351 and 324711); compute the
-origin instead of hardcoding `http://vault.localhost/`; the crate must be restructured for mobile;
-iOS builds need macOS + Xcode.
-
-### Building the IPA in CI (`.github/workflows/ios.yml`)
-
-The `ios.yml` workflow builds an unsigned, sideloadable IPA on a `macos-26` runner
-(`tauri ios init` + `tauri ios build --no-sign`), then uploads it as the `LewdVault-ipa`
-artifact. Four things bite on a fresh checkout; all are already fixed there, but they are
-the same traps for any future iOS CI:
-
-- **`cargo test` needs the Linux GTK/WebKit headers.** The `rust-tests` job runs on
-  ubuntu-latest, and the crate is a Tauri app, so even `cargo test` compiles the desktop
-  backend; without `libwebkit2gtk-4.1-dev`/`libgtk-3-dev`/`libsoup-3.0-dev` the `-sys` build
-  scripts fail ("Package gobject-2.0 was not found in the pkg-config search path").
-- **`tauri ios build` requires a non-empty development team even with `--no-sign`.** It
-  builds the Apple config before it looks at the flag, and that config rejects an empty
-  `apple.development-team`. The unsigned path exports a placeholder team (`0000000000`);
-  nothing is signed there, so the value is never used.
-- **Unset Apple secrets arrive as empty strings.** GitHub passes a missing secret as `""`,
-  and Tauri's credential reader treats "present but empty" as an error (it only tolerates all
-  three being *absent*). The unsigned path `unset`s `APPLE_API_KEY`, `APPLE_API_ISSUER`,
-  `APPLE_API_KEY_PATH` first.
-- **The generated Xcode project calls an npm script.** Its "Build Rust Code" phase runs
-  `npm run -- tauri ios xcode-script`, so `package.json` needs the `"tauri": "tauri"` script
-  the official Tauri templates ship; without it xcodebuild exits 65 ("Missing script: tauri").
-
-The unsigned IPA is `gen/apple/build/arm64/Lewd Vault.ipa`; its `Info.plist` carries
-`CFBundleIdentifier local.imagevault.desktop`, `MinimumOSVersion 26.0`, `UIRequiredDeviceCapabilities
-["arm64","metal"]`, and `UIFileSharingEnabled`/`LSSupportsOpeningDocumentsInPlace` (so the vault
-folder is reachable in Files). Sideload with AltStore/SideStore, which sign on the device.
-
-### Audit of `mobile/docs/PORT.md` (13 Nov 2026, against the code)
-
-Verified claims that matter, and two fixes made while checking:
-
-- **JS dialogs are silently dropped on iOS (confirmed).** wry 0.57.0's iOS `WKUIDelegate`
-  (`src/wkwebview/class/wry_web_view_ui_delegate.rs`) implements only media-capture permission,
-  file-upload (macOS) and navigation actions — none of `runJavaScriptAlert`/`Confirm`/`TextInputPanel`.
-  WebKit's `UIDelegate::UIClient` (`Source/WebKit/UIProcess/Cocoa/UIDelegate.mm`) then falls back to
-  `alert` = no-op, `confirm` = `false`, `prompt` = `""`. So any flow gated on `confirm` **runs without
-  asking** on iOS. The audit's count of **24** `confirm`/`prompt`/`alert` call sites (16 in `ui/*.js`,
-  8 in `src/index.html`) is exact. Fix in Phase 4: in-page modal.
-- **`fastlane.rs` Origin allowlist (fixed).** It held only the two Windows forms; the iOS page origin
-  is `tauri://localhost`, so iOS would get no CORS header and a `403` (`!cors.is_empty()` is in the
-  gate). `ORIGINS` now also carries `tauri://localhost` and `"null"` (opaque origin). The real guard
-  is unchanged: the per-launch `x-key`.
-- **`maint.rs` self-update (fixed).** `install_update` writes a `.cmd` and calls `app.exit(0)`; on iOS
-  a stray invoke would quit the app. It is now `#[cfg(windows)]` with a `#[cfg(not(windows))]` stub
-  that returns an error. Also unreachable on iOS anyway: `exe_dir_writable()` is `false` there, so
-  `update_check` never reports `newer`.
-- **`serve()` CORS (confirmed).** `serve()` returns `Access-Control-Allow-Origin: *` and does not
-  inspect `Origin` (the loopback token in the first path segment is the guard). `media.rs` forwards
-  those headers, so the iOS page's `fetch` reads work. Do not describe it as an `Origin` check.
-- **Autoplay.** The WebView2 `--autoplay-policy=no-user-gesture-required` flag is Windows-only; wry's
-  iOS default `autoplay: true` maps to `setMediaTypesRequiringUserActionForPlayback(None)`, but
-  Safari's "Auto-Play" setting and Low Power Mode can still block unmuted autoplay, so keep the cover
-  video `muted` + `playsinline` + a `play().catch(...)` retry.
-- **Counts confirmed by grep**: `contextmenu` = 3 (`library.js:427`, `privacy.js:136/159`);
-  `dblclick` = 3 (`library.js:982`, `look.js:304`, `player.js:206`); mouse handlers = 8
-  (`desktop.js` ×6, `discover.js:1450`, `src/index.html:3695`); 20 `.js`/`.mjs` under `src/`.
-- **`requestFullscreen`** appears once (`src/index.html:576`) but `ui/slideshow.js` reassigns
-  `showFullscreen` at runtime to the backend `window_action` version, so the element call is dead
-  code (and a no-op on iPhone).
-
-### UI preview verification (13 Nov 2026)
-
-The frontend is static (`frontendDist` = `../src`), so it previews in any browser; outside Tauri it
-runs its own demo mode. Serve `src/` and add `html.ios` to see the iOS layer (the real app does this
-via `initialization_script`). Verified at 393×852 (iPhone) and 1024×1366 (iPad):
-
-- **Fixed: the tab bar was a `<nav>`, and the desktop sidebar's rules ate it.** `mobile/ui/ios.js` built the
-  bar as `<nav class="photos-tabbar">`, but on iOS `<html>` carries **both** `ios` (added by
-  `lib.rs`) and `desktop` (`ui/desktop.js:17` adds it unconditionally). The sidebar is styled with
-  ~90 `html.desktop nav …` rules (specificity 0,1,1) which outrank `.photos-tabbar` (0,1,0), so the
-  bar inherited `flex-direction: column` and `html.desktop nav button { font-size: 0 }`. Measured
-  result: six **389×6 px** buttons stacked vertically, bottom edge at 891 px on an 852 px screen —
-  i.e. off-screen, unusable. Now a `<div role="navigation">`, so nothing matches: a row of
-  **63×49 px** buttons at the bottom, all ≥44 px (iOS HIG), no horizontal overflow. iPad width keeps
-  the sidebar (as Apple Photos does), which the `<div>` also fixes (`display:grid` before).
-- **Same fix, second half: the icons.** Those `html.desktop nav [data-tab=…] { --icon: … }` rules
-  were *also* the tab bar's icon source. A `<div>` does not match them, so `mobile/ui/ios.js` now copies the
-  sidebar button's resolved `--icon` onto each tab button explicitly.
-- **Regression guard** in `tools/check.mjs`: fails if the bar is a `<nav>` again, if it is not a
-  `<div class="photos-tabbar">`, or if the `--icon` copy is dropped.
-- Verified working after the fix: all six tabs switch and keep tab bar + sidebar highlight in step;
-  the 34 px collapsing `Library` title, the `.scroll-edge` gradient, and the floating `.viewer-chrome`
-  all render; zero undersized tap targets on the phone layout.
-
-- **Not worth doing (skipped):** capability-gating `VideoEncoder`/`AudioEncoder`/`setSinkId`. The
-  target is iOS 26, which has all three natively; gating would add UI risk for no reachable benefit.
-
-### Building the iOS IPA in CI
-
-There is no local Mac, so the IPA is built by GitHub Actions (`.github/workflows/ios.yml`):
-`macos-26` (macOS 26 Tahoe, **Xcode 26.6 + the iOS 26 SDK** — required because
-`bundle.iOS.minimumSystemVersion` is `26.0`; `macos-latest` currently aliases to it, but the runner
-tag is pinned and a step re-selects `/Applications/Xcode_26.6.app`, because the image's *default*
-Xcode drifts when GitHub updates it). The `ipa` job: `dtolnay/rust-toolchain` with the
-`aarch64-apple-ios` target, `Swatinem/rust-cache` (`workspaces: src-tauri`), `brew install xcodegen`
-(auto-update off), `npx tauri ios init --ci`, `npx tauri icon art/app-icon.png`, then `npx tauri ios
-build`. No Apple secrets → `--no-sign` (unsigned IPA, signed on device); `APPLE_API_KEY` +
-`APPLE_API_ISSUER` + `APPLE_API_KEY_P8` + `APPLE_DEVELOPMENT_TEAM` set → `--export-method debugging`
-(signed IPA). Facts worth keeping:
-
-- The aarch64-apple-ios target **must** be installed (`rustup target add`, via the toolchain action);
-  without it the crate fails to compile with "can't find crate for `std`".
-- A headless keychain step (`security unlock-keychain` + `set-key-partition-list -S
-  apple-tool:,apple:,codesign:`) runs before the build so nothing waits on a password prompt a cloud
-  runner cannot answer. Each line is `|| true` (harmless under `--no-sign`).
-- A cold run compiles the whole Rust tree for aarch64-apple-ios plus the CocoaPods graph, so the job
-  timeout is 90 min and the caches above keep later runs short.
-
-- `bundle.active: false` does **not** block `tauri ios build`: that command uses cargo-mobile2's
-  archive/export, not Tauri's desktop bundler.
-- The IPA lands at `src-tauri/gen/apple/build/<arch>/<ProductName>.ipa` (cargo-mobile2 `export_dir` =
-  `gen/apple/build`). The icon must be written *after* `ios init`, because `tauri icon` targets
-  `gen/apple/Assets.xcassets/AppIcon.appiconset` only once that exists.
-- Signing reads `APPLE_API_KEY` + `APPLE_API_ISSUER` + `APPLE_API_KEY_PATH` (a *file path* to the
-  `.p8`); the workflow writes the secret text to a temp file. Signing also needs
-  `APPLE_DEVELOPMENT_TEAM` or `bundle.iOS.developmentTeam`; a partial API-key set is a hard error.
-- **The bundle id is the App ID the Apple portal must know about.** `identifier` is
-  `local.imagevault.desktop` (valid reverse-DNS; Tauri rejects its `com.tauri.dev` default). A paid
-  Apple Developer account must register that exact App ID, and the signing profile must cover it, or
-  the export fails on a bundle-id/profile mismatch. A free-Apple-ID sideload (AltStore) signs with a
-  personal team and rewrites the id itself, so it needs nothing.
-- **The app icons carry no alpha.** `art/app-icon.png` is RGBA (42% transparent), but `tauri icon`
-  draws the iOS appiconset entries onto an opaque background (`Background::Color`, default `#fff`)
-  before writing the PNG, so the asset catalog Xcode compiles is alpha-free. A flat square is what
-  `tauri icon` produces; that is expected, not a bug.
-- **`tools/check.mjs` pins the CI invariants** (aarch64 target, pinned runner, Xcode pin, keychain
-  step, the fourth signing secret, the job timeout, the bundle id), so `npm test` catches a workflow
-  regression on any OS. `rg 'cfg\('` shows the platform split: `cfg(desktop)`/`cfg(windows)` are the
-  desktop-only paths and `cfg(target_os = "ios")` / `cfg(mobile)` are the phone's.
-- **The test-vault fixtures must stay byte-exact.** `src-tauri/tests/fixtures/**` is marked `-text` in
-  `.gitattributes` because the repo-wide `* text=auto eol=lf` rewrote the plain vault's CRLF (the
-  format the app writes, `lib.rs`) to LF on checkout, so on a fresh clone the encrypted fixture no
-  longer decrypted back to it. Do not remove that rule.
-- **The Rust tests run in `ios.yml`'s `rust-tests` job, and nowhere else.** They are the vault-format
-  acceptance gate (`golden_vault_round_trips_byte_identical`, `index_is_windows_compatible`,
-  `untraceable_vault_made_elsewhere_opens`, uid allocation, the file-name format); `npm test` does not
-  cover them. `cargo test` needs the gitignored `src/` (tauri's `generate_context!` requires the
-  `frontendDist` dir), so the job runs `npm run sync` first. The `ipa` job `needs: rust-tests`.
-
-
-Two user priorities outrank the rest:
-
-- **Vault format compatibility.** The iOS app must read/write the *same* vault folder as Windows
-  (same `index.csv`/`views.csv` with BOM + CRLF, `_app/` layout, `file_name` naming, base64url ids,
-  `LVX1` ChaCha20+PBKDF2 encryption with the fixed salt, `pack-*.bin`). A no-op round-trip must be
-  byte-identical. The full contract and a compatibility test matrix are in `mobile/docs/PHASE-1.md`.
-- **Liquid Glass.** No free adoption in a webview. WebKit exposes the real system material as
-  `-apple-visual-effect: -apple-system-glass-material` (and `-clear`/`-subdued`/`-media-controls`),
-  gated on `HAVE_MATERIAL_HOSTING` which `wtf/PlatformHave.h` defines for `PLATFORM(IOS)`; also
-  `HAVE_CORE_MATERIAL` = `PLATFORM(COCOA)`. Non-standard, must be progressive enhancement. Portable
-  fallback: `backdrop-filter` (needs the `-webkit-` prefix on older iOS). **Done**: every standard
-  `backdrop-filter` declaration now has its `-webkit-backdrop-filter` pair first, and `tools/check.mjs`
-  fails the build if any future one is unpaired. Honour `prefers-reduced-transparency` and
-  `prefers-reduced-motion`.
+- `npm test`: the page builds, every script parses, the iOS pieces are in place.
+- `cd src-tauri && cargo test`: the backend (on Linux this needs the GTK/WebKit dev packages; CI
+  runs it on Windows and Ubuntu).
+- `node tools/screenshots.mjs <5 pictures>` drives the real page against the real backend.
+- iOS can only be built by `.github/workflows/ios.yml` (a macOS runner). The Windows release is a
+  version tag; see `docs/GUIDE.md`, "Building it".

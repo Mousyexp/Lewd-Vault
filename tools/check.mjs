@@ -152,13 +152,13 @@ step('the iOS port pieces the platform turns on are in place', () => {
   // each has bitten once. They are cheap to pin here (this runs on every `npm test`, on any OS).
   const conf = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri', 'tauri.conf.json'), 'utf8'));
   // The bundle key is "iOS" (capital I/O/S, matching "macOS"); "ios" is a deprecated alias. The
-  // minimum version encodes the iOS-26 decision (mobile/docs/PORT.md section 11).
+  // minimum version encodes the iOS-26 decision.
   if (!conf.bundle?.iOS) throw new Error('bundle.iOS is missing from tauri.conf.json');
   if (conf.bundle.iOS.minimumSystemVersion !== '26.0') throw new Error(`bundle.iOS.minimumSystemVersion is ${conf.bundle.iOS.minimumSystemVersion}, expected 26.0`);
-  // The crate must build as a staticlib for iOS (mobile/docs/PORT.md section 5).
+  // The crate must build as a staticlib for iOS.
   const cargo = fs.readFileSync(path.join(root, 'src-tauri', 'Cargo.toml'), 'utf8');
   if (!/crate-type\s*=\s*\[[^\]]*staticlib/.test(cargo)) throw new Error('the crate is not a staticlib (needed for iOS)');
-  // Info.plist: file sharing + the loopback ATS exception (mobile/docs/PORT.md sections 4, 8).
+  // Info.plist: file sharing + the loopback ATS exception.
   const plist = fs.readFileSync(path.join(root, 'src-tauri', 'Info.plist'), 'utf8');
   for (const key of ['UIFileSharingEnabled', 'NSAllowsLocalNetworking', '127.0.0.1']) {
     if (!plist.includes(key)) throw new Error(`Info.plist is missing ${key}`);

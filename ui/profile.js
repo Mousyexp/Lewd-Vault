@@ -1,4 +1,4 @@
-// Lewd Vault desktop: you (Phase 7 of PLAN.md).
+// Lewd Vault desktop: you.
 //   - an activity log: the active time of each day, and your sessions (a session ends after 10 minutes
 //     away). "Active" means the window is in front and you're doing something, or something is playing.
 //     Kept with the vault: _app/kv/daily.json and sessions.json.

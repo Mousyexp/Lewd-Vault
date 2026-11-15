@@ -55,31 +55,27 @@ Then pick where your vault should live (your PC, a cloud folder, Google Drive in
 
 You need WebView2, which Windows 10 and 11 already have. 👍
 
+🛡️ **"Windows protected your PC"?** The app isn't code-signed (certificates cost money), so
+SmartScreen warns the first time you run it. Click **More info → Run anyway**.
+
 ## 📱 On iPhone / iPad (sideloaded)
 
-There is no App Store build (the content would never pass review). The app is built as an **IPA** and
-sideloaded instead. The build runs in CI (`.github/workflows/ios.yml`) because it needs Xcode, which
-only runs on macOS:
+The same app, laid out for a phone like Photos: an edge-to-edge grid, a floating tab bar, bottom
+sheets, long-press menus and swipes in the viewer. There is no App Store build (the content would
+never pass review), so it is an **IPA** you sideload. It needs **iOS 26**.
+
+![Lewd Vault on iPhone: the Library, a picture, the More sheet and the Tags sheet](docs/screenshots/iphone.webp)
 
 1. On GitHub: **Actions → Build iOS → Run workflow**. When it finishes, download the
-   **LewdVault-ipa** artifact (that job also runs the Rust vault-format tests first).
-2. Install the IPA with a signer:
-   - 🆓 **AltStore / SideStore** (free Apple ID): signs the IPA with your own certificate and
-     re-signs it every 7 days. AltStore Classic runs AltServer on your **Windows PC**, so no Mac is
-     needed; SideStore pairs once and then works untethered.
-   - 💳 **Paid Apple Developer account**: set the `APPLE_API_KEY`, `APPLE_API_ISSUER`,
-     `APPLE_API_KEY_P8` and `APPLE_DEVELOPMENT_TEAM` repository secrets and the workflow produces a
-     **signed** IPA (development method, 1-year profile, up to 100 devices) that installs straight
-     away. All four are needed: the API key authorizes the export, the team ID is what Xcode signs
-     with.
+   **LewdVault-ipa** artifact.
+2. Install it with **AltStore** or **SideStore** (a free Apple ID; AltStore runs from your Windows
+   PC, and re-signs the app every 7 days). With a paid Apple Developer account the workflow can
+   build a signed IPA that installs directly; see [mobile/README.md](mobile/README.md).
 
-Requires **iOS 26** (the app uses the iOS 26 web features natively). Your vault is the *same folder*
-as on Windows: open the app's **Documents** folder in the Files app and drop a vault in — `index.csv`,
-`views.csv` and `_app/` stay interchangeable between the PC and the phone. Untraceable mode's
-encryption works the same on both.
-
-The workflow is manual for now; it is not yet wired to Releases. Full detail (and the reason for each
-iOS decision) is in [mobile/docs/PORT.md](mobile/docs/PORT.md).
+Your vault is the *same folder* as on Windows: open the app's **Documents** folder in the Files app
+and drop a vault in. Untraceable mode's encryption works the same on both. The emergency key is
+**More → Hide now**, and the app covers itself in the app switcher. A few PC-only things are left
+out (cloud folders, Drive sign-in, in-app updates); the list is in [mobile/README.md](mobile/README.md).
 
 ## 🧑‍💻 Build it yourself
 
@@ -89,6 +85,11 @@ npm run dist
 ```
 
 You need Node.js, Rust and the [Tauri prerequisites](https://tauri.app/start/prerequisites/). 📖 Want every detail? The full guide is in [docs/GUIDE.md](docs/GUIDE.md).
+
+## 📜 Licence
+
+The code is [MIT](LICENSE). The artwork (in the app and in the screenshots) is used with permission
+of its creators and isn't covered by that licence. Credits are in the [guide](docs/GUIDE.md#credits).
 
 ---
 

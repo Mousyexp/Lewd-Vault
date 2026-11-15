@@ -812,7 +812,7 @@ html.desktop .dc-save-big { grid-column: span 2; padding: 12px; font-size: 15px;
 .dc-srccard textarea { width: 100%; min-height: 70px; resize: vertical; padding: 9px 11px; border-radius: var(--field-radius); border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; }
 
 /* =====================================================================================
-   Phase 1 (PLAN.md): the viewer's buttons, folded tags, category dropdown, small fixes
+   the viewer's buttons, folded tags, category dropdown, small fixes
    ===================================================================================== */
 /* sections with fixed decorations only fade in: a transform would move the girls once it ends */
 html.desktop main > section:is(.has-rail, #tab-slideshow):not(.hidden) { animation-name: fade-in; }
@@ -894,7 +894,7 @@ html.desktop .badge.long::after { content: "LONG"; margin-left: 3px; padding: 0 
 @media (min-width: 1320px) { html.desktop:not(.no-decor) #tab-settings.has-rail { padding-right: 262px; max-width: calc(1040px + 262px); } }
 
 /* =====================================================================================
-   Phase 2 (PLAN.md): the look of Lewd Vault. The heart logo, the script titles, the round font
+   the look of Lewd Vault. The heart logo, the script titles, the round font
    (ui/look.js), the cursor, Custom, tinted decorations, the moving background, and the sidebar
    ===================================================================================== */
 /* the logo is the loading screen's heart */
@@ -1005,7 +1005,7 @@ html.desktop nav [data-tab="library"]:hover .nt-art.pics img:nth-child(2) { tran
 html.desktop nav [data-tab="library"]:hover .nt-art.pics img:nth-child(3) { transform: rotate(-24deg) translate(-8px, -4px); }
 
 /* =====================================================================================
-   Phase 3 (PLAN.md): the Library (ui/library.js)
+   the Library (ui/library.js)
    ===================================================================================== */
 /* hold a tile: 30% bigger */
 html.desktop #grid .card { transition: transform .18s cubic-bezier(.2, .9, .3, 1.2), box-shadow .18s; }
@@ -1133,7 +1133,7 @@ html.desktop #grid .card { contain: layout style; }
 html.is-scrolling #grid { pointer-events: none; }
 
 /* =====================================================================================
-   Phase 4 (PLAN.md): Discover's sources (ui/discover.js)
+   Discover's sources (ui/discover.js)
    ===================================================================================== */
 /* tabs with the sites' icons; drag one onto another to reorder */
 .dc-sources { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; padding-bottom: 2px; }
@@ -1196,7 +1196,7 @@ html.desktop .dc-cat-find { width: 100%; height: 40px; }
 .dc-sheet-body { grid-auto-rows: max-content; } /* (rows never shrink, so the catalogue list keeps its height) */
 
 /* =====================================================================================
-   Phase 5 (PLAN.md): the video player (ui/player.js)
+   the video player (ui/player.js)
    ===================================================================================== */
 .hidden-forever { display: none !important; }
 .vp-host { position: relative; }
@@ -1257,7 +1257,7 @@ html.vp-fullscreen #detail aside, html.vp-fullscreen #detail :is(.view-close, .v
 .vp-host.vp-full { position: fixed !important; inset: 0 !important; z-index: 200 !important; background: #000; }
 
 /* =====================================================================================
-   Phase 5 (PLAN.md): Videos (ui/videos.js) and Audio (ui/audio.js)
+   Videos (ui/videos.js) and Audio (ui/audio.js)
    ===================================================================================== */
 /* two more sidebar tiles: the list scrolls when they don't all fit */
 html.desktop nav { grid-auto-rows: minmax(108px, 1fr); }
@@ -1384,7 +1384,7 @@ html.au-open main { padding-bottom: 90px !important; }
 .au-save.hidden { display: none; }
 
 /* =====================================================================================
-   Phase 6 (PLAN.md): the slideshow (ui/slideshow.js)
+   the slideshow (ui/slideshow.js)
    ===================================================================================== */
 html.show-full .titlebar { display: none; }
 /* the bar at the bottom, in the theme */
@@ -1427,7 +1427,7 @@ html.desktop #showBottom { padding-bottom: 46px; }
 .show-history-row span { color: var(--dim); }
 
 /* =====================================================================================
-   Phase 7 (PLAN.md): you (ui/profile.js), the faces and the heart (ui/lust.js)
+   you (ui/profile.js), the faces and the heart (ui/lust.js)
    ===================================================================================== */
 /* the stopwatch and your picture, at the top right */
 .tb-clock { align-self: center; margin-right: 8px; height: 28px; padding: 0 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel); color: var(--text);
@@ -1569,7 +1569,7 @@ html.desktop #dLike.lust-like { display: flex; align-items: center; gap: 12px; p
 .pf-label { font-size: 15px; }
 
 /* =====================================================================================
-   Phase 8 (PLAN.md): privacy (ui/privacy.js) and the coach (ui/coach.js)
+   privacy (ui/privacy.js) and the coach (ui/coach.js)
    ===================================================================================== */
 .pv-keyrow { display: flex; align-items: center; gap: 10px; padding: 8px 4px 12px; }
 .pv-keylabel { font-size: 13.5px; color: var(--dim); }
@@ -1643,7 +1643,7 @@ html.desktop .coach-sel { height: 36px; font-size: 13px; }
 .coach-time i { display: block; height: 100%; width: 0; background: var(--accent); }
 
 /* =====================================================================================
-   Phase 9 (PLAN.md): share packs (ui/share.js), on the You page
+   share packs (ui/share.js), on the You page
    ===================================================================================== */
 .sh-box { padding: 0 32px; }
 .sh-box .pf-h { margin-left: 0; margin-right: 0; }

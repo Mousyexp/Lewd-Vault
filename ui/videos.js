@@ -1,4 +1,4 @@
-// Lewd Vault desktop: Videos (Phase 5 of PLAN.md), a sidebar section of its own.
+// Lewd Vault desktop: Videos, a sidebar section of its own.
 //   - Yours: the long videos in your library (10 minutes or more) in rows like a streaming service:
 //     Continue watching (it remembers where you stopped, kept with the vault), Newest, Most watched
 //     and one row per category. They open in the full view, with the themed player, at that spot.

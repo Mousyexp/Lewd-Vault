@@ -1,4 +1,4 @@
-// Lewd Vault desktop: the video player (Phase 5 of PLAN.md). One themed player for every video: the
+// Lewd Vault desktop: the video player. One themed player for every video: the
 // full view, Discover, Videos (long-form) and anything else. vaultPlayer.attach(video, host) puts it
 // on a <video> inside `host`:
 //   - a pink scrub bar with what's loaded, a time bubble and a little picture of the moment under

@@ -1,4 +1,4 @@
-// Lewd Vault desktop: sharing (Phase 9 of PLAN.md), a first step. On the You page:
+// Lewd Vault desktop: sharing, a first step. On the You page:
 //   - Make a share pack: a collection, a category, your original content or your most appreciated,
 //     as one .zip (the files as they are, each with its tags, scores and source, and a "vault card"
 //     picture), to give to a friend however you like (src-tauri/src/pack.rs)

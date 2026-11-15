@@ -1,4 +1,4 @@
-// Lewd Vault desktop: the coach (Phase 8 of PLAN.md). A small floating companion (the heart button at
+// Lewd Vault desktop: the coach. A small floating companion (the heart button at
 // the top right opens her) with two modes:
 //   - Kegel: pelvic floor exercises after the Mayo Clinic's guide (squeeze, hold, relax: start with
 //     3 seconds each, 10 in a row, at least 3 sets a day; work up to 10 seconds). A ring fills while

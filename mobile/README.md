@@ -1,64 +1,60 @@
-# The iOS port
+# Lewd Vault on iOS
 
-This directory holds everything that is **only** about running Lewd Vault on iOS (as a sideloaded
-IPA, iOS 26+). The app is one Tauri crate: iOS is a second target of the same Windows code, not a
-fork. So this directory is a *layer*, and the shared code it builds on stays where it was.
+The iPhone and iPad app is the same Tauri crate as the Windows app, built for a second target and
+sideloaded as an IPA (iOS 26+). This folder holds the only iOS-specific front-end code; everything
+else is shared and branches in place.
 
-**The one rule that outranks everything:** a vault folder must stay fully interoperable
-Windows ↔ iOS — the same `index.csv`, `views.csv` and `_app/` layout, byte for byte. Any change here
-that would alter the on-disk vault format is wrong. See [docs/PORT.md](docs/PORT.md) §5 and the
-vault-format tests in `src-tauri/tests/`.
+**The rule that outranks the rest:** a vault folder stays interchangeable between Windows and iOS,
+byte for byte (`index.csv`, `views.csv`, `_app/`, the Untraceable encryption). The tests in
+`src-tauri/src/lib.rs` hold it against the fixtures in `src-tauri/tests/fixtures/`.
 
-## Layout
+## What is where
 
-```
-mobile/
-  ui/                 the iOS front-end layer (loaded only under html.ios)
-    ios.js            structure + behaviour: bottom tab bar, large collapsing title, viewer chrome
-    ios.css           the iOS skin (Liquid Glass, Apple-Photos layout); appended after desktop.css
-  docs/
-    PORT.md           the full port research: feasibility, compatibility matrix, CI, decisions
-    PHASE-1.md        the Phase 1 plan (foundation, format compatibility, Liquid Glass) + exit criteria
-  native/
-    README.md         the platform-native pieces that must stay in src-tauri (tool-fixed paths)
-```
-
-Nothing else lives here. The shared page (`ui/`), the Rust backend (`src-tauri/src/`) and the build
-(`sync-ui.mjs`) are shared with Windows and are edited in place, with `#[cfg(target_os = "ios")]`
-or `html.ios` guards where the two platforms differ.
-
-## How the pieces fit
-
-The iOS front-end is assembled by `sync-ui.mjs` into the built `src/`, exactly like the desktop one:
-
-| Source | Becomes | Loaded |
+| Piece | Where | What it does |
 | --- | --- | --- |
-| `ui/desktop.css` + `mobile/ui/ios.css` (concatenated, iOS last) | `src/mobile.css` | `<link href="/mobile.css">` |
-| `mobile/ui/ios.js` | `src/ios.js` | `<script src="/ios.js">` |
+| The iOS layer | `mobile/ui/ios.js`, `mobile/ui/ios.css` | The tab bar and More sheet, the Photos-style Library, sheets, iOS controls, gestures, confirm/prompt, Hide now and the background cover. |
+| Turning it on | `src-tauri/src/lib.rs` | An initialization script adds `ios` to `<html>` before the page runs. Every rule in `ios.css` starts with `html.ios`, so Windows never sees it (`npm test` enforces that). |
+| Media | `src-tauri/src/media.rs` | A loopback HTTP server (`127.0.0.1`, a random port and token per launch). WKWebView doesn't feed `<img>`/`<video>` from a custom scheme reliably, so the page's files come from here; the page gets the address as `window.__VAULT_ORIGIN`. |
+| Storage | `src-tauri/src/storage.rs` | The vault lives in the app's **Documents** (visible in the Files app, which is how a vault from a PC gets onto the phone). The app's own things, and an Untraceable vault, live in Application Support, which Files doesn't show. |
+| No Recycle Bin | `src-tauri/src/recycle.rs` | Deleted items go to the vault's own `_trash`. |
+| Bundle settings | `src-tauri/tauri.conf.json` (`bundle.iOS`), `src-tauri/Info.plist` | The minimum iOS version; file sharing and the loopback exception. Tauri finds both by path, so they stay in `src-tauri`. |
 
-`ios.css` is appended **after** `desktop.css` on purpose: it overrides the desktop rules, so it must
-stay last. On Windows none of it applies — every rule is gated on `html.ios` (or `html.desktop`, which
-iOS also carries) — and `ios.js` early-returns because `lib.rs` never adds the `ios` class there.
+`sync-ui.mjs` appends `ios.css` to the desktop stylesheet (it must come last, to override it) and
+copies `ios.js`; both ship in the Windows build too and do nothing there.
 
-The Rust side turns the layer on with one line in `src-tauri/src/lib.rs`: an initialization script that
-adds `ios` to `<html>` before the page's own scripts run, so nothing flashes in desktop shape. The rest
-of the Rust branching is `#[cfg(target_os = "ios")]` (storage roots, the loopback media server, the
-recycle-bin shim); those files live in `src-tauri/src/`, not here, because they are the same modules the
-desktop build compiles.
+## What iOS can't do, and what the app does about it
 
-## Building and previewing
+| On Windows | On iOS |
+| --- | --- |
+| `confirm()` / `prompt()` | WKWebView drops them (confirm is always "no"). `ios.js` shows a sheet, and replays the tap with your answer. |
+| Right-click | Long-press. |
+| The emergency key (a global shortcut) | **More → Hide now**; hold the screensaver for a second to come back. The app also covers itself in the background, so the app switcher shows nothing. |
+| Open with another program, Show in folder | Hidden. |
+| Cloud-synced folders, Another folder… | Hidden (there is one container). |
+| Google Drive in your browser | Hidden: iOS suspends the app while Safari is in front, so the sign-in could never return. |
+| In-app updates | Install a newer IPA. |
 
-- **The IPA** is built on a macOS runner by [`.github/workflows/ios.yml`](../.github/workflows/ios.yml)
-  (Actions → Build iOS → Run workflow). It runs `npm test`, then `tauri ios init` / `tauri ios build`.
-  The result is unsigned by default (`--no-sign`) and is signed on the device by your sideloading tool
-  (AltStore/SideStore, TrollStore, or your own certificate). See [docs/PORT.md](docs/PORT.md) §6.
-- **The UI without a Mac.** `npm test` runs the guards; to *see* the iOS layout, build `src/`, add
-  `document.documentElement.classList.add('ios')` to a copy of `src/index.html`, and open it in a
-  WebKit-based browser (or Safari's responsive mode). The iOS CSS is pure `html.ios` CSS, so it renders
-  anywhere. `mobile/docs/PORT.md` §12 records the layout checks and the bugs they caught.
+## Building the IPA
 
-## Where to start reading
+There is no local build without a Mac. **Actions → Build iOS → Run workflow**
+(`.github/workflows/ios.yml`) runs the Rust tests, then `tauri ios init` and `tauri ios build` on a
+macOS runner, and uploads the **LewdVault-ipa** artifact.
 
-1. [docs/PORT.md](docs/PORT.md) — why iOS 26, what is shared vs adapted, the compatibility contract.
-2. [docs/PHASE-1.md](docs/PHASE-1.md) — the concrete Phase 1 tasks and their exit criteria.
-3. `mobile/ui/ios.js` then `mobile/ui/ios.css` — the actual iOS layer, ~260 lines together.
+- Unsigned by default (`--no-sign`): sign it on the device with AltStore or SideStore.
+- With the repository secrets `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` and
+  `APPLE_DEVELOPMENT_TEAM` (a paid Apple Developer account, with the App ID
+  `local.imagevault.desktop` registered), tick **signed** for an IPA that installs directly.
+
+Things the workflow already handles, in case it ever needs changing: the unsigned path sets a
+placeholder development team and unsets the (empty) Apple secrets, because `tauri ios build` checks
+both before it looks at `--no-sign`; `package.json` needs the `tauri` script the generated Xcode
+project calls; and the runner and Xcode version are pinned, because the iOS 26 SDK is required.
+
+## Trying the layout without a device
+
+`npm run sync`, serve `src/`, and add the `ios` class to `<html>` before the page's scripts run (the
+app does this itself). Outside Tauri the page runs in its demo mode; `tools/screenshots.mjs` shows
+how to point it at the real backend instead. Use a phone-sized window (393 × 852) for the phone
+layout; 820px and wider gets the iPad layout, which keeps the sidebar.
+
+This checks layout and behaviour, not WebKit itself: test on a real device before relying on it.

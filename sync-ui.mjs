@@ -241,7 +241,7 @@ patch(`const b = document.createElement('span'); b.className = 'tag badge';`,
       `const b = document.createElement('span'); b.className = 'tag badge' + (item.kind === 'video' ? ' vid' : '') + (item.duration >= 600 ? ' long' : '');`);
 
 
-// ---------- Phase 3 (PLAN.md): the Library ----------
+// ---------- the Library ----------
 // preview clips are made by library.js (from 2/5 of the way in, short side capped, so landscape
 // clips are as sharp as portrait ones), and named .c3.mp4 (24 fps at most) so older ones can be told apart and remade
 patch(`async function makePreview(blob, info, stage) {
