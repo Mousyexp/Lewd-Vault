@@ -132,11 +132,20 @@ The same app runs on iOS 26 as a sideloaded IPA; see the [README](../README.md#-
 for installing it and [mobile/README.md](../mobile/README.md) for how it is built. A vault is the
 same folder on both: put one in the app's **Documents** folder with the Files app.
 
-On a phone the app is laid out like Photos: an edge-to-edge grid, a floating tab bar (Library,
-Browser, Add, Slideshow, More), Select, bottom sheets for search, filters and tags, long-press where
-the PC has right-click, and swipes in the viewer (sideways for the next picture, down to close).
-**More → Hide now** is the emergency key; hold a finger on the screensaver for a second to come
-back. The app covers itself while it is in the background.
+On a phone the app is laid out like Photos:
+
+- **Library**: an edge-to-edge grid, the title over it, **Select**, and a switcher (All / Pictures /
+  GIFs / Videos) above the floating tab bar. Search, filters and tags are sheets from the bottom.
+- **Long-press a picture** and it lifts into a preview with its actions under it: stars, the NSFW
+  level and categories as strips you tap.
+- **The viewer**: the picture full screen with a glass toolbar (appreciate, details, edit, delete).
+  Tap to hide the controls, double-tap to appreciate, swipe sideways for the next one, up for the
+  details, down to close. The slideshow takes the same swipes and double-tap.
+- **Hide now** (in More, or tap anywhere with three fingers) is the emergency key. It shows a lock
+  screen, a cat video, or a working calculator (Settings → Privacy). To come back: swipe up on the
+  lock screen and enter your PIN, or type your PIN into the calculator and press `=`. With no PIN
+  set, hold the clock (or the calculator's display) for a second.
+- The app covers itself while it is in the background, so the app switcher shows nothing.
 
 Not on iOS: the global emergency shortcut, opening files in other apps, cloud-folder choices,
 Google Drive's browser sign-in, and in-app updates (install a newer IPA instead).

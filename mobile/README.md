@@ -12,7 +12,7 @@ byte for byte (`index.csv`, `views.csv`, `_app/`, the Untraceable encryption). T
 
 | Piece | Where | What it does |
 | --- | --- | --- |
-| The iOS layer | `mobile/ui/ios.js`, `mobile/ui/ios.css` | The tab bar and More sheet, the Photos-style Library, sheets, iOS controls, gestures, confirm/prompt, Hide now and the background cover. |
+| The iOS layer | `mobile/ui/ios.js`, `mobile/ui/ios.css` | The tab bar and More tiles, the Photos-style Library, the long-press preview sheet, the full-screen viewer and its gestures, iOS controls, confirm/prompt, Hide now (lock screen, calculator) and the background cover. |
 | Turning it on | `src-tauri/src/lib.rs` | An initialization script adds `ios` to `<html>` before the page runs. Every rule in `ios.css` starts with `html.ios`, so Windows never sees it (`npm test` enforces that). |
 | Media | `src-tauri/src/media.rs` | A loopback HTTP server (`127.0.0.1`, a random port and token per launch). WKWebView doesn't feed `<img>`/`<video>` from a custom scheme reliably, so the page's files come from here; the page gets the address as `window.__VAULT_ORIGIN`. |
 | Storage | `src-tauri/src/storage.rs` | The vault lives in the app's **Documents** (visible in the Files app, which is how a vault from a PC gets onto the phone). The app's own things, and an Untraceable vault, live in Application Support, which Files doesn't show. |
@@ -27,8 +27,8 @@ copies `ios.js`; both ship in the Windows build too and do nothing there.
 | On Windows | On iOS |
 | --- | --- |
 | `confirm()` / `prompt()` | WKWebView drops them (confirm is always "no"). `ios.js` shows a sheet, and replays the tap with your answer. |
-| Right-click | Long-press. |
-| The emergency key (a global shortcut) | **More → Hide now**; hold the screensaver for a second to come back. The app also covers itself in the background, so the app switcher shows nothing. |
+| Right-click menu | Long-press a picture: it lifts into a preview, with its actions in a sheet (stars, the level and categories as tap strips). The sheet presses the desktop menu's own buttons, so it never falls behind it. |
+| The emergency key (a global shortcut) | **More → Hide now**, or a three-finger tap anywhere. It shows a lock screen (swipe up, then your PIN) or a working calculator (your PIN, then `=`); with no PIN, hold the clock or the display for a second. The app also covers itself in the background, so the app switcher shows nothing. |
 | Open with another program, Show in folder | Hidden. |
 | Cloud-synced folders, Another folder… | Hidden (there is one container). |
 | Google Drive in your browser | Hidden: iOS suspends the app while Safari is in front, so the sign-in could never return. |

@@ -60,11 +60,11 @@ SmartScreen warns the first time you run it. Click **More info → Run anyway**.
 
 ## 📱 On iPhone / iPad (sideloaded)
 
-The same app, laid out for a phone like Photos: an edge-to-edge grid, a floating tab bar, bottom
-sheets, long-press menus and swipes in the viewer. There is no App Store build (the content would
+The same app, redesigned for a phone like Photos: an edge-to-edge grid, a floating tab bar, bottom
+sheets, a long-press preview with tap strips, and a full-screen viewer you swipe through. There is no App Store build (the content would
 never pass review), so it is an **IPA** you sideload. It needs **iOS 26**.
 
-![Lewd Vault on iPhone: the Library, a picture, the More sheet and the Tags sheet](docs/screenshots/iphone.webp)
+![Lewd Vault on iPhone: the Library, the long-press preview, the viewer, More, and the two Hide-now decoys (a lock screen and a calculator)](docs/screenshots/iphone.webp)
 
 1. On GitHub: **Actions → Build iOS → Run workflow**. When it finishes, download the
    **LewdVault-ipa** artifact.
@@ -74,7 +74,8 @@ never pass review), so it is an **IPA** you sideload. It needs **iOS 26**.
 
 Your vault is the *same folder* as on Windows: open the app's **Documents** folder in the Files app
 and drop a vault in. Untraceable mode's encryption works the same on both. The emergency key is
-**More → Hide now**, and the app covers itself in the app switcher. A few PC-only things are left
+**Hide now** (or a three-finger tap): the app turns into a lock screen or a working calculator that
+only opens with your PIN, and it covers itself in the app switcher. A few PC-only things are left
 out (cloud folders, Drive sign-in, in-app updates); the list is in [mobile/README.md](mobile/README.md).
 
 ## 🧑‍💻 Build it yourself
