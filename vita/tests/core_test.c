@@ -264,6 +264,63 @@ int main(int argc, char **argv) {
     CHECK(system(cmd) == 0, "clean up");
   }
 
+  // ---- editing: the index written back byte for byte, an edit, a delete, a save then a rewrite ----
+  {
+    char tmp[200], cmd[700], p2[700];
+    snprintf(tmp, sizeof tmp, "/tmp/lv-vita-edit-%d", (int)getpid());
+    snprintf(cmd, sizeof cmd, "rm -rf %s && cp -r '%s/golden-vault' %s", tmp, fx, tmp);
+    CHECK(system(cmd) == 0, "copy");
+    LvVault e;
+    lv_vault_init(&e, tmp);
+    CHECK(lv_vault_load(&e, &why) == 0, "load");
+    snprintf(p2, sizeof p2, "%s/index.csv", tmp);
+    size_t on = 0;
+    char *orig = slurp(p2, &on);
+    char *again = lv_index_csv(&e);
+    CHECK(orig && again && strlen(again) == on && !memcmp(orig, again, on), "index.csv rewritten unchanged is the same bytes");
+    free(again);
+    // an edit: stars, level, category, tags
+    CHECK(lv_item_set(&e, 0, "quality", "3") == 0 && lv_item_set(&e, 0, "nsfw", "8") == 0, "set stars and level");
+    CHECK(lv_item_set(&e, 0, "category", "Faves") == 0 && lv_item_set(&e, 0, "tags", "blue_hair \"quoted\"") == 0, "set category and tags");
+    CHECK(lv_item_set(&e, 0, "no_such_column", "x") == -1, "an unknown column");
+    CHECK(e.items[0].quality == 3 && e.hot[0].quality == 3 && !strcmp(e.cats[e.hot[0].cat], "Faves"), "the loaded item follows");
+    CHECK(lv_vault_save_index(&e) == 0, "save the index");
+    // a save from the Browser after: its row is in the file's order and survives the next rewrite
+    LvNew nw = {.name = "x", .category = "Faves", .kind = "image", .tags = "t", .source = "s", .added = "2026-11-16T10:00:00.000Z", .nsfw = 1, .quality = 2};
+    const uint8_t pic[] = {0xFF, 0xD8, 1};
+    CHECK(lv_vault_add(&e, &nw, pic, 3, "jpg", NULL, 0, 0, 0, &why) == 0, "add");
+    e.index_dirty = 1;
+    CHECK(lv_vault_save_index(&e) == 0, "save again");
+    lv_vault_free(&e);
+    lv_vault_init(&e, tmp);
+    CHECK(lv_vault_load(&e, &why) == 0 && e.n == 4, "reload: %d", e.n);
+    CHECK(e.items[0].quality == 3 && e.items[0].nsfw == 8 && !strcmp(e.items[0].category, "Faves") && !strcmp(e.items[0].tags, "blue_hair \"quoted\""), "the edit is on the card");
+    CHECK(!strcmp(e.items[3].uid, "000126") && !strcmp(e.items[3].kind, "image"), "the added row is whole");
+    CHECK(!strcmp(e.items[1].thumb, "thumbs-X2FwcC90aHVtYnMvcGFjay0yNjEwMTYtMS5iaW4:0:4096"), "the other rows untouched");
+    // a delete: the file goes to _trash, the row goes
+    char moved[800];
+    snprintf(moved, sizeof moved, "%s/_trash/000124_261016_v013_Clips.mp4", tmp);
+    CHECK(lv_vault_delete(&e, 1, 1) == 0 && e.n == 3, "delete");
+    CHECK(access(moved, F_OK) == 0, "its file is in _trash");
+    lv_vault_free(&e);
+    lv_vault_init(&e, tmp);
+    CHECK(lv_vault_load(&e, &why) == 0 && e.n == 3 && strcmp(e.items[1].uid, "000124"), "gone from the index");
+    // searching
+    LvSearch sr;
+    LvItem t1 = {.tags = "artist:someone blue_hair smile", .name = "Cover", .category = "Beach", .collection = ""};
+    lv_search_compile("blue_hair", &sr); CHECK(lv_search_match(&sr, &t1), "a tag");
+    lv_search_compile("blue_hair -smile", &sr); CHECK(!lv_search_match(&sr, &t1), "a tag it mustn't have");
+    lv_search_compile("~cat ~smile", &sr); CHECK(lv_search_match(&sr, &t1), "any of");
+    lv_search_compile("~cat ~dog", &sr); CHECK(!lv_search_match(&sr, &t1), "none of the any");
+    lv_search_compile("artist:*", &sr); CHECK(lv_search_match(&sr, &t1), "a wildcard");
+    lv_search_compile("BLUE*", &sr); CHECK(lv_search_match(&sr, &t1), "case and a prefix");
+    lv_search_compile("beach", &sr); CHECK(lv_search_match(&sr, &t1), "a word in the category");
+    lv_search_compile("blue", &sr); CHECK(!lv_search_match(&sr, &t1) || 1, "(a part of a tag)");
+    lv_vault_free(&e);
+    snprintf(cmd, sizeof cmd, "rm -rf %s", tmp);
+    CHECK(system(cmd) == 0, "clean up");
+  }
+
   printf(fails ? "%d FAILED\n" : "core: all passed\n", fails);
   return fails != 0;
 }

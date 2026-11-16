@@ -43,6 +43,21 @@ static char *arena_dup(LvArena **a, const char *s) {
   (*a)->used += n;
   return d;
 }
+// room for n pointers (an item's cells), aligned
+static char **arena_cells(LvArena **a, int n) {
+  size_t need = (size_t)n * sizeof(char *) + sizeof(char *);
+  if (!*a || (*a)->used + need > (*a)->cap) {
+    size_t cap = need > 256 * 1024 ? need : 256 * 1024;
+    LvArena *b = malloc(sizeof *b + cap);
+    if (!b) { lv_oom = 1; return NULL; }
+    b->next = *a; b->used = 0; b->cap = cap; *a = b;
+  }
+  size_t at = ((*a)->used + sizeof(char *) - 1) & ~(sizeof(char *) - 1);
+  if (at + (size_t)n * sizeof(char *) > (*a)->cap) { (*a)->used = (*a)->cap; return arena_cells(a, n); }
+  char **p = (char **)((*a)->data + at);
+  (*a)->used = at + (size_t)n * sizeof(char *);
+  return p;
+}
 static void arena_free(LvArena *a) {
   while (a) { LvArena *n = a->next; free(a); a = n; }
 }
@@ -265,7 +280,7 @@ void lv_vault_init(LvVault *v, const char *root) {
 // them). Copied as they are, still encrypted in an Untraceable vault.
 int lv_backup_days = 14;
 static void backup_daily(LvVault *v, const char *today) {
-  char dir[700], from[700], to[1100];
+  char dir[700], from[700], to[1800];
   snprintf(dir, sizeof dir, "%s/_app/backups", v->root);
   mkdir(dir, 0777);
   snprintf(dir, sizeof dir, "%s/_app/backups/%.10s", v->root, today);
@@ -444,6 +459,9 @@ int lv_vault_load(LvVault *v, const char **why) {
   const char *names[19] = {"id", "uid", "file", "original_name", "category", "kind", "nsfw", "quality", "added",
                            "width", "height", "duration", "preview_id", "thumb", "collection", "tags", "source", "", ""};
   for (int k = 0; k < 17; k++) ci[k] = col(h, hn, names[k]);
+  v->head = arena_cells(&v->arena, hn);
+  v->nhead = v->head ? hn : 0;
+  for (int k = 0; k < v->nhead; k++) v->head[k] = arena_dup(&v->arena, h[k]);
 
   Map by_path = {calloc(8192, sizeof(char *)), calloc(8192, sizeof(char *)), 8192};
   Map by_uid = {calloc(8192, sizeof(char *)), calloc(8192, sizeof(char *)), 8192};
@@ -464,23 +482,22 @@ int lv_vault_load(LvVault *v, const char **why) {
     int n = c.ncells[r];
     if (n == 0 || !row[0][0]) continue;
     LvItem *it = &v->items[v->n++];
-    it->id = arena_dup(&v->arena, cell(row, n, ci[0]));
-    it->uid = arena_dup(&v->arena, cell(row, n, ci[1]));
-    it->file = arena_dup(&v->arena, cell(row, n, ci[2]));
-    it->name = arena_dup(&v->arena, cell(row, n, ci[3]));
-    it->category = arena_dup(&v->arena, cell(row, n, ci[4]));
-    it->kind = arena_dup(&v->arena, cell(row, n, ci[5]));
-    it->nsfw = (int)int_of(cell(row, n, ci[6]));
-    it->quality = (int)int_of(cell(row, n, ci[7]));
-    it->added = arena_dup(&v->arena, cell(row, n, ci[8]));
-    it->width = (int)int_of(cell(row, n, ci[9]));
-    it->height = (int)int_of(cell(row, n, ci[10]));
-    it->duration = strtod(cell(row, n, ci[11]), NULL);
-    it->preview_id = arena_dup(&v->arena, cell(row, n, ci[12]));
-    it->thumb = arena_dup(&v->arena, cell(row, n, ci[13]));
-    it->collection = arena_dup(&v->arena, cell(row, n, ci[14]));
-    it->tags = arena_dup(&v->arena, cell(row, n, ci[15]));
-    it->source = arena_dup(&v->arena, cell(row, n, ci[16]));
+    // every cell kept (a rewrite gives back the same row); the fields are those same strings
+    it->ncells = n;
+    it->cells = arena_cells(&v->arena, n);
+    if (!it->cells) { it->ncells = 0; v->n--; continue; }
+    for (int k = 0; k < n; k++) it->cells[k] = arena_dup(&v->arena, row[k]);
+    row = it->cells;
+#define F(k) ((ci[k] >= 0 && ci[k] < n) ? row[ci[k]] : empty_)
+    it->id = F(0); it->uid = F(1); it->file = F(2); it->name = F(3); it->category = F(4); it->kind = F(5);
+    it->nsfw = (int)int_of(F(6));
+    it->quality = (int)int_of(F(7));
+    it->added = F(8);
+    it->width = (int)int_of(F(9));
+    it->height = (int)int_of(F(10));
+    it->duration = strtod(F(11), NULL);
+    it->preview_id = F(12); it->thumb = F(13); it->collection = F(14); it->tags = F(15); it->source = F(16);
+#undef F
     it->view = -1;
     // its file: where the index says (Media/ with Discreet names), else by its number anywhere
     char dir[256], rel[1024];
@@ -850,6 +867,7 @@ int lv_vault_add_files(LvVault *v, const LvNew *n, const uint8_t *data, size_t l
   snprintf(out->name, sizeof out->name, "%s", name);
   snprintf(out->path, sizeof out->path, "%s", path);
   snprintf(out->thumb, sizeof out->thumb, "%s", tid);
+  snprintf(out->tsize, sizeof out->tsize, "%s", tsize);
   return 0;
 }
 
@@ -871,6 +889,26 @@ int lv_vault_add_memory(LvVault *v, const LvNew *n, const LvAdded *a) {
   it->added = arena_dup(&v->arena, n->added); it->preview_id = arena_dup(&v->arena, ""); it->thumb = arena_dup(&v->arena, tid);
   it->collection = arena_dup(&v->arena, ""); it->tags = arena_dup(&v->arena, n->tags); it->source = arena_dup(&v->arena, n->source);
   it->path = arena_dup(&v->arena, path);
+  {
+    // its cells, in the file's own column order (as the row appended was, by name)
+    static const char *std[21] = {"id", "uid", "file", "original_name", "category", "kind", "nsfw", "quality", "added", "width", "height",
+                                  "duration", "preview_id", "thumb", "thumbhash", "stream_id", "thumb_size", "collection", "collection_cover", "tags", "source"};
+    char nsfw[8], q[8], w[16], h[16], d[32];
+    snprintf(nsfw, sizeof nsfw, "%d", n->nsfw);
+    snprintf(q, sizeof q, "%d", n->quality);
+    lv_num_or_empty(n->width, w, sizeof w);
+    lv_num_or_empty(n->height, h, sizeof h);
+    lv_num_or_empty(n->duration, d, sizeof d);
+    const char *val[21] = {it->id, it->uid, it->file, it->name, it->category, it->kind, nsfw, q, it->added, w, h, d, "", it->thumb, "", "", a->tsize, "", "", it->tags, it->source};
+    int nh = v->nhead ? v->nhead : 21;
+    it->cells = arena_cells(&v->arena, nh);
+    it->ncells = it->cells ? nh : 0;
+    for (int c = 0; c < it->ncells; c++) {
+      const char *name = v->nhead ? v->head[c] : std[c], *x = "";
+      for (int k = 0; k < 21; k++) if (!strcmp(name, std[k])) { x = val[k]; break; }
+      it->cells[c] = arena_dup(&v->arena, x);
+    }
+  }
   it->nsfw = n->nsfw; it->quality = n->quality; it->width = n->width; it->height = n->height; it->duration = n->duration;
   it->view = -1;
   int c;
@@ -898,4 +936,170 @@ int lv_vault_add(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, co
   if (lv_vault_add_files(v, n, data, len, ext, thumb, tlen, tw, th, &a, why) != 0) return -1;
   lv_vault_add_memory(v, n, &a); // (out of memory: it's on the card all the same, and shows next time)
   return 0;
+}
+
+// ---------- editing ----------
+
+static int head_col(const LvVault *v, const char *name) {
+  for (int k = 0; k < v->nhead; k++) if (!strcmp(v->head[k], name)) return k;
+  return -1;
+}
+
+int lv_item_set(LvVault *v, int i, const char *column, const char *value) {
+  if (i < 0 || i >= v->n) return -1;
+  int k = head_col(v, column);
+  LvItem *it = &v->items[i];
+  if (k < 0 || k >= it->ncells) return -1;
+  char *x = arena_dup(&v->arena, value);
+  it->cells[k] = x;
+  // the fields that are this cell
+  if (!strcmp(column, "category")) {
+    it->category = x;
+    int c;
+    for (c = 0; c < v->ncats; c++) if (!strcmp(v->cats[c], x)) break;
+    if (c == v->ncats) {
+      char **cats = realloc(v->cats, (v->ncats + 1) * sizeof *cats);
+      int *counts = realloc(v->cat_counts, (v->ncats + 1) * sizeof *counts);
+      if (cats) v->cats = cats;
+      if (counts) v->cat_counts = counts;
+      if (!cats || !counts) return -1;
+      v->cats[c] = sdup(x);
+      v->cat_counts[c] = 0;
+      v->ncats++;
+    }
+    if (v->hot[i].cat >= 0 && v->hot[i].cat < v->ncats) v->cat_counts[v->hot[i].cat]--;
+    v->cat_counts[c]++;
+    v->hot[i].cat = (int16_t)c;
+  } else if (!strcmp(column, "tags")) it->tags = x;
+  else if (!strcmp(column, "collection")) it->collection = x;
+  else if (!strcmp(column, "original_name")) it->name = x;
+  else if (!strcmp(column, "nsfw")) it->nsfw = (int)int_of(x);
+  else if (!strcmp(column, "quality")) { it->quality = (int)int_of(x); v->hot[i].quality = (uint8_t)(it->quality < 0 ? 0 : it->quality); }
+  v->index_dirty = 1;
+  return 0;
+}
+
+char *lv_index_csv(const LvVault *v) {
+  int nrows = v->n + 1;
+  char ***rows = malloc(nrows * sizeof *rows);
+  int *nc = malloc(nrows * sizeof *nc);
+  if (!rows || !nc) { free(rows); free(nc); return NULL; }
+  rows[0] = v->head;
+  nc[0] = v->nhead;
+  for (int i = 0; i < v->n; i++) { rows[i + 1] = v->items[i].cells; nc[i + 1] = v->items[i].ncells; }
+  char *t = lv_csv_text(rows, nc, nrows);
+  free(rows);
+  free(nc);
+  return t;
+}
+
+int lv_vault_save_index(LvVault *v) {
+  if (!v->index_dirty) return 0;
+  if (!v->nhead) return -1; // (never write a file without its columns)
+  backup_today(v);
+  char *t = lv_index_csv(v);
+  if (!t) return -1;
+  char p[700];
+  snprintf(p, sizeof p, "%s/index.csv", v->root);
+  int r = lv_write_all(p, lv_key(v), t, strlen(t));
+  free(t);
+  if (r == 0) v->index_dirty = 0;
+  return r;
+}
+
+static void to_trash(LvVault *v, const char *path) {
+  if (!path || !path[0]) return;
+  struct stat st;
+  if (stat(path, &st) != 0) return;
+  char bin[700], to[1400];
+  snprintf(bin, sizeof bin, "%s/_trash", v->root);
+  mkdir(bin, 0777);
+  const char *name = strrchr(path, '/');
+  snprintf(to, sizeof to, "%s/%s", bin, name ? name + 1 : path);
+  remove(to);
+  if (rename(path, to) != 0 && lv_copy_file(path, to, NULL) == 0) remove(path);
+}
+
+int lv_vault_delete(LvVault *v, int i, int save) {
+  if (i < 0 || i >= v->n) return -1;
+  LvItem *it = &v->items[i];
+  // its file, its clip, and its thumbnail when that's a file of its own (not a slice of a pack)
+  to_trash(v, it->path);
+  char p[1100];
+  if (lv_clip_path(v, it, p, sizeof p)) to_trash(v, p);
+  if (it->thumb[0] && !strchr(it->thumb, ':') && app_file(v, it->thumb, p, sizeof p)) to_trash(v, p);
+  if (v->hot[i].cat >= 0 && v->hot[i].cat < v->ncats) v->cat_counts[v->hot[i].cat]--;
+  memmove(&v->items[i], &v->items[i + 1], (size_t)(v->n - i - 1) * sizeof *v->items);
+  memmove(&v->hot[i], &v->hot[i + 1], (size_t)(v->n - i - 1) * sizeof *v->hot);
+  v->n--;
+  v->index_dirty = 1;
+  return save ? lv_vault_save_index(v) : 0;
+}
+
+// ---------- searching ----------
+
+void lv_search_compile(const char *q, LvSearch *s) {
+  memset(s, 0, sizeof *s);
+  const char *p = q;
+  while (*p && s->n < 24) {
+    while (*p == ' ') p++;
+    const char *e = p;
+    while (*e && *e != ' ') e++;
+    if (e > p) {
+      char mode = '+';
+      if (*p == '-' || *p == '~') { mode = *p; p++; }
+      size_t n = (size_t)(e - p);
+      if (n > 0 && n < 64) {
+        for (size_t k = 0; k < n; k++) s->words[s->n][k] = (char)((p[k] >= 'A' && p[k] <= 'Z') ? p[k] + 32 : p[k]);
+        s->words[s->n][n] = 0;
+        s->mode[s->n++] = mode;
+      }
+    }
+    p = e;
+  }
+}
+
+static int ci_contains(const char *hay, const char *needle) {
+  size_t n = strlen(needle);
+  for (; *hay; hay++) {
+    size_t k = 0;
+    while (k < n && hay[k] && ((hay[k] >= 'A' && hay[k] <= 'Z') ? hay[k] + 32 : hay[k]) == needle[k]) k++;
+    if (k == n) return 1;
+  }
+  return 0;
+}
+// a tag in the item's tags (exactly, or up to a * at the end; case doesn't matter)
+static int has_tag(const char *tags, const char *w) {
+  size_t wl = strlen(w);
+  int star = wl && w[wl - 1] == '*';
+  if (star) wl--;
+  const char *p = tags;
+  while (*p) {
+    while (*p == ' ') p++;
+    const char *e = p;
+    while (*e && *e != ' ') e++;
+    size_t n = (size_t)(e - p);
+    if (n && (star ? n >= wl : n == wl)) {
+      size_t k = 0;
+      while (k < wl && ((p[k] >= 'A' && p[k] <= 'Z') ? p[k] + 32 : p[k]) == w[k]) k++;
+      if (k == wl) return 1;
+    }
+    p = e;
+  }
+  return 0;
+}
+static int word_matches(const char *w, const LvItem *it) {
+  if (has_tag(it->tags, w)) return 1;
+  if (strchr(w, '*') || strchr(w, ':')) return 0;
+  return ci_contains(it->name, w) || ci_contains(it->category, w) || ci_contains(it->collection, w);
+}
+int lv_search_match(const LvSearch *s, const LvItem *it) {
+  int any = 0, any_ok = 0;
+  for (int k = 0; k < s->n; k++) {
+    int m = word_matches(s->words[k], it);
+    if (s->mode[k] == '+' && !m) return 0;
+    if (s->mode[k] == '-' && m) return 0;
+    if (s->mode[k] == '~') { any = 1; any_ok |= m; }
+  }
+  return !any || any_ok;
 }

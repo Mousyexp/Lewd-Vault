@@ -168,7 +168,7 @@ static void heart(float cx, float cy, float s, unsigned c) {
 // ---------- the grid: justified rows ----------
 // Each card keeps its picture's shape (a landscape one wide, a portrait one narrow), the cards of a
 // row share its height, and each row is stretched to the screen's width (as Photos lays them out).
-#define ROW_H 168
+static int ROW_H = 168; // (the card size in Filters changes it)
 #define JMARGIN 8
 typedef struct { float x, y, w, h; } Rect;
 typedef struct { Rect *r; short *row; int n, cap; float height; } Grid;
@@ -274,6 +274,8 @@ static void cfg_load(void) {
   if (!(cfg.ratings & 15)) cfg.ratings = 15;
   if (cfg.wsort < 0 || cfg.wsort > 3) cfg.wsort = 0;
   if (cfg.wpages < 0 || cfg.wpages > 50) cfg.wpages = 0;
+  if (cfg.kind < 0 || cfg.kind > 3) cfg.kind = 0;
+  if (cfg.sort < 0 || cfg.sort >= 7) cfg.sort = 0;
   if (cfg.wsel < 0) cfg.wsel = 0;
   if (cfg.sounds < 0 || cfg.sounds > 100) cfg.sounds = 70;
 }
@@ -294,8 +296,11 @@ static int loaded_vault;
 static int *shown, nshown;     // indices into vault.items
 static int cat = -1;           // -1: every category
 static char query[128];
-static const char *SORTS[] = {"Newest", "Oldest", "Most viewed", "Top rated", "Most hearted", "Shuffle"};
-static const char *KINDS[] = {"Everything", "Pictures", "Videos"};
+static const char *SORTS[] = {"Newest", "Oldest", "Most viewed", "Top rated", "Most hearted", "Shuffle", "For you"};
+#define NSORTS 7
+static int lib_pass(int i);
+static void lib_prepare(void);
+static void sort_foryou(void);
 
 static int is_video(const LvItem *it) { return !strcmp(it->kind, "video"); }
 static int is_gif(const LvItem *it) { return !strcmp(it->kind, "gif"); }
@@ -303,13 +308,6 @@ static int ext_is(const char *path, const char *e1, const char *e2, const char *
   const char *d = path ? strrchr(path, '.') : NULL;
   if (!d) return 0;
   return !strcasecmp(d + 1, e1) || (e2 && !strcasecmp(d + 1, e2)) || (e3 && !strcasecmp(d + 1, e3));
-}
-static int contains_ci(const char *hay, const char *needle) {
-  size_t n = strlen(needle);
-  if (!n) return 1;
-  for (; *hay; hay++)
-    if (!strncasecmp(hay, needle, n)) return 1;
-  return 0;
 }
 static unsigned rnd_state = 12345;
 static unsigned rnd(void) { rnd_state ^= rnd_state << 13; rnd_state ^= rnd_state >> 17; rnd_state ^= rnd_state << 5; return rnd_state; }
@@ -341,19 +339,16 @@ static void refilter(void) {
   free(shown);
   shown = malloc((vault.n + 1) * sizeof *shown);
   nshown = 0;
+  if (!shown) { grid_build(&lgrid, 0, NULL); return; }
+  lib_prepare();
   for (int i = 0; i < vault.n; i++) {
-    const LvHot *h = &vault.hot[i];
-    if (cat >= 0 && h->cat != cat) continue;
-    if (cfg.kind == 1 && h->kind == LV_VIDEO) continue;
-    if (cfg.kind == 2 && h->kind == LV_IMAGE) continue;
-    LvItem *it = &vault.items[i];
-    if (query[0] && !contains_ci(it->tags, query) && !contains_ci(it->name, query) && !contains_ci(it->category, query) &&
-        !contains_ci(it->collection, query))
-      continue;
+    if (cat >= 0 && vault.hot[i].cat != cat) continue;
+    if (!lib_pass(i)) continue;
     shown[nshown++] = i;
   }
   sort_mode = cfg.sort;
-  if (cfg.sort == 5) {
+  if (cfg.sort == 6) sort_foryou();
+  else if (cfg.sort == 5) {
     for (int k = nshown - 1; k > 0; k--) { int j = rnd() % (k + 1), t = shown[k]; shown[k] = shown[j]; shown[j] = t; }
   } else {
     qsort(shown, nshown, sizeof *shown, cmp_items);
@@ -1047,11 +1042,20 @@ static int chip(int x, int y, const char *label, int on) {
 }
 
 static float chips_scroll;
+#include "lib.c"
+
 static int last_top_row = -1;
 static void draw_library(void) {
   float content = lgrid.height + 12;
   float view_h = H - TOP - BAR;
   float max_scroll = fmaxf(0, content - view_h);
+  // a sheet open: the grid stays drawn but doesn't take the buttons or touch
+  Input saved_in = in;
+  int sheet_up = lsheet != LS_NONE;
+  if (sheet_up) { in.pressed = 0; in.tap = 0; in.touching = 0; in.flicked = 0; in.ly = 0; in.dbl = 0; }
+  int open_now = sheet_up ? 0 : lib_cross();
+  int fast = sheet_up ? 0 : fast_scroll(max_scroll, view_h);
+  if (fast) { in.touching = 0; in.tap = 0; }
 
   // --- moving: touch drag and flick, the stick, the D-pad selection ---
   if (in.touching && in.ty > TOP && in.ty < H - BAR) { scroll -= in.drag_dy; scroll_v = 0; }
@@ -1111,7 +1115,14 @@ static void draw_library(void) {
     }
     if (lv_likes_of(&vault, it) > 0) heart(x + 16, y + ch - 16, 6, ACC);
     if (!it->path) { rrect(x + 6, y + 6, 20, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 16, y + 21, ACC2, 14, "!"); }
-    if (hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR) { sel = k; sfx(SFX_SELECT); open_viewer(k, 0); return; }
+    if (selecting && picked && picked[i]) { circle(x + cw - 16, y + 16, 11, ACC); text_center((int)(x + cw - 16), (int)y + 22, RGBA(20, 12, 16, 255), 14, "\u2713"); }
+    else if (selecting) circle(x + cw - 16, y + 16, 10, with_alpha(TEXT, 90));
+    if (in.touching && in.tx >= x && in.tx < x + cw && in.ty >= y && in.ty < y + ch && lib_long_press_card(k)) { sel = k; }
+    if (hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR) {
+      sel = k;
+      if (selecting) { picked[i] ^= 1; npicked += picked[i] ? 1 : -1; sfx(SFX_TOGGLE); }
+      else { sfx(SFX_SELECT); open_viewer(k, 0); in = saved_in; return; }
+    }
   }
   // (and the next screenful, ready before it's needed)
   for (int k = last; k < last + 18 && k < nshown && nw < 64; k++) if (!thumb_of(shown[k]) && tstate[shown[k]] != 3) wanted[nw++] = shown[k];
@@ -1134,15 +1145,18 @@ static void draw_library(void) {
   snprintf(info, sizeof info, "%d %s", nshown, nshown == 1 ? "item" : "items");
   text(16 + text_w(22, "Library") + 12, 28, FAINT, 15, info);
   int sx = W - 16;
-  int ws = text_w(15, SORTS[cfg.sort]) + 26, wk = text_w(15, KINDS[cfg.kind]) + 26;
+  char kl[64];
+  int nf = (cfg.kind != 0) + (lf.nsfw_max != 0) + (lf.stars_min != 0) + (lf.album != 0) + (lf.coll[0] != 0);
+  if (nf) snprintf(kl, sizeof kl, "Filters \u00b7 %d", nf); else snprintf(kl, sizeof kl, "Filters");
+  int ws = text_w(15, SORTS[cfg.sort]) + 26, wk = text_w(15, kl) + 26;
   sx -= ws;
   rrect(sx, 8, ws, 26, 13, SURF2);
   text(sx + 13, 26, TEXT, 15, SORTS[cfg.sort]);
-  if (hit(sx, 0, ws, 36) || (in.pressed & SCE_CTRL_TRIANGLE)) { sfx(SFX_TOGGLE); cfg.sort = (cfg.sort + 1) % 6; refilter(); cfg_save(); sel = 0; scroll = 0; }
+  if (hit(sx, 0, ws, 36) || (!selecting && (in.pressed & SCE_CTRL_TRIANGLE))) { sfx(SFX_TOGGLE); cfg.sort = (cfg.sort + 1) % NSORTS; refilter(); cfg_save(); sel = 0; scroll = 0; }
   sx -= wk + 8;
-  rrect(sx, 8, wk, 26, 13, SURF2);
-  text(sx + 13, 26, TEXT, 15, KINDS[cfg.kind]);
-  if (hit(sx, 0, wk, 36) || (in.pressed & SCE_CTRL_SQUARE)) { sfx(SFX_TOGGLE); cfg.kind = (cfg.kind + 1) % 3; refilter(); cfg_save(); sel = 0; scroll = 0; }
+  rrect(sx, 8, wk, 26, 13, nf ? with_alpha(ACC, 90) : SURF2);
+  text(sx + 13, 26, TEXT, 15, kl);
+  if (hit(sx, 0, wk, 36) || (!selecting && (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); lsheet = LS_FILTERS; lsheet_sel = 0; }
   if (query[0]) {
     char q[160];
     snprintf(q, sizeof q, "“%s”  ✕", query);
@@ -1174,10 +1188,29 @@ static void draw_library(void) {
     cxp += w + 6;
   }
 
-  if ((in.pressed & SCE_CTRL_CROSS) && nshown) { sfx(SFX_SELECT); open_viewer(sel, 0); }
-  if ((in.pressed & SCE_CTRL_START) && nshown) { sfx(SFX_SLIDESHOW); open_viewer(sel, 1); }
-  if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_WEB; } // (○ goes round the tabs: Library, Browser, Settings)
+  if (selecting) {
+    // choosing many: ✕ (or a tap) picks, △ what to do with them, ○ done
+    char t[80];
+    snprintf(t, sizeof t, "%d chosen   \u2715 pick   \u25b3 actions   \u25cb done", npicked);
+    int w = text_w(15, t) + 30;
+    rrect(W / 2 - w / 2, H - BAR - 46, w, 34, 17, with_alpha(ACC, 235));
+    text_center(W / 2, H - BAR - 23, RGBA(20, 12, 16, 255), 15, t);
+    if (open_now && nshown) { int i = shown[sel]; picked[i] ^= 1; npicked += picked[i] ? 1 : -1; sfx(SFX_TOGGLE); }
+    if ((in.pressed & SCE_CTRL_TRIANGLE) && npicked) { sfx(SFX_OPEN); lsheet = LS_BATCH; lsheet_sel = 0; delete_armed = 0; }
+    if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); selecting = 0; if (picked) memset(picked, 0, vault.n + 1); npicked = 0; in.pressed &= ~SCE_CTRL_CIRCLE; }
+  } else {
+    if (open_now && nshown) { sfx(SFX_SELECT); open_viewer(sel, 0); }
+    if ((in.pressed & SCE_CTRL_START) && nshown) { sfx(SFX_SLIDESHOW); open_viewer(sel, 1); }
+    if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_WEB; } // (○ goes round the tabs: Library, Browser, Settings)
+  }
   draw_bar();
+  in = saved_in;
+  // (a sheet opened this frame doesn't also take the press that opened it: □ would close it again)
+  if (!sheet_up) { in.pressed = 0; in.tap = 0; in.dbl = 0; }
+  if (lsheet == LS_FILTERS) draw_filters_sheet();
+  else if (lsheet == LS_TAGS) draw_tags_sheet();
+  else if (lsheet == LS_QUICK) draw_quick_sheet();
+  else if (lsheet == LS_BATCH) draw_batch_sheet();
 }
 
 // ----- the full view -----
@@ -1254,6 +1287,7 @@ static void open_viewer(int k, int show) {
 }
 static void close_viewer(void) {
   sfx(SFX_BACK);
+  save_edits_now();
   LOG("close_viewer screen=%d\n", screen);
   account_time();
   stop_video();
@@ -1327,17 +1361,17 @@ static void draw_viewer(void) {
   }
 
   // --- buttons ---
-  if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_RTRIGGER)) { sfx(SFX_TICK); show_item(vk + 1); return; }
-  if (in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER)) { sfx(SFX_TICK); show_item(vk - 1); return; }
+  if (in.pressed & (details ? SCE_CTRL_RTRIGGER : (SCE_CTRL_RIGHT | SCE_CTRL_RTRIGGER))) { sfx(SFX_TICK); show_item(vk + 1); return; }
+  if (in.pressed & (details ? SCE_CTRL_LTRIGGER : (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER))) { sfx(SFX_TICK); show_item(vk - 1); return; }
   if (in.pressed & SCE_CTRL_CIRCLE) { if (details) details = 0; else { close_viewer(); return; } }
   if (in.pressed & SCE_CTRL_TRIANGLE) { sfx(details ? SFX_CLOSE : SFX_OPEN); details = !details; }
   if (in.pressed & SCE_CTRL_SQUARE) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); chrome_until = frame_no + 120; }
   if (in.pressed & SCE_CTRL_START) { sfx(SFX_SLIDESHOW); slideshow = !slideshow; slide_at = frame_no; say(slideshow ? "Slideshow" : "Slideshow stopped"); }
-  if (in.pressed & SCE_CTRL_CROSS) {
+  if ((in.pressed & SCE_CTRL_CROSS) && !details) {
     if (vid && !vid_clip) lv_video_pause(vid, !lv_video_paused(vid));
     else { zoom = zoom > 1.5f ? 1 : 2.5f; pan_x = pan_y = 0; }
   }
-  if (vid && !vid_clip) {
+  if (vid && !vid_clip && !details) {
     if (in.pressed & SCE_CTRL_UP) lv_video_seek(vid, (int64_t)lv_video_pos(vid) + 10000);
     if (in.pressed & SCE_CTRL_DOWN) lv_video_seek(vid, (int64_t)lv_video_pos(vid) - 10000);
   } else if (zoom > 1.01f) {
@@ -1402,9 +1436,53 @@ static void draw_viewer(void) {
     float top = H - details_y * 300;
     rrect(0, top, W, 330, 20, with_alpha(SURF, 250));
     rrect(W / 2 - 24, top + 8, 48, 5, 3, with_alpha(TEXT, 60));
-    text_fit(30, top + 46, TEXT, 22, it->name[0] ? it->name : it->file, W - 260);
-    // its score, as dots out of ten
-    for (int k = 0; k < 10; k++) circle(W - 220 + k * 19, top + 38, 6, k < it->quality ? ACC : with_alpha(TEXT, 40));
+    int ii = shown[vk];
+    text_fit(30, top + 46, TEXT, 22, it->name[0] ? it->name : it->file, W - 420);
+    // editing, as the phone does: the stars, the level dial, the category, the tags, delete
+    // (↑↓ choose, ←→ change, ✕ for tags and delete; or touch)
+    enum { E_STARS, E_LEVEL, E_CAT, E_TAGS, E_DELETE, E_N };
+    static int efocus;
+    if (efocus == E_STARS) rrect(W - 400, top + 16, 110, 40, 10, SURF2);
+    stars(ii, W - 390, top + 46, efocus == E_STARS);
+    if (efocus == E_LEVEL) rrect(W - 190, top + 14, 170, 92, 10, SURF2);
+    level_dial(ii, W - 105, top + 92, 62, efocus == E_LEVEL);
+    char cl[96];
+    snprintf(cl, sizeof cl, "\u2039 %s \u203a", it->category);
+    int cw2 = text_w(15, cl) + 24;
+    rrect(W - 400, top + 62, cw2, 28, 14, efocus == E_CAT ? ACC : SURF2);
+    text(W - 388, top + 82, efocus == E_CAT ? RGBA(20, 12, 16, 255) : TEXT, 15, cl);
+    if (hit(W - 400, (int)top + 62, cw2 / 2, 28)) { sfx(SFX_TOGGLE); set_category(ii, -1); }
+    else if (hit(W - 400 + cw2 / 2, (int)top + 62, cw2 / 2, 28)) { sfx(SFX_TOGGLE); set_category(ii, 1); }
+    rrect(W - 400, top + 96, 100, 28, 14, efocus == E_TAGS ? ACC : SURF2);
+    text_center(W - 350, (int)top + 116, efocus == E_TAGS ? RGBA(20, 12, 16, 255) : TEXT, 14, "Edit tags");
+    rrect(W - 292, top + 96, 90, 28, 14, efocus == E_DELETE ? RGBA(220, 70, 80, 255) : SURF2);
+    text_center(W - 247, (int)top + 116, TEXT, 14, delete_armed ? "Again" : "Delete");
+    int act = 0;
+    if (hit(W - 400, (int)top + 96, 100, 28)) { efocus = E_TAGS; act = 1; }
+    if (hit(W - 292, (int)top + 96, 90, 28)) { efocus = E_DELETE; act = 1; }
+    if (details) {
+      if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
+      if (in.pressed & SCE_CTRL_DOWN) efocus = (efocus + 1) % E_N;
+      if (in.pressed & SCE_CTRL_UP) efocus = (efocus + E_N - 1) % E_N;
+      int d = (in.pressed & SCE_CTRL_RIGHT) ? 1 : (in.pressed & SCE_CTRL_LEFT) ? -1 : 0;
+      if (d && efocus == E_STARS) { sfx(SFX_TOGGLE); int q = it->quality + d; set_int(ii, "quality", q < 1 ? 1 : q > 3 ? 3 : q); }
+      if (d && efocus == E_LEVEL) { sfx(SFX_TICK); int l = it->nsfw + d; set_int(ii, "nsfw", l < 1 ? 1 : l > 10 ? 10 : l); }
+      if (d && efocus == E_CAT) { sfx(SFX_TOGGLE); set_category(ii, d); }
+      if ((in.pressed & SCE_CTRL_CROSS) || act) {
+        if (efocus == E_TAGS && !ime_open) ime_start(4, "Tags (separated by spaces)", it->tags, 0);
+        else if (efocus == E_DELETE && delete_confirmed()) {
+          save_edits_now();
+          int k = vk;
+          stop_video();
+          details = 0;
+          if (delete_item(ii) == 0) {
+            if (!nshown) { screen = S_LIBRARY; return; }
+            show_item(k < nshown ? k : nshown - 1);
+          }
+          return;
+        }
+      }
+    }
     char line[256];
     snprintf(line, sizeof line, "%s  ·  %s%s", it->category, is_video(it) ? "Video" : is_gif(it) ? "GIF" : "Picture", it->nsfw ? "  ·  NSFW" : "");
     text_fit(30, top + 78, DIM, 16, line, W - 60);
@@ -1539,6 +1617,7 @@ static void library_grew(int before) {
   if (so) slot_of = so;
   if (t && so) for (int i = before; i <= vault.n; i++) { tstate[i] = 0; slot_of[i] = -1; }
   pthread_mutex_unlock(&mx);
+  if (picked) { unsigned char *pk = realloc(picked, vault.n + 64); if (pk) { picked = pk; memset(picked + before, 0, vault.n + 64 - before); } }
   refilter();
 }
 
@@ -1612,7 +1691,10 @@ int main(void) {
       int r = ime_poll(got, sizeof got);
       if (r == 1 && ime_for == 1) { snprintf(password, sizeof password, "%s", got); load_state = 0; screen = S_UNLOCKING; }
       if (r == 1 && ime_for == 3) { char clean[128]; snprintf(cfg.wquery, sizeof cfg.wquery, "%s", lv_booru_clean(got, clean, sizeof clean)); sheet = SH_NONE; screen = S_WEB; web_search(); }
-      if (r == 1 && ime_for == 2) { snprintf(query, sizeof query, "%s", got); cat = -1; refilter(); sel = 0; scroll = 0; screen = S_LIBRARY; }
+      if (r == 1 && ime_for == 4 && screen == S_VIEWER && vk < nshown) { if (lv_item_set(&vault, shown[vk], "tags", got) == 0) { edited(); sfx(SFX_DONE); } }
+      if (r == 1 && ime_for == 5 && got[0]) saved_add_current(got);
+      if (r == 1 && ime_for == 6) batch_add_tag(got);
+      if (r == 1 && ime_for == 2) { lsheet = LS_NONE; snprintf(query, sizeof query, "%s", got); cat = -1; refilter(); sel = 0; scroll = 0; screen = S_LIBRARY; }
       if (r != 0) memset(&in, 0, sizeof in);
       else in.pressed = 0, in.tap = 0;
     }
@@ -1668,6 +1750,7 @@ int main(void) {
         screen = S_LOCKED;
       } else if (load_state == 2 || load_state == 3) finish_open();
     }
+    if (edits_at && frame_no - edits_at > 150 && lsheet == LS_NONE) save_edits_now();
     static unsigned cfg_tick;
     if ((screen == S_WEB || screen == S_WEBVIEW) && ++cfg_tick % 600 == 0) cfg_save();
     // views reach the card now and then while looking (and always when leaving the full view)

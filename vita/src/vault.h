@@ -12,6 +12,8 @@ typedef struct {
   double duration;
   char *path; // its file (NULL: not in the vault folder)
   int view;   // its row in views (-1: none yet)
+  char **cells; // every cell of its row, in index.csv's column order (the strings above are these)
+  int ncells;
 } LvItem;
 
 // What sorting and filtering read for every item, kept apart from the strings (the guide's hot/cold
@@ -45,6 +47,9 @@ typedef struct {
   LvView *views;
   int nviews, capviews;
   int views_dirty;
+  char **head; // index.csv's columns, as the file has them (a rewrite keeps every one)
+  int nhead;
+  int index_dirty;
   char **cats; // the categories, most items first
   int *cat_counts;
   int ncats;
@@ -84,12 +89,29 @@ typedef struct {
 } LvNew;
 // The same in two steps, for a thread that does the slow part: the files and the row (reads the
 // loaded items only for the next number), then the loaded vault (on the thread that draws it).
-typedef struct { char uid[16], name[400], path[1300], thumb[128]; } LvAdded;
+typedef struct { char uid[16], name[400], path[1300], thumb[128], tsize[32]; } LvAdded;
 int lv_vault_add_files(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, const char *ext,
                        const uint8_t *thumb, size_t tlen, int tw, int th, LvAdded *out, const char **why);
 int lv_vault_add_memory(LvVault *v, const LvNew *n, const LvAdded *a);
 int lv_vault_add(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, const char *ext,
                  const uint8_t *thumb, size_t tlen, int tw, int th, const char **why);
+
+// Editing (index.csv is then written whole, after the day's backup).
+// A column's value for an item (nsfw, quality, category, tags, collection, ...): 0, or -1 when the
+// file has no such column.
+int lv_item_set(LvVault *v, int i, const char *column, const char *value);
+int lv_vault_save_index(LvVault *v);
+// The item's file (and its own thumbnail and clip) into the vault's _trash folder, as the PC does
+// for an Untraceable vault, and its row out of index.csv (saved). 0 on success.
+int lv_vault_delete(LvVault *v, int i, int save); // (save 0: several in a row, then lv_vault_save_index)
+char *lv_index_csv(const LvVault *v); // (malloc'd)
+
+// Searching, as the PC does: blue_hair (has it), -sketch (hasn't), ~cat ~dog (any of them),
+// artist:* or blue* (a wildcard at the end). A word matches a tag exactly, or (with no * and no
+// prefix) is found in the name, category or collection.
+typedef struct { char words[24][64]; char mode[24]; int n; } LvSearch; // mode: '+', '-' or '~'
+void lv_search_compile(const char *query, LvSearch *s);
+int lv_search_match(const LvSearch *s, const LvItem *it);
 
 // The CSV pieces (exposed for the tests).
 typedef struct { char ***rows; int *ncells; int nrows; } LvCsv;
