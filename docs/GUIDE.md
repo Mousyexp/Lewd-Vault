@@ -153,6 +153,13 @@ for you to confirm you're 18 or over; nothing connects before that.
 - **Videos and big files** (private chats, **+ → Videos & big files**): full size, straight from
   your device to theirs over a direct link (WebRTC), not through the relays. They tap **Get it**
   while both apps are open; each side sees the other's internet address. Up to 2 GB.
+- **Disappearing messages** (a chat's ⋯ menu): new messages vanish from both phones after 5
+  minutes, an hour, a day or a week, and the relays are asked to drop them too.
+- **Safety numbers** (a chat's ⋯ menu): eight pictures and twelve numbers to compare with the
+  person; the same on both phones means nobody is in between. Mark them verified (a green shield).
+- Every message is padded to a fixed size before it is sealed, so its length says little.
+- Pictures show a blurred preview and a progress ring while they arrive. What you were typing stays
+  as a draft when you leave a chat. Swipe a message right to reply; double-tap to heart it.
 - **Read receipts** and **"typing…"** are off until you turn them on in Chat settings (you see
   other people's if they send them).
 - **Nearby** (phones): the AirDrop-like sheet behind the radar button. While it is open, phones

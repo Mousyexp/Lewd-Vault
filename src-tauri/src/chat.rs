@@ -18,6 +18,11 @@
 //   pictures      made smaller here (1280 px JPEG), cut into pieces that each travel as a message, and
 //                 put back together on arrival. "View once" pictures are erased after being looked at.
 //
+// Also, as in Signal and WhatsApp: disappearing messages per chat (each message carries its expiry, and
+// the relays are asked to drop it then too, NIP-40), every payload padded to a fixed size bucket so its
+// length says little, safety numbers to check a contact in person, and pictures that show a blurred
+// preview and their progress while their pieces arrive.
+//
 // Nearby (Bluetooth) carries the very same sealed events phone to phone; the radio part is native
 // (mobile/android/LvNearby.kt, mobile/ios/Nearby), this file only wraps and unwraps.
 //
@@ -207,11 +212,17 @@ fn jittered() -> i64 {
 }
 
 /// A private message, sealed and wrapped for `to` (bitchat's createPrivateMessage).
+#[cfg(test)]
 pub fn wrap(me: &SigningKey, to: &str, payload: &str) -> Res<Event> {
     wrap_kind(me, to, payload, KIND_WRAP)
 }
 
 fn wrap_kind(me: &SigningKey, to: &str, payload: &str, kind: u32) -> Res<Event> {
+    wrap_exp(me, to, payload, kind, 0)
+}
+
+/// (`exp`: a disappearing message's end, in seconds: the relays are asked to drop it then, NIP-40)
+fn wrap_exp(me: &SigningKey, to: &str, payload: &str, kind: u32, exp: i64) -> Res<Event> {
     let my_pub = pub_of(me);
     let mut rumor = Event::new(my_pub.clone(), now(), KIND_RUMOR, vec![], payload.to_string());
     rumor.id = hex(&rumor.hash());
@@ -219,7 +230,11 @@ fn wrap_kind(me: &SigningKey, to: &str, payload: &str, kind: u32) -> Res<Event> 
     let once = new_key();
     let wrapped = lock_box(&shared_key(&once, to)?, seal.json().as_bytes());
     let at = if kind == KIND_WRAP { jittered() } else { now() }; // (an ephemeral one is gone at once anyway)
-    Ok(Event::new(pub_of(&once), at, kind, vec![vec!["p".into(), to.into()]], wrapped).sign(&once))
+    let mut tags = vec![vec!["p".into(), to.into()]];
+    if exp > 0 {
+        tags.push(vec!["expiration".into(), exp.to_string()]);
+    }
+    Ok(Event::new(pub_of(&once), at, kind, tags, wrapped).sign(&once))
 }
 
 /// The other way (bitchat's decryptPrivateMessage, with its checks): (sender, time sent, payload).
@@ -231,7 +246,8 @@ pub fn unwrap(me: &SigningKey, ev: &Event) -> Res<(String, i64, String)> {
 /// (`checked`: its id and signature were checked already, as the relay link does for every event)
 fn unwrap_checked(me: &SigningKey, ev: &Event, checked: bool) -> Res<(String, i64, String)> {
     let my_pub = pub_of(me);
-    if !matches!(ev.kind, KIND_WRAP | KIND_WRAP_NOW) || ev.content.len() > MAX_ENVELOPE * 2 || ev.tags != vec![vec!["p".to_string(), my_pub.clone()]] || !(checked || ev.verify()) {
+    if !matches!(ev.kind, KIND_WRAP | KIND_WRAP_NOW) || ev.content.len() > MAX_ENVELOPE * 2 || ev.tags.first() != Some(&vec!["p".to_string(), my_pub.clone()])
+        || !ev.tags[1..].iter().all(|t| t.len() == 2 && t[0] == "expiration") || ev.tags.len() > 2 || !(checked || ev.verify()) {
         return Err("Not a wrap for me".into());
     }
     let seal: Event = serde_json::from_slice(&open_box(&shared_key(me, &ev.pubkey)?, &ev.content)?).map_err(|_| "Bad seal")?;
@@ -243,6 +259,36 @@ fn unwrap_checked(me: &SigningKey, ev: &Event, checked: bool) -> Res<(String, i6
         return Err("Bad message".into());
     }
     Ok((seal.pubkey, rumor.created_at, rumor.content))
+}
+
+/// A payload padded up to the next size bucket (256 bytes, then doubling): what travels says little
+/// about how long the message is (Signal and bitchat pad the same way).
+fn padded(p: &Value) -> String {
+    let s = p.to_string();
+    let need = s.len() + 9; // (with `,"pad":""`)
+    let mut bucket = 256;
+    while bucket < need {
+        bucket *= 2;
+    }
+    let mut q = p.clone();
+    q["pad"] = json!("0".repeat(bucket - need));
+    q.to_string()
+}
+
+/// Safety numbers for two people (the same for both): 12 groups of 5 digits and 8 pictures to compare
+/// side by side or read aloud. Equal on both phones: nobody is in between.
+pub fn safety(a: &str, b: &str) -> (Vec<String>, Vec<&'static str>) {
+    const PICS: [&str; 64] = ["🐶", "🐱", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🐦", "🦉",
+        "🦄", "🐝", "🦋", "🐌", "🐞", "🐢", "🐍", "🐙", "🦀", "🐬", "🐳", "🦈", "🐊", "🦒", "🦓", "🐘",
+        "🌵", "🌲", "🌴", "🍀", "🍁", "🍄", "🌸", "🌻", "🌙", "⭐", "🔥", "🌈", "⛄", "🍎", "🍋", "🍉",
+        "🍇", "🍓", "🍒", "🍑", "🍍", "🥥", "🥕", "🌽", "🍔", "🍕", "🍩", "🍪", "🎂", "🍭", "☕", "🎈"];
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+    let h = sha256(format!("lewd-vault-chat/safety\n{lo}\n{hi}").as_bytes());
+    let mut bytes = sha256(&[&h[..], b"1"].concat()).to_vec();
+    bytes.extend(sha256(&[&h[..], b"2"].concat()));
+    let digits = bytes.chunks(5).take(12).map(|c| format!("{:05}", c.iter().fold(0u64, |n, x| n * 256 + *x as u64) % 100_000)).collect();
+    let pics = h.iter().take(8).map(|x| PICS[(*x as usize) % 64]).collect();
+    (digits, pics)
 }
 
 /// A room's tag (what the relay filters on) and key, both from its name and password.
@@ -258,6 +304,14 @@ fn room_secret(name: &str, password: &str) -> (String, [u8; 32]) {
 fn room_event(me: &SigningKey, tag: &str, key: &[u8; 32], payload: &str) -> Event {
     let tags = vec![vec!["r".into(), tag.into()], vec!["expiration".into(), (now() + ROOM_DAYS * 86400).to_string()]];
     Event::new(pub_of(me), now(), KIND_ROOM, tags, lock_box(key, payload.as_bytes())).sign(me)
+}
+
+/// A 24 px preview (a few hundred bytes of JPEG, as base64), shown blurred while a picture arrives.
+fn tiny_preview(jpeg: &[u8]) -> Option<String> {
+    let img = image::load_from_memory(jpeg).ok()?.thumbnail(24, 24).to_rgb8();
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 40).encode_image(&img).ok()?;
+    Some(base64::engine::general_purpose::STANDARD.encode(out))
 }
 
 /// Pictures: no bigger than 1280 px (then 1024, 800) and MAX_PICTURE bytes, as JPEG. (w, h, bytes)
@@ -292,6 +346,8 @@ struct Contact {
     added: i64,
     /// they wrote first and you haven't answered or accepted yet
     request: bool,
+    /// you compared safety numbers with them
+    verified: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -312,6 +368,8 @@ struct Meta {
     last_at: i64,
     last: String,
     hidden: bool,
+    /// disappearing messages: how long each lasts, in seconds (0: they stay)
+    ttl: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -385,6 +443,14 @@ struct FileCard {
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(default)]
+struct Loading {
+    got: u32,
+    n: u32,
+    thumb: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
 struct Msg {
     id: String,
     from: String,
@@ -397,6 +463,12 @@ struct Msg {
     /// (theirs: a read receipt went for it)
     seen: bool,
     reply: String,
+    /// a disappearing message's end (ms), 0: it stays
+    exp: i64,
+    /// a line from the chat itself ("ttl:<seconds>": disappearing messages were set)
+    sys: String,
+    /// a picture still arriving: pieces so far, of how many, and a tiny blurred preview
+    loading: Option<Loading>,
     reacts: BTreeMap<String, Vec<String>>,
     mine: bool,
     /// sending, sent, failed, received
@@ -421,7 +493,10 @@ struct St {
     dirty_state: bool,
     parts: HashMap<String, Partial>,
     rate: HashMap<String, VecDeque<i64>>,
+    /// the chat on screen, and when the page last asked for it (it counts as open for 5 s after:
+    /// an app closed with a chat open mustn't keep it "read" for ever)
     open: String,
+    open_at: i64,
     /// someone typing in a chat: when they last said so
     typing: HashMap<String, i64>,
     /// the direct link's handshakes, for the page
@@ -485,7 +560,7 @@ impl Chat {
         let me = pub_of(&key);
         Arc::new_cyclic(|me_ref| Chat {
             dir,
-            st: Mutex::new(St { saved, key, me, msgs: HashMap::new(), dirty: HashSet::new(), dirty_state: true, parts: HashMap::new(), rate: HashMap::new(), open: String::new(), typing: HashMap::new(), signals: Vec::new(), seen, asked_inbox: HashMap::new() }),
+            st: Mutex::new(St { saved, key, me, msgs: HashMap::new(), dirty: HashSet::new(), dirty_state: true, parts: HashMap::new(), rate: HashMap::new(), open: String::new(), open_at: 0, typing: HashMap::new(), signals: Vec::new(), seen, asked_inbox: HashMap::new() }),
             links: Mutex::new(Vec::new()),
             rev: AtomicU64::new(1),
             sub_gen: AtomicU64::new(1),
@@ -514,13 +589,54 @@ impl Chat {
     /// Writes what changed, at most a few times a second.
     fn saver(me: &Arc<Chat>) {
         let me = me.clone();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_millis(600));
-            if me.stopped.load(Ordering::Relaxed) {
-                return;
+        std::thread::spawn(move || {
+            let mut n = 0u32;
+            loop {
+                std::thread::sleep(Duration::from_millis(600));
+                if me.stopped.load(Ordering::Relaxed) {
+                    return;
+                }
+                n += 1;
+                if n % 5 == 0 {
+                    me.sweep();
+                }
+                me.flush();
             }
-            me.flush();
         });
+    }
+
+    /// Disappearing messages that have ended go, with their files (checked every few seconds; a chat
+    /// not loaded yet is checked when it loads).
+    fn sweep(&self) {
+        let t = now_ms();
+        let mut st = self.st.lock().unwrap();
+        let mut gone: Vec<String> = Vec::new();
+        let mut changed: Vec<String> = Vec::new();
+        for (cid, list) in st.msgs.iter_mut() {
+            let before = list.len();
+            list.retain(|m| {
+                let keep = m.exp == 0 || m.exp > t;
+                if !keep {
+                    gone.extend(m.pic.as_ref().map(|p| p.mid.clone()));
+                    gone.extend(m.voice.as_ref().map(|v| v.mid.clone()));
+                    gone.extend(m.file.as_ref().map(|f| f.mid.clone()));
+                }
+                keep
+            });
+            if list.len() != before {
+                changed.push(cid.clone());
+            }
+        }
+        for c in &changed {
+            st.dirty.insert(c.clone());
+        }
+        drop(st);
+        for mid in gone.iter().filter(|m| !m.is_empty()) {
+            let _ = fs::remove_file(self.media_path(mid));
+        }
+        if !changed.is_empty() {
+            self.bump();
+        }
     }
 
     fn flush(&self) {
@@ -706,6 +822,10 @@ impl Chat {
         }
         let id = clip(p["id"].as_str().unwrap_or(""), 32);
         let at_ms = p["at"].as_i64().unwrap_or(at * 1000).min(now_ms());
+        // (a disappearing message that has already ended: not shown at all)
+        if expiry_of(p) != 0 && expiry_of(p) <= now_ms() {
+            return false;
+        }
         match p["t"].as_str().unwrap_or("") {
             "msg" | "hi" => {
                 if id.is_empty() {
@@ -717,7 +837,7 @@ impl Chat {
                     return room.is_none() && !mine; // (a hello: the contact appears, nothing to show)
                 }
                 let reply = clip(p["reply"].as_str().unwrap_or(""), 32);
-                add_msg(st, &cid, Msg { id, from: from.into(), nick, at: at_ms, text, reply, mine, state: if mine { "sent".into() } else { "received".into() }, via: via.into(), ..Default::default() })
+                add_msg(st, &cid, Msg { id, from: from.into(), nick, at: at_ms, exp: expiry_of(p), text, reply, mine, state: if mine { "sent".into() } else { "received".into() }, via: via.into(), ..Default::default() })
             }
             "img" | "voice" => {
                 let voice = p["t"] == "voice";
@@ -725,24 +845,47 @@ impl Chat {
                 if id.is_empty() || n == 0 || n > 64 || i >= n {
                     return false;
                 }
-                if st.msgs.get(&cid).map(|m| m.iter().any(|x| x.id == id)).unwrap_or(false) || self.known(st, &cid, &id) {
-                    return false;
-                }
+                // (already here whole: nothing to do; a picture still arriving shows its progress)
+                self.known(st, &cid, &id);
+                let arriving = match st.msgs.get(&cid).and_then(|m| m.iter().find(|x| x.id == id)) {
+                    Some(m) if m.loading.is_none() => return false,
+                    Some(_) => true,
+                    None => false,
+                };
                 let Ok(piece) = base64::engine::general_purpose::STANDARD.decode(p["d"].as_str().unwrap_or("")) else { return false };
                 let key = format!("{cid}/{from}/{id}");
-                let part = st.parts.entry(key.clone()).or_insert_with(|| Partial { pieces: vec![None; n], first: p.clone(), at: at_ms, started: now() });
+                let part = st.parts.entry(key.clone()).or_insert_with(|| Partial { pieces: vec![None; n], first: Value::Null, at: at_ms, started: now() });
                 if part.pieces.len() != n {
                     return false;
                 }
                 part.pieces[i] = Some(piece);
-                if part.pieces.iter().any(|x| x.is_none()) {
+                if i == 0 {
+                    part.first = p.clone(); // (the first piece says what it is: size, preview, text)
+                }
+                let got = part.pieces.iter().filter(|x| x.is_some()).count() as u32;
+                let first = part.first.clone();
+                if got < n as u32 {
                     // (pieces that never complete are given up after an hour)
                     st.parts.retain(|_, v| now() - v.started < 3600);
-                    return false;
+                    if voice || first.is_null() {
+                        return false;
+                    }
+                    // a picture shows at once: its blurred preview, and how much has come
+                    if arriving {
+                        if let Some(l) = st.msgs.get_mut(&cid).and_then(|m| m.iter_mut().find(|x| x.id == id)).and_then(|m| m.loading.as_mut()) {
+                            l.got = got;
+                        }
+                        return true;
+                    }
+                    let thumb = first["th"].as_str().filter(|t| t.len() < 4000).map(|t| format!("data:image/jpeg;base64,{t}")).unwrap_or_default();
+                    let pic = Picture { mid: String::new(), w: first["w"].as_u64().unwrap_or(0) as u32, h: first["h"].as_u64().unwrap_or(0) as u32, once: first["once"].as_bool().unwrap_or(false), opened: false };
+                    let exp = expiry_of(&first);
+                    return add_msg(st, &cid, Msg { id, from: from.into(), nick, at: at_ms, exp, pic: Some(pic), loading: Some(Loading { got, n: n as u32, thumb }), mine, state: "received".into(), via: via.into(), ..Default::default() });
                 }
                 let part = st.parts.remove(&key).unwrap();
                 let bytes: Vec<u8> = part.pieces.into_iter().flatten().flatten().collect();
                 let f = &part.first;
+                let exp = expiry_of(f);
                 st.typing.remove(&cid);
                 if voice {
                     let mime = clip(f["mime"].as_str().unwrap_or(""), 40);
@@ -754,7 +897,7 @@ impl Chat {
                         return false;
                     }
                     let v = Voice { mid, secs: f["secs"].as_f64().unwrap_or(0.0).clamp(0.0, 600.0), mime };
-                    return add_msg(st, &cid, Msg { id, from: from.into(), nick, at: part.at, voice: Some(v), mine, state: if mine { "sent".into() } else { "received".into() }, via: via.into(), ..Default::default() });
+                    return add_msg(st, &cid, Msg { id, from: from.into(), nick, at: part.at, exp, voice: Some(v), mine, state: if mine { "sent".into() } else { "received".into() }, via: via.into(), ..Default::default() });
                 }
                 let Ok(format) = image::guess_format(&bytes) else { return false };
                 if bytes.len() > MAX_PICTURE * 2 {
@@ -766,7 +909,25 @@ impl Chat {
                 }
                 let pic = Picture { mid, w: f["w"].as_u64().unwrap_or(0) as u32, h: f["h"].as_u64().unwrap_or(0) as u32, once: f["once"].as_bool().unwrap_or(false), opened: false };
                 let text = clip(f["text"].as_str().unwrap_or(""), 1000);
-                add_msg(st, &cid, Msg { id, from: from.into(), nick, at: part.at, text, pic: Some(pic), mine, state: if mine { "sent".into() } else { "received".into() }, via: via.into(), ..Default::default() })
+                // (the preview that was showing becomes the picture)
+                if let Some(m) = st.msgs.get_mut(&cid).and_then(|m| m.iter_mut().find(|x| x.id == id)) {
+                    m.pic = Some(pic);
+                    m.text = text;
+                    m.loading = None;
+                    st.dirty.insert(cid);
+                    return true;
+                }
+                add_msg(st, &cid, Msg { id, from: from.into(), nick, at: part.at, exp, text, pic: Some(pic), mine, state: if mine { "sent".into() } else { "received".into() }, via: via.into(), ..Default::default() })
+            }
+            // disappearing messages were set (by them, or by you on another device)
+            "ttl" => {
+                if room.is_some() || id.is_empty() {
+                    return false;
+                }
+                let ttl = p["ttl"].as_i64().unwrap_or(0).clamp(0, 30 * 86400);
+                st.saved.meta.entry(cid.clone()).or_default().ttl = ttl;
+                st.dirty_state = true;
+                add_msg(st, &cid, Msg { id, from: from.into(), nick, at: at_ms, sys: format!("ttl:{ttl}"), mine, state: "received".into(), ..Default::default() })
             }
             // someone typing (private chats only; ephemeral)
             "typing" => {
@@ -806,7 +967,7 @@ impl Chat {
                 let card = FileCard { fid: id.clone(), name: clip(p["name"].as_str().unwrap_or("file"), 120), size, mime: clip(p["mime"].as_str().unwrap_or(""), 60),
                                       kind: clip(p["kind"].as_str().unwrap_or("file"), 12), ..Default::default() };
                 st.typing.remove(&cid);
-                add_msg(st, &cid, Msg { id, from: from.into(), nick, at: at_ms, file: Some(card), state: "received".into(), via: via.into(), ..Default::default() })
+                add_msg(st, &cid, Msg { id, from: from.into(), nick, at: at_ms, exp: expiry_of(p), file: Some(card), state: "received".into(), via: via.into(), ..Default::default() })
             }
             // the direct link's handshake: for the page, which makes the link (WebRTC)
             "rtc" => {
@@ -856,9 +1017,20 @@ impl Chat {
 
     fn payload(&self, st: &St, t: &str, extra: Value) -> Value {
         let mut p = json!({ "v": 1, "t": t, "nick": st.saved.nick, "at": now_ms() });
+        // (in a chat with disappearing messages, each message carries its end)
+        if matches!(t, "msg" | "img" | "voice" | "file") {
+            if let Some(cid) = extra["cid"].as_str() {
+                let ttl = st.saved.meta.get(cid).map(|m| m.ttl).unwrap_or(0);
+                if ttl > 0 {
+                    p["exp"] = json!(now_ms() + ttl * 1000);
+                }
+            }
+        }
         if let (Some(o), Some(e)) = (p.as_object_mut(), extra.as_object()) {
             for (k, v) in e {
-                o.insert(k.clone(), v.clone());
+                if k != "cid" {
+                    o.insert(k.clone(), v.clone());
+                }
             }
         }
         p
@@ -871,18 +1043,20 @@ impl Chat {
             let room = st.saved.rooms.get(tag).ok_or("You left that room.")?;
             let key: [u8; 32] = unhex(&room.key).and_then(|k| k.try_into().ok()).ok_or("Bad room")?;
             for p in payloads {
-                out.push(room_event(&st.key, tag, &key, &p.to_string()));
+                out.push(room_event(&st.key, tag, &key, &padded(p)));
             }
         } else {
             if !is_pubkey(cid) {
                 return Err("No such chat".into());
             }
             for p in payloads {
-                out.push(wrap(&st.key, cid, &p.to_string())?);
+                // (a disappearing message: the relays are asked to drop it when it ends, NIP-40)
+                let exp = p["exp"].as_i64().map(|ms| ms / 1000 + 60).unwrap_or(0);
+                out.push(wrap_exp(&st.key, cid, &padded(p), KIND_WRAP, exp)?);
                 if copy {
                     let mut c = p.clone();
                     c["to"] = json!(cid);
-                    out.push(wrap(&st.key, &st.me, &c.to_string())?);
+                    out.push(wrap_exp(&st.key, &st.me, &padded(&c), KIND_WRAP, exp)?);
                 }
             }
         }
@@ -897,7 +1071,7 @@ impl Chat {
         let id = new_id();
         let events = {
             let mut st = self.st.lock().unwrap();
-            let p = self.payload(&st, "msg", json!({ "id": id, "text": text, "reply": reply }));
+            let p = self.payload(&st, "msg", json!({ "id": id, "text": text, "reply": reply, "cid": cid }));
             let events = self.seal_for(&st, cid, &[p], true)?;
             let (me, nick) = (st.me.clone(), st.saved.nick.clone());
             accept(&mut st, cid);
@@ -916,7 +1090,10 @@ impl Chat {
     fn send_picture_sized(&self, cid: &str, bytes: &[u8], once: bool, text: &str, small: bool) -> Res<Value> {
         let (w, h, jpeg) = prepare_picture(bytes, small)?;
         let mid = format!("{}.jpg", new_id());
-        let first = json!({ "w": w, "h": h, "once": once, "text": clip(text, 1000) });
+        // a tiny preview rides on the first piece: it shows, blurred, while the rest arrives (not for
+        // a view-once picture)
+        let th = if once { String::new() } else { tiny_preview(&jpeg).unwrap_or_default() };
+        let first = json!({ "w": w, "h": h, "once": once, "text": clip(text, 1000), "th": th });
         let pic = Picture { mid: mid.clone(), w, h, once, opened: false };
         self.send_pieces(cid, "img", &jpeg, &mid, first, Msg { text: clip(text, 1000), pic: Some(pic), ..Default::default() })
     }
@@ -955,6 +1132,7 @@ impl Chat {
                             o.insert(k.clone(), v.clone());
                         }
                     }
+                    extra["cid"] = json!(cid);
                 }
                 self.payload(&st, t, extra)
             }).collect();
@@ -1029,7 +1207,7 @@ impl Chat {
                               kind: clip(f["kind"].as_str().unwrap_or("file"), 12), src: clip(f["src"].as_str().unwrap_or(""), 200), ..Default::default() };
         let events = {
             let mut st = self.st.lock().unwrap();
-            let p = self.payload(&st, "file", json!({ "id": id, "name": card.name, "size": size, "mime": card.mime, "kind": card.kind }));
+            let p = self.payload(&st, "file", json!({ "id": id, "name": card.name, "size": size, "mime": card.mime, "kind": card.kind, "cid": cid }));
             let events = self.seal_for(&st, cid, &[p], false)?;
             let (me, nick) = (st.me.clone(), st.saved.nick.clone());
             accept(&mut st, cid);
@@ -1109,12 +1287,12 @@ impl Chat {
                 }
                 None => {
                     let c = &st.saved.contacts[&cid];
-                    (if c.nick.is_empty() { format!("Someone {}", &cid[..6]) } else { c.nick.clone() }, "dm", json!({ "fav": c.fav, "request": c.request }))
+                    (if c.nick.is_empty() { format!("Someone {}", &cid[..6]) } else { c.nick.clone() }, "dm", json!({ "fav": c.fav, "request": c.request, "verified": c.verified }))
                 }
             };
             let typing = st.typing.get(&cid).copied().unwrap_or(0);
             convs.push(json!({ "id": cid, "kind": kind, "name": name, "pinned": meta.pinned, "muted": meta.muted, "unread": meta.unread,
-                               "at": meta.last_at, "last": meta.last, "extra": extra, "typing": typing }));
+                               "at": meta.last_at, "last": meta.last, "extra": extra, "typing": typing, "ttl": meta.ttl }));
         }
         let blocked: Vec<Value> = st.saved.contacts.iter().filter(|(_, c)| c.blocked).map(|(k, c)| json!({ "id": k, "nick": c.nick })).collect();
         json!({
@@ -1137,6 +1315,7 @@ impl Chat {
         let mut st = self.st.lock().unwrap();
         load_conv(self, &mut st, cid);
         st.open = cid.to_string();
+        st.open_at = now_ms();
         if let Some(m) = st.saved.meta.get_mut(cid) {
             if m.unread > 0 {
                 m.unread = 0;
@@ -1291,6 +1470,7 @@ impl Chat {
                 if let Some(v) = what["blocked"].as_bool() { c.blocked = v; c.request = false; }
                 if let Some(v) = what["accept"].as_bool() { if v { c.request = false; } }
                 if let Some(v) = what["nick"].as_str() { c.nick = clean_nick(v); }
+                if let Some(v) = what["verified"].as_bool() { c.verified = v; }
             }
             let m = st.saved.meta.entry(cid.to_string()).or_default();
             if let Some(v) = what["pinned"].as_bool() { m.pinned = v; }
@@ -1305,6 +1485,11 @@ impl Chat {
     fn resubscribe(&self) {
         self.sub_gen.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// A disappearing message's end (ms), from its payload: 0 when it stays (at most a month ahead).
+fn expiry_of(p: &Value) -> i64 {
+    p["exp"].as_i64().filter(|e| *e > 0).map(|e| e.min(now_ms() + 31 * 86400 * 1000)).unwrap_or(0)
 }
 
 /// A file extension for a type (the file server serves by extension).
@@ -1338,12 +1523,29 @@ fn accept(st: &mut St, cid: &str) {
 
 fn load_conv(chat: &Chat, st: &mut St, cid: &str) {
     if !st.msgs.contains_key(cid) {
-        let list: Vec<Msg> = read_json(&chat.conv_path(cid));
+        let t = now_ms();
+        let mut list: Vec<Msg> = read_json(&chat.conv_path(cid));
+        // (what ended while the chat wasn't loaded: the sweep takes its files next)
+        if list.iter().any(|m| m.exp != 0 && m.exp <= t) {
+            for m in list.iter().filter(|m| m.exp != 0 && m.exp <= t) {
+                for mid in [m.pic.as_ref().map(|p| &p.mid), m.voice.as_ref().map(|v| &v.mid), m.file.as_ref().map(|f| &f.mid)].into_iter().flatten() {
+                    if !mid.is_empty() { let _ = fs::remove_file(chat.media_path(mid)); }
+                }
+            }
+            list.retain(|m| m.exp == 0 || m.exp > t);
+            st.dirty.insert(cid.to_string());
+        }
         st.msgs.insert(cid.to_string(), list);
     }
 }
 
-fn add_msg(st: &mut St, cid: &str, msg: Msg) -> bool {
+fn add_msg(st: &mut St, cid: &str, mut msg: Msg) -> bool {
+    if msg.mine && msg.exp == 0 && msg.sys.is_empty() {
+        let ttl = st.saved.meta.get(cid).map(|m| m.ttl).unwrap_or(0);
+        if ttl > 0 && !cid.starts_with("r:") {
+            msg.exp = msg.at + ttl * 1000;
+        }
+    }
     if !st.msgs.contains_key(cid) {
         return false; // (load_conv first: see the callers through `known` / chat_api)
     }
@@ -1367,7 +1569,7 @@ fn add_msg(st: &mut St, cid: &str, msg: Msg) -> bool {
         msg.text.clone()
     };
     let preview = if cid.starts_with("r:") && !msg.mine && !msg.nick.is_empty() { format!("{}: {}", msg.nick, preview) } else { preview };
-    let (mine, at) = (msg.mine, msg.at);
+    let (mine, at, sys) = (msg.mine, msg.at, !msg.sys.is_empty());
     // (in time order: a late arrival goes where it belongs)
     let pos = list.iter().rposition(|m| m.at <= at).map(|p| p + 1).unwrap_or(0);
     list.insert(pos, msg);
@@ -1376,14 +1578,14 @@ fn add_msg(st: &mut St, cid: &str, msg: Msg) -> bool {
         list.drain(..extra);
     }
     st.dirty.insert(cid.to_string());
-    let open = st.open == cid;
+    let open = st.open == cid && now_ms() - st.open_at < 5000;
     let m = st.saved.meta.entry(cid.to_string()).or_default();
     if at >= m.last_at {
         m.last_at = at;
         m.last = clip(&preview, 120);
     }
     m.hidden = false;
-    if !mine && !open {
+    if !mine && !open && !sys {
         m.unread += 1;
     }
     st.dirty_state = true;
@@ -1483,6 +1685,33 @@ pub fn api(dir: &Path, name: &str, args: &[Value], read_item: &dyn Fn(&str) -> R
             chat.file_part(&cid, &s(1), &bytes, a(3).as_bool().unwrap_or(false))
         }
         "chatFileDone" => chat.file_done(&cid, &s(1)),
+        // disappearing messages in a private chat (seconds; 0: off): for both of you
+        "chatTtl" => {
+            if !is_pubkey(&cid) {
+                return Err("Disappearing messages are for private chats.".into());
+            }
+            let ttl = a(1).as_i64().unwrap_or(0).clamp(0, 30 * 86400);
+            let id = new_id();
+            {
+                let mut st = chat.st.lock().unwrap();
+                st.saved.meta.entry(cid.clone()).or_default().ttl = ttl;
+                st.dirty_state = true;
+                let (me, nick) = (st.me.clone(), st.saved.nick.clone());
+                add_msg(&mut st, &cid, Msg { id: id.clone(), from: me, nick, at: now_ms(), sys: format!("ttl:{ttl}"), mine: true, state: "sent".into(), ..Default::default() });
+            }
+            chat.send_small(&cid, "ttl", json!({ "id": id, "ttl": ttl }))?;
+            chat.bump();
+            Ok(json!(true))
+        }
+        // safety numbers (compare them with the person; the same on both phones)
+        "chatSafety" => {
+            if !is_pubkey(&cid) {
+                return Err("Safety numbers are for private chats.".into());
+            }
+            let st = chat.st.lock().unwrap();
+            let (digits, pics) = safety(&st.me, &cid);
+            Ok(json!({ "digits": digits, "pics": pics, "verified": st.saved.contacts.get(&cid).map(|c| c.verified).unwrap_or(false) }))
+        }
         // (the sender's page, asked for one of its files: what it is and where it comes from)
         "chatFileInfo" => {
             let st = chat.st.lock().unwrap();
@@ -1694,7 +1923,7 @@ mod tests {
         let mut png = Vec::new();
         image::DynamicImage::ImageRgb8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
         b.send_picture(&pa, &png, true, "for you").unwrap();
-        assert!(wait(&|| a.st.lock().unwrap().msgs[&pb].iter().any(|m| m.pic.is_some())), "Alice got the picture");
+        assert!(wait(&|| a.st.lock().unwrap().msgs[&pb].iter().any(|m| m.pic.is_some() && m.loading.is_none())), "Alice got the picture");
         let pic = a.st.lock().unwrap().msgs[&pb].iter().find_map(|m| m.pic.clone()).unwrap();
         assert!(pic.once && a.media(&pic.mid).map(|b| b.len() > 1000).unwrap_or(false));
         // a reaction
@@ -1742,12 +1971,75 @@ mod tests {
         let card = b.st.lock().unwrap().msgs[&pa].iter().find_map(|m| m.file.clone()).unwrap();
         assert!(card.done && card.mid.ends_with(".mp4"));
         assert_eq!(b.media(&card.mid).unwrap(), bytes);
+        // disappearing messages: set by Bob, both sides follow; the relay is told when each ends
+        let mut st = b.st.lock().unwrap(); st.saved.meta.entry(pa.clone()).or_default().ttl = 2; drop(st);
+        b.send_small(&pa, "ttl", json!({ "id": new_id(), "ttl": 2 })).unwrap();
+        assert!(wait(&|| a.st.lock().unwrap().saved.meta.get(&pb).map(|m| m.ttl == 2).unwrap_or(false)), "Alice follows the timer");
+        let gone = a.send_text(&pb, "this will vanish", "").unwrap().as_str().unwrap().to_string();
+        let ev = a.st.lock().unwrap().saved.outbox.iter().find(|o| o.mid == gone).map(|o| o.ev.clone()).unwrap();
+        assert!(ev.tag("expiration").is_some(), "the relay is told when it ends");
+        assert!(wait(&|| b.st.lock().unwrap().msgs[&pa].iter().any(|m| m.id == gone && m.exp > 0)), "Bob got it, with its end");
+        std::thread::sleep(Duration::from_millis(2100));
+        a.sweep();
+        b.sweep();
+        assert!(!a.st.lock().unwrap().msgs[&pb].iter().any(|m| m.id == gone) && !b.st.lock().unwrap().msgs[&pa].iter().any(|m| m.id == gone), "gone on both sides");
         // the files are written, and come back
         a.flush();
         let again = Chat::open(da.clone());
         assert_eq!(again.st.lock().unwrap().me, pa);
         a.shutdown();
         b.shutdown();
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn padding_hides_length() {
+        let sizes: Vec<usize> = ["hi", "hello there, how are you", &"x".repeat(200), &"y".repeat(300)].iter()
+            .map(|t| padded(&json!({ "t": "msg", "text": t })).len()).collect();
+        assert_eq!(sizes, vec![256, 256, 256, 512]);
+        let p: Value = serde_json::from_str(&padded(&json!({ "t": "msg", "text": "hi" }))).unwrap();
+        assert_eq!(p["text"], "hi");
+    }
+
+    #[test]
+    fn safety_numbers_match() {
+        let (a, b, c) = (pub_of(&new_key()), pub_of(&new_key()), pub_of(&new_key()));
+        assert_eq!(safety(&a, &b), safety(&b, &a));
+        assert_ne!(safety(&a, &b).0, safety(&a, &c).0);
+        let (digits, pics) = safety(&a, &b);
+        assert!(digits.len() == 12 && digits.iter().all(|d| d.len() == 5 && d.chars().all(|c| c.is_ascii_digit())));
+        assert_eq!(pics.len(), 8);
+    }
+
+    /// A picture's pieces in any order: nothing until the first piece (which says what it is), then a
+    /// blurred preview with progress, then the picture.
+    #[test]
+    fn pictures_show_while_they_arrive() {
+        let base = std::env::temp_dir().join(format!("lv-prog-{}", new_id()));
+        let (a, b) = (Chat::open(base.join("a")), Chat::open(base.join("b")));
+        let (pa, pb) = (a.st.lock().unwrap().me.clone(), b.st.lock().unwrap().me.clone());
+        { let mut st = b.st.lock().unwrap(); load_conv(&b, &mut st, &pa); }
+        let img = image::RgbImage::from_fn(1200, 900, |x, y| image::Rgb([(x * 13 % 256) as u8, (y * 7 % 256) as u8, ((x * y) % 256) as u8]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        b.send_picture(&pa, &png, false, "").unwrap();
+        let mut evs: Vec<Event> = b.st.lock().unwrap().saved.outbox.iter().map(|o| o.ev.clone()).collect();
+        assert!(evs.len() >= 3, "several pieces ({})", evs.len());
+        { let mut st = a.st.lock().unwrap(); load_conv(&a, &mut st, &pb); }
+        let last = evs.pop().unwrap();
+        a.take(last, "net");
+        assert!(a.st.lock().unwrap().msgs[&pb].is_empty(), "nothing until the first piece");
+        let first = evs.remove(0);
+        a.take(first, "net");
+        let m = a.st.lock().unwrap().msgs[&pb][0].clone();
+        let l = m.loading.expect("a preview while it arrives");
+        assert!(l.got == 2 && l.thumb.starts_with("data:image/jpeg;base64,") && m.pic.as_ref().unwrap().mid.is_empty());
+        for e in evs {
+            a.take(e, "net");
+        }
+        let m = a.st.lock().unwrap().msgs[&pb][0].clone();
+        assert!(m.loading.is_none() && !m.pic.unwrap().mid.is_empty(), "now the picture");
+        assert_eq!(a.st.lock().unwrap().msgs[&pb].len(), 1);
         let _ = fs::remove_dir_all(&base);
     }
 

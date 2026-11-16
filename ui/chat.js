@@ -45,8 +45,12 @@
 
   // ---------- state ----------
   let S = null, rev = 0, started = false, openId = '', msgs = [], msgSig = '', filter = 'all', query = '', replyTo = null;
-  let timer = null, typingSig = '', settingsDraw = null;
+  let timer = null, typingSig = '', settingsDraw = null, flyOut = false;
   const conv = id => S && S.convs.find(c => c.id === id);
+  // drafts: what you'd typed in each chat, kept when you leave it (on this device only)
+  const draftKey = id => 'lv.chatDraft.' + id;
+  const draftOf = id => local(draftKey(id)) || '';
+  const keepDraft = (id, text) => { try { if (text.trim()) localStorage.setItem(draftKey(id), text); else localStorage.removeItem(draftKey(id)); } catch (e) {} };
   const isTyping = c => !!(c && c.typing && Date.now() - c.typing < 6000);
 
   // avatars: a colour from the id, the first letter of the name (rooms: #)
@@ -178,7 +182,7 @@
     const section = (title, items) => {
       if (!items.length) return;
       f.rows.append(make('h3', 'ch-sec', title));
-      for (const c of items) f.rows.append(row(c));
+      for (const c of items) { const el = row(c); el.style.setProperty('--i', String(f.rows.children.length)); f.rows.append(el); }
     };
     section('Pinned', list.filter(c => c.pinned));
     section(list.some(c => c.pinned) ? 'All chats' : '', list.filter(c => !c.pinned));
@@ -207,7 +211,11 @@
     top.append(make('b', '', c.name));
     if (c.kind === 'room' && c.extra.locked) top.append(make('i', 'ch-lock', ''));
     if (c.muted) top.append(make('i', 'ch-muted', ''));
+    const draft = c.id !== openId && draftOf(c.id);
     const last = make('span', 'ch-row-last' + (isTyping(c) ? ' typing' : ''), isTyping(c) ? 'typing…' : c.extra && c.extra.request ? 'Wants to chat with you' : (c.last || (c.kind === 'room' ? 'Joined the room' : 'Say hi 👋')));
+    if (draft && !isTyping(c)) { last.textContent = ''; last.append(make('b', 'ch-draft', 'Draft: '), draft.slice(0, 80)); }
+    if (c.extra && c.extra.verified) top.append(make('i', 'ch-verified', ''));
+    if (c.ttl) top.append(make('i', 'ch-exp', ''));
     mid.append(top, last);
     const side = make('span', 'ch-row-side');
     side.append(make('small', '', when(c.at)));
@@ -217,6 +225,32 @@
     r.oncontextmenu = e => { e.preventDefault(); chatMenu(c, e.clientX, e.clientY); };
     hold(r, (x, y) => chatMenu(c, x, y));
     return r;
+  }
+
+  // swipe a message to the right to reply to it (as in WhatsApp and Telegram): it follows the finger,
+  // an arrow fills in, and past the mark it springs back with a tick
+  function swipeToReply(w, m) {
+    let sx = 0, sy = 0, dx = 0, on = false, done = false, arrow = null;
+    w.addEventListener('touchstart', e => { const p = e.touches[0]; sx = p.clientX; sy = p.clientY; dx = 0; on = false; done = false; }, { passive: true });
+    w.addEventListener('touchmove', e => {
+      const p = e.touches[0], x = p.clientX - sx, y = p.clientY - sy;
+      if (!on) { if (Math.abs(x) > 12 && Math.abs(x) > Math.abs(y) * 1.5 && x > 0) { on = true; w.classList.add('swiping'); arrow = make('span', 'ch-swipe-arrow'); w.prepend(arrow); } else return; }
+      dx = Math.min(110, x <= 70 ? x : 70 + (x - 70) * .4); // (resistance past the mark)
+      w.style.transform = `translateX(${dx}px)`;
+      arrow.style.setProperty('--p', String(Math.min(1, dx / 70)));
+      if (dx >= 70 && !done) { done = true; haptic('select'); arrow.classList.add('ready'); }
+      if (dx < 70 && done) { done = false; arrow.classList.remove('ready'); }
+    }, { passive: true });
+    const end = () => {
+      if (!on) return;
+      on = false;
+      w.classList.remove('swiping');
+      w.style.transform = '';
+      if (arrow) { const a = arrow; setTimeout(() => a.remove(), 250); arrow = null; }
+      if (done) setReply(m);
+    };
+    w.addEventListener('touchend', end);
+    w.addEventListener('touchcancel', end);
   }
 
   // a long press (touch) or right click
@@ -246,7 +280,11 @@
     back.onclick = e => { if (e.target === back) closePop(); };
     back.oncontextmenu = e => { e.preventDefault(); closePop(); };
   }
-  function closePop() { document.querySelectorAll('.ch-pop-back').forEach(b => b.remove()); }
+  function closePop() {
+    document.querySelectorAll('.ch-pop-back').forEach(b => b.remove());
+    document.querySelectorAll('.ch-focus').forEach(b => b.classList.remove('ch-focus'));
+    document.querySelectorAll('.ch-focusing').forEach(b => b.classList.remove('ch-focusing'));
+  }
   const item = (pop, text, fn, cls) => {
     const b = make('button', 'ch-pop-item' + (cls ? ' ' + cls : ''), text);
     b.type = 'button';
@@ -282,12 +320,42 @@
       if (c.kind === 'dm') {
         item(pop, c.extra.fav ? 'Remove from favourites' : 'Add to favourites', () => set(c.id, { fav: !c.extra.fav }));
         item(pop, 'Rename…', () => rename(c));
+        item(pop, c.ttl ? `Disappearing messages: ${ttlName(c.ttl)}` : 'Disappearing messages…', () => ttlSheet(c));
+        item(pop, c.extra.verified ? 'Safety number ✓ verified' : 'Verify safety number…', () => safetySheet(c));
         item(pop, 'Block', () => block(c), 'danger');
       }
       item(pop, c.kind === 'room' ? 'Leave the room' : 'Delete the chat', () => leaveChat(c), 'danger');
     });
   }
   const set = (id, what) => api('chatSet', id, what).then(refresh).catch(e => toast(errMsg(e), 'error'));
+
+  // ---------- disappearing messages, safety numbers ----------
+  const TTLS = [[0, 'Off'], [300, '5 minutes'], [3600, '1 hour'], [86400, '1 day'], [604800, '1 week']];
+  const ttlName = s => (TTLS.find(([v]) => v === s) || [0, s >= 86400 ? Math.round(s / 86400) + ' days' : Math.round(s / 60) + ' minutes'])[1];
+  function ttlSheet(c) {
+    const { body, close } = sheet('Disappearing messages');
+    body.append(make('p', 'ch-help', `New messages in this chat vanish from both phones after the time you choose, and the relays are asked to drop them too. For both of you: ${c.name} sees the change.`));
+    const list = make('div', 'ch-choices');
+    for (const [v, t] of TTLS) {
+      const b = make('button', 'ch-choice' + ((c.ttl || 0) === v ? ' on' : ''), t); b.type = 'button';
+      b.onclick = () => { close(); api('chatTtl', c.id, v).then(() => { haptic('success'); refresh(); if (openId === c.id) loadMsgs(true); }).catch(e => toast(errMsg(e), 'error')); };
+      list.append(b);
+    }
+    body.append(list);
+  }
+  async function safetySheet(c) {
+    const { body, close } = sheet('Safety number');
+    let s;
+    try { s = await api('chatSafety', c.id); } catch (e) { toast(errMsg(e), 'error'); close(); return; }
+    body.append(make('p', 'ch-help', `Compare these with ${c.name}, side by side or read aloud. If they're the same on both phones, nobody is in between: your messages go to them alone.`));
+    const pics = make('div', 'ch-safety-pics');
+    s.pics.forEach((p, i) => { const e = make('span', '', p); e.style.setProperty('--i', i); pics.append(e); });
+    const digits = make('div', 'ch-safety-digits');
+    s.digits.forEach((d, i) => { const e = make('code', '', d); e.style.setProperty('--i', i); digits.append(e); });
+    const mark = make('button', 'btn ' + (s.verified ? '' : 'primary'), s.verified ? 'Clear verified' : 'They match: mark as verified'); mark.type = 'button';
+    mark.onclick = () => { set(c.id, { verified: !s.verified }); haptic(s.verified ? 'light' : 'success'); close(); };
+    body.append(pics, digits, mark);
+  }
   function rename(c) {
     const { body, close } = sheet('Rename');
     const input = make('input', 'ch-input'); input.value = c.name; input.maxLength = 24;
@@ -452,10 +520,12 @@
     if (!conv(id)) { rev = 0; await refresh(); }
     if (!conv(id)) return;
     if (openId && openId !== id) api('chatClose').catch(() => {});
+    if (openId && C) keepDraft(openId, C.text.value);
+    unreadAtOpen = (conv(id) && conv(id).unread) || 0;
     openId = id;
     msgSig = '';
     replyTo = null;
-    shown = PAGE; hasMore = false; rendered = [];
+    shown = PAGE; hasMore = false; rendered = []; newBelow = 0;
     const f = frame();
     f.app.classList.add('in-chat');
     html.classList.add('ch-chat-open');
@@ -464,8 +534,10 @@
     await loadMsgs(true);
   }
   function closeChat() {
+    if (openId && C) keepDraft(openId, C.text.value);
     api('chatClose').catch(() => {});
     openId = '';
+    if (S && F) drawList(); // (the draft shows in the list at once)
     if (F) {
       F.app.classList.remove('in-chat');
       F.conv.innerHTML = '<div class="ch-pick"><span class="ch-pick-art"></span><b>Your chats</b><span>Pick one, or start a new one.</span></div>';
@@ -495,6 +567,7 @@
         <button class="ch-mic" type="button" aria-label="Record a voice note"></button>
         <button class="ch-send" type="submit" aria-label="Send"></button>
       </form>
+      <button class="ch-jump hidden" type="button" aria-label="To the newest"><em></em></button>
       <div class="ch-rec hidden"><button class="ch-ic ch-x ch-rec-cancel" type="button" aria-label="Cancel"></button><span class="ch-rec-dot"></span><b class="ch-rec-time">0:00</b><span class="ch-rec-bars"></span><button class="ch-send ch-rec-send" type="button" aria-label="Send the voice note"></button></div>`;
     const q = s => f.conv.querySelector(s);
     C = { head: q('.ch-c-head'), title: q('.ch-c-title b'), sub: q('.ch-c-title small'), av: q('.ch-c-av'), scroll: q('.ch-scroll'), list: q('.ch-msgs'), req: q('.ch-req'),
@@ -507,7 +580,18 @@
     C.req.querySelector('[data-a="block"]').onclick = () => block(conv(openId));
     const grow = () => { C.text.style.height = 'auto'; C.text.style.height = Math.min(C.text.scrollHeight, 140) + 'px'; C.form.classList.toggle('typed', !!C.text.value.trim()); };
     let lastTyping = 0;
-    C.scroll.addEventListener('scroll', () => { if (C.scroll.scrollTop < 80) moreMsgs(); }, { passive: true });
+    C.jump = f.conv.querySelector('.ch-jump');
+    C.jump.onclick = () => { C.scroll.scrollTo({ top: C.scroll.scrollHeight, behavior: 'smooth' }); };
+    C.scroll.addEventListener('scroll', () => {
+      if (C.scroll.scrollTop < 80) moreMsgs();
+      // the jump button: shown when you're well above the newest, with how many came since
+      const away = C.scroll.scrollHeight - C.scroll.scrollTop - C.scroll.clientHeight > 300;
+      if (!away) newBelow = 0;
+      C.jump.classList.toggle('hidden', !away);
+      C.jump.querySelector('em').textContent = newBelow ? String(newBelow) : '';
+    }, { passive: true });
+    C.text.value = draftOf(openId);
+    if (C.text.value) requestAnimationFrame(() => { C.text.style.height = 'auto'; C.text.style.height = Math.min(C.text.scrollHeight, 140) + 'px'; C.form.classList.add('typed'); });
     C.text.oninput = () => {
       grow();
       // (they see "typing…" if you allow it: Chat settings; the backend decides)
@@ -520,7 +604,9 @@
       const text = C.text.value.trim();
       if (!text) return;
       C.text.value = ''; grow();
+      keepDraft(openId, '');
       haptic('light');
+      flyOut = true; // (the new bubble flies in from the box)
       try { await api('chatSend', openId, text, replyTo ? replyTo.id : ''); setReply(null); await loadMsgs(true); }
       catch (err) { C.text.value = text; grow(); toast(errMsg(err), 'error'); }
     };
@@ -535,7 +621,8 @@
     if (c.kind === 'room') {
       const people = new Set(msgs.filter(m => !m.mine && Date.now() - m.at < 7 * 86400000).map(m => m.from));
       C.sub.textContent = `Room · ${people.size + 1} ${people.size ? 'people' : 'person'} this week${c.extra.locked ? ' · password' : ''}`;
-    } else C.sub.textContent = msgs.some(m => m.via === 'nearby') ? 'Encrypted · also nearby' : 'End-to-end encrypted';
+    } else C.sub.textContent = (c.extra.verified ? '✓ Verified' : msgs.some(m => m.via === 'nearby') ? 'Encrypted · also nearby' : 'End-to-end encrypted') + (c.ttl ? ` · ⏱ ${ttlName(c.ttl)}` : '');
+    C.head.classList.toggle('verified', !!(c.extra && c.extra.verified));
     const typing = isTyping(c);
     C.head.classList.toggle('typing', typing);
     if (typing) C.sub.textContent = 'typing…';
@@ -556,8 +643,8 @@
   // The newest PAGE messages are drawn; scrolling to the top asks for more. A redraw keeps every bubble
   // that didn't change (a new message is one bubble added, not the whole chat drawn again).
   const PAGE = 120;
-  let shown = PAGE, hasMore = false, loadingMore = false, rendered = [];
-  const msgKey = m => m.id + '|' + m.state + (m.deleted ? 'd' : '') + JSON.stringify(m.reacts) + (m.pic ? m.pic.opened : '') + (m.file ? m.file.done : '');
+  let shown = PAGE, hasMore = false, loadingMore = false, rendered = [], unreadAtOpen = 0, newBelow = 0;
+  const msgKey = m => m.id + '|' + m.state + (m.deleted ? 'd' : '') + JSON.stringify(m.reacts) + (m.pic ? m.pic.opened + m.pic.mid : '') + (m.file ? m.file.done : '') + (m.loading ? 'l' + m.loading.got : '');
 
   async function loadMsgs(toEnd, older) {
     if (!openId) return;
@@ -602,7 +689,14 @@
     const want = [];
     if (hasMore) want.push({ key: 'more', make: () => { const b = make('button', 'ch-more-msgs', 'Earlier messages'); b.type = 'button'; b.onclick = moreMsgs; return b; } });
     let lastDay = '', prev = null;
-    for (const m of msgs) {
+    // where the messages you hadn't read begin, when the chat was opened
+    let firstUnread = -1;
+    if (unreadAtOpen) {
+      let k = 0;
+      for (let i = msgs.length - 1; i >= 0; i--) if (!msgs[i].mine && !msgs[i].sys && ++k === unreadAtOpen) { firstUnread = i; break; }
+    }
+    for (const [i, m] of msgs.entries()) {
+      if (i === firstUnread) { const n = unreadAtOpen; want.push({ key: 'unread', make: () => make('div', 'ch-unread-line', `${n} new ${n === 1 ? 'message' : 'messages'}`) }); }
       const d = dayLabel(m.at);
       if (d !== lastDay) { const dd = d; want.push({ key: 'day:' + d, make: () => make('div', 'ch-day', dd) }); lastDay = d; prev = null; }
       const same = !!(prev && prev.from === m.from && m.at - prev.at < 5 * 60000);
@@ -610,13 +704,32 @@
       want.push({ key: 'm:' + msgKey(m) + (same ? ':s' : '') + (room ? ':r' : ''), make: () => bubble(mm, room, same) });
       prev = m;
     }
-    // the bubbles already drawn are kept (and don't animate in again)
+    // the bubbles already drawn are kept (and don't animate in again); one that only changed (a tick,
+    // a reaction) is drawn again without its entrance; a new one comes in with one
     const old = new Map(rendered.map(x => [x.key, x.el]));
+    const seenIds = new Set(rendered.map(x => x.el.dataset && x.el.dataset.id).filter(Boolean));
+    const first = !rendered.length;
+    // (new means after the newest one already drawn: older ones loaded by scrolling up just appear)
+    const lastShown = [...rendered].reverse().map(x => x.el.dataset && x.el.dataset.id).find(Boolean);
+    const lastAt = lastShown ? msgs.findIndex(x => x.id === lastShown) : -1;
     const next = want.map(w => {
       const el = old.get(w.key);
       if (el) { el.classList.add('settled'); old.delete(w.key); return { key: w.key, el }; }
-      return { key: w.key, el: w.make() };
+      const made = w.make();
+      const id = made.dataset && made.dataset.id;
+      if (id && seenIds.has(id)) made.classList.add('settled', 'changed');
+      else if (id && !first) {
+        const at = msgs.findIndex(x => x.id === id);
+        const m = at > lastAt ? msgs[at] : null;
+        if (m) {
+          made.classList.add(m.mine ? (flyOut ? 'fly' : 'pop') : 'arrive');
+          if (!m.mine) newBelow++;
+          if (/^(?:\s*(?:❤️|♥️?|💕|💖|💗|😍|🥰)\s*){1,6}$/u.test(m.text || '') && !m.pic) setTimeout(() => hearts(made), 120);
+        }
+      }
+      return { key: w.key, el: made };
     });
+    flyOut = false;
     // (only new ones at the end, the usual case: just those go in)
     const appended = rendered.length > 0 && rendered.every((x, i) => next[i] && next[i].el === x.el) && C.list.firstElementChild === rendered[0].el;
     if (appended) {
@@ -629,6 +742,14 @@
   }
 
   function bubble(m, room, same) {
+    if (m.sys) {
+      const s = make('div', 'ch-sys');
+      s.dataset.id = m.id;
+      const ttl = +String(m.sys).split(':')[1] || 0;
+      const who = m.mine ? 'You' : (m.nick || 'They');
+      s.textContent = ttl ? `⏱ ${who} set messages to disappear after ${ttlName(ttl)}` : `⏱ ${who} turned off disappearing messages`;
+      return s;
+    }
     const w = make('div', 'ch-msg' + (m.mine ? ' mine' : '') + (same ? ' same' : ''));
     w.dataset.id = m.id;
     if (room && !m.mine && !same) {
@@ -652,7 +773,15 @@
       card.type = 'button';
       const ratio = p.w && p.h ? p.h / p.w : 1;
       card.style.setProperty('--r', String(Math.min(1.6, Math.max(.5, ratio))));
-      if (p.once && !m.mine) {
+      if (m.loading) {
+        // arriving: the blurred preview, and a ring filling as the pieces come
+        card.classList.add('arriving');
+        card.disabled = true;
+        if (m.loading.thumb) { const t = make('img', 'ch-thumb'); t.src = m.loading.thumb; t.alt = ''; card.append(t); }
+        const ring = make('span', 'ch-ring-progress');
+        ring.style.setProperty('--p', String(m.loading.n ? m.loading.got / m.loading.n : 0));
+        card.append(ring);
+      } else if (p.once && !m.mine) {
         card.classList.add('once');
         card.innerHTML = p.opened ? '<span class="ch-once">Opened</span>' : '<span class="ch-once">View once · tap to open</span>';
         if (!p.opened) card.onclick = () => viewer(m);
@@ -678,6 +807,7 @@
     const meta = make('span', 'ch-meta');
     meta.append(make('time', '', new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })));
     if (m.via === 'nearby') meta.append(make('i', 'ch-via', ''));
+    if (m.exp) meta.append(make('i', 'ch-exp', ''));
     if (m.mine) meta.append(make('i', 'ch-state ' + m.state, ''));
     b.append(meta);
     w.append(b);
@@ -700,6 +830,7 @@
     }
     b.oncontextmenu = e => { e.preventDefault(); msgMenu(m, e.clientX, e.clientY); };
     hold(b, (x, y) => msgMenu(m, x, y));
+    swipeToReply(w, m);
     // a double tap hearts it
     let lastTap = 0;
     b.addEventListener('click', e => { if (e.target.closest('.ch-pic, .ch-quote')) return; const t = Date.now(); if (t - lastTap < 320) { react(m, '❤️'); burstHeart(b); } lastTap = t; });
@@ -712,10 +843,50 @@
     setTimeout(() => h.remove(), 800);
     haptic('light');
   }
-  const react = (m, e) => api('chatReact', openId, m.id, e).then(() => loadMsgs()).catch(err => toast(errMsg(err), 'error'));
+  const react = (m, e) => {
+    const el = C && C.list.querySelector(`.ch-msg[data-id="${m.id}"] .ch-bubble`);
+    if (el) sparkle(el, e);
+    return api('chatReact', openId, m.id, e).then(() => loadMsgs()).catch(err => toast(errMsg(err), 'error'));
+  };
+  // a reaction bursts out of the bubble: the emoji, a few times, flying apart
+  function sparkle(el, e) {
+    const r = el.getBoundingClientRect();
+    for (let i = 0; i < 7; i++) {
+      const s = make('span', 'ch-sparkle', e);
+      const a = (i / 7) * Math.PI * 2 + Math.random() * .5;
+      s.style.left = (r.left + r.width / 2) + 'px';
+      s.style.top = (r.top + r.height / 2) + 'px';
+      s.style.setProperty('--dx', Math.cos(a) * (50 + Math.random() * 40) + 'px');
+      s.style.setProperty('--dy', Math.sin(a) * (50 + Math.random() * 40) - 20 + 'px');
+      s.style.setProperty('--rot', (Math.random() * 80 - 40) + 'deg');
+      document.body.append(s);
+      setTimeout(() => s.remove(), 900);
+    }
+  }
+  // a message that is only hearts: hearts float up the chat
+  function hearts(el) {
+    if (!C) return;
+    const box = C.scroll.getBoundingClientRect();
+    const from = el.getBoundingClientRect();
+    for (let i = 0; i < 14; i++) {
+      const h = make('span', 'ch-float-heart', ['❤️', '💕', '💖', '💗'][i % 4]);
+      h.style.left = (from.left + from.width / 2 + (Math.random() - .5) * 120) + 'px';
+      h.style.top = Math.min(from.top, box.bottom - 40) + 'px';
+      h.style.setProperty('--d', (1.4 + Math.random() * 1.2) + 's');
+      h.style.setProperty('--x', ((Math.random() - .5) * 140) + 'px');
+      h.style.setProperty('--s', String(.7 + Math.random() * .9));
+      h.style.animationDelay = (i * 70) + 'ms';
+      document.body.append(h);
+      setTimeout(() => h.remove(), 3200);
+    }
+    haptic('light');
+  }
 
   function msgMenu(m, x, y) {
     if (m.deleted) return;
+    // the bubble lifts out of a blurred chat while its menu is open (as in iMessage)
+    const held = C && C.list.querySelector(`.ch-msg[data-id="${m.id}"]`);
+    if (held) { held.classList.add('ch-focus'); C.scroll.classList.add('ch-focusing'); }
     popup(x, y, (pop, close) => {
       const row = make('div', 'ch-pop-reacts');
       for (const e of REACTS) {
