@@ -166,6 +166,30 @@ On a phone the app is laid out like Photos:
   **⋯ → Customise the Browser**: the bar at the bottom or the top; pictures whole, 2 or 3 across, or
   as a feed; filters in a sheet or at the top; hide the bars while scrolling; colour the bar like the
   site; edge swipes; pull to reload; blur the previews.
+- **The grid**: pinch it for 2, 3, 5 or 7 across. After Select, slide a finger across pictures to
+  pick a run of them, and a handle on the right edge flings through the whole library, showing the
+  month. Over the grid: smart albums (Never opened, Forgotten, Long videos, Most loved, 1 star) and
+  your own saved filters (+ Save filters; hold one to remove it). A long-press preview can be
+  **pinned** to float over the Library while you scroll.
+- **The viewer** uses the whole screen, with the picture's colours glowing behind it. Pinch or
+  double-tap to zoom, then pan (it glides). The filmstrip works like Photos: slide it and the picture
+  follows. On videos: drag sideways in the lower half to scrub, double-tap a side to skip 10 seconds,
+  hold for 2×, and the little-window button keeps a video playing while you browse. Turn the phone
+  for landscape.
+- **The level dial** also sets the level when adding, for a whole selection at once, and caps the
+  slideshow (the round button bottom left, live). New uploads come as cards: swipe right to save,
+  left to skip.
+- **Sharing to the app**: share pictures or videos from Photos, Safari or any app to Lewd Vault
+  (or "Open in"); they're waiting in Add next time you open it.
+- **Settings → Phone** (also in More) gathers the phone's own settings: animated themes (Sakura,
+  Midnight, Bubblegum, Aurora, Kitten, Neon, Lavender, Mono) and your own accent; seasonal touches and
+  milestone celebrations; haptics; text size and density; the tab bar (drag to choose which four sit
+  in it); what double-tap, two-finger tap and long-press do in the viewer; Face ID / fingerprint
+  unlock; a decoy PIN that opens an empty vault; locking again after leaving the app; shake to hide;
+  hiding from screen recordings (Android also blocks screenshots); a break-in photo after three wrong
+  PINs; the app icon (the heart in other colours, or a disguise: Calculator, Notes, Weather, Clock,
+  Files, Compass; on Android the name changes too); a reminder to delete what you added from Photos;
+  and low-data mode.
 - The app covers itself while it is in the background, so the app switcher shows nothing.
 
 Not on the phones: the global emergency shortcut, opening files in other apps, cloud-folder choices,

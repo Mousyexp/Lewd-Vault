@@ -8,6 +8,29 @@
   <true/>
   <key>LSSupportsOpeningDocumentsInPlace</key>
   <true/>
+  <!-- Face ID unlocks the app instead of the PIN (Settings → Phone → Privacy), and the front camera
+       takes the break-in photo after three wrong PINs (only when that is switched on). -->
+  <key>NSFaceIDUsageDescription</key>
+  <string>Unlock Lewd Vault with Face ID instead of typing your PIN.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Only for the break-in photo: after three wrong PINs, the front camera takes one picture for you to see later.</string>
+  <!-- Pictures and videos can be opened with the app ("Open in Lewd Vault", Files, Mail): they go to
+       its share inbox and are added from there (src-tauri/src/phone.rs). -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Pictures and videos</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.image</string><string>public.movie</string></array>
+    </dict>
+  </array>
+  <!-- The viewer turns with the phone (a landscape picture full width). -->
+  <key>UISupportedInterfaceOrientations</key>
+  <array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+  <key>UISupportedInterfaceOrientations~ipad</key>
+  <array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
   <!-- The media server is plain HTTP on 127.0.0.1 (media.rs): ATS allows loopback by default, but
        say so explicitly so a future iOS tightening cannot silently break playback. -->
   <key>NSAppTransportSecurity</key>

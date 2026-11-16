@@ -40,6 +40,17 @@ trash = "5"
 tauri-plugin-single-instance = "2"
 tauri-plugin-global-shortcut = "2"
 
+# The phones only: haptics (the dial's ticks, a sort's thump) and Face ID / fingerprint unlock.
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+tauri-plugin-haptics = "2"
+tauri-plugin-biometric = "2"
+
+# iOS only: the app icon switch and the screen-recording check (UIKit, through the Objective-C runtime).
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL", "NSFileManager"] }
+
 [profile.release]
 # smaller exe; the backend does little work, so speed isn't the point here
 opt-level = "s"

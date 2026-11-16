@@ -203,7 +203,7 @@ patch(`category: j.category, nsfw: j.nsfw, quality: j.quality, collection: j.col
       `category: j.category, nsfw: j.nsfw, quality: j.quality, collection: j.collection, tags: j.tags || '', source: j.source || '' })));`);
 patch(`    .filter(i => (!cat || i.category === cat) && kindOk(i) && i.nsfw <= maxN && (q === 0 || (q > 0 ? i.quality === q : i.quality >= -q)))
     .sort(sorters[$('fSort').value]);
-`, `    .filter(i => (!cat || i.category === cat) && kindOk(i) && i.nsfw <= maxN && (q === 0 || (q > 0 ? i.quality === q : i.quality >= -q)) && tagFilter(i) && libraryOk(i))
+`, `    .filter(i => (!cat || i.category === cat) && kindOk(i) && i.nsfw <= maxN && (q === 0 || (q > 0 ? i.quality === q : i.quality >= -q)) && tagFilter(i) && libraryOk(i) && (!window.vaultLibraryFilter || window.vaultLibraryFilter(i)))
     .sort(sorters[$('fSort').value]);
   afterRenderLibrary(list);
 `);
@@ -307,6 +307,7 @@ patch(`</body>`, `<script src="/desktop.js"></script>
 <script src="/extras.js"></script>
 <script src="/streamline.js"></script>
 <script src="/phone.js"></script>
+<script src="/phone-plus.js"></script>
 </body>`);
 patch(`<head>`, `<head>\n<title>Lewd Vault</title>
 <meta name="referrer" content="no-referrer">`); // (no page address goes out with requests: RedGifs refuses a foreign one)
@@ -326,7 +327,8 @@ fs.writeFileSync(new URL('index.html', out), page);
 // <link> and Windows and iOS load exactly the same bytes plus the iOS-only tail.
 fs.writeFileSync(new URL('mobile.css', out),
   fs.readFileSync(new URL('ui/desktop.css', here), 'utf8') + '\n' +
-  fs.readFileSync(new URL('mobile/ui/phone.css', here), 'utf8'));
+  fs.readFileSync(new URL('mobile/ui/phone.css', here), 'utf8') + '\n' +
+  fs.readFileSync(new URL('mobile/ui/phone-plus.css', here), 'utf8'));
 copy(new URL('ui/desktop.js', here), new URL('desktop.js', out));
 copy(new URL('ui/discover.js', here), new URL('discover.js', out));
 copy(new URL('ui/sites.js', here), new URL('sites.js', out));
@@ -344,7 +346,11 @@ copy(new URL('ui/coach.js', here), new URL('coach.js', out));
 copy(new URL('ui/share.js', here), new URL('share.js', out));
 copy(new URL('ui/extras.js', here), new URL('extras.js', out));
 copy(new URL('ui/streamline.js', here), new URL('streamline.js', out));
-copy(new URL('mobile/ui/phone.js', here), new URL('phone.js', out)); // the phone layer (mobile/ui/phone.css is folded into mobile.css above)
+copy(new URL('mobile/ui/phone.js', here), new URL('phone.js', out));
+copy(new URL('mobile/ui/phone-plus.js', here), new URL('phone-plus.js', out));
+// the app icon presets' small pictures, for Settings → Phone → App icon (tools/make-icons.mjs)
+fs.mkdirSync(new URL('icon-presets/', out), { recursive: true });
+for (const f of fs.readdirSync(new URL('art/icons/small/', here))) copy(new URL('art/icons/small/' + f, here), new URL('icon-presets/' + f, out)); // (the phone's settings, themes, privacy and native parts) // the phone layer (mobile/ui/phone.css is folded into mobile.css above)
 copy(new URL('src-tauri/icons/128x128@2x.png', here), new URL('app-icon.png', out)); // the brand mark in the sidebar
 for (const f of fs.readdirSync(new URL('art/decor/', here))) copy(new URL(`art/decor/${f}`, here), new URL(`decor/${f}`, out)); // see ui/desktop.js
 // her moans (MagicalMysticVA on Freesound, CC BY 4.0): Appreciate's like-*.ogg, the coach's coach-*.ogg

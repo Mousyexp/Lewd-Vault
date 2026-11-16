@@ -1890,7 +1890,8 @@
     drawSide(p);
     // the ones either side, ready
     const k = posts.indexOf(p);
-    [posts[k + 1], posts[k - 1]].filter(Boolean).forEach(n => { if (!/^(webm|mp4)$/.test(n.ext) && n.sample) { const im = new Image(); im.src = proxy(n.sample); } });
+    // (not on the phone's low-data mode: only what you open is fetched)
+    if (!window.vaultLowData) [posts[k + 1], posts[k - 1]].filter(Boolean).forEach(n => { if (!/^(webm|mp4)$/.test(n.ext) && n.sample) { const im = new Image(); im.src = proxy(n.sample); } });
     if (k >= posts.length - 6) loadMore();
   }
   function showMedia(file, ext, preview, sample) {
@@ -1899,7 +1900,7 @@
     if (/^(webm|mp4)$/.test(ext)) {
       const v = make('video');
       // (through vault://stream, a piece at a time: the picture proxy sends whole files, which can't be jumped into)
-      Object.assign(v, { autoplay: true, loop: true, playsInline: true, crossOrigin: 'anonymous', src: vaultOrigin() + '/stream?u=' + enc(file) });
+      Object.assign(v, { autoplay: !window.vaultLowData, loop: true, playsInline: true, crossOrigin: 'anonymous', src: vaultOrigin() + '/stream?u=' + enc(file) });
       media.append(v);
       window.vaultPlayer.attach(v, media);
     } else {

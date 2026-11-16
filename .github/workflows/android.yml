@@ -31,6 +31,7 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'art/app-icon.png'
+      - 'art/icons/**'
       - '.github/workflows/android.yml'
   pull_request:
     paths:
@@ -42,6 +43,7 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'art/app-icon.png'
+      - 'art/icons/**'
       - '.github/workflows/android.yml'
 
 permissions:
@@ -87,18 +89,13 @@ jobs:
       # Creates src-tauri/gen/android (the Gradle project) once; then the real icon into its res/.
       - run: npx tauri android init --ci
       - run: npx tauri icon art/app-icon.png
-      # The page reads every picture and video from the app's own server on 127.0.0.1 (media.rs), over
-      # plain http. Android blocks cleartext traffic in release builds, so allow it (nothing leaves
-      # the phone: the server only listens on loopback and wants a per-launch token).
-      - name: Allow the loopback media server (cleartext to 127.0.0.1)
+      # What the phone app needs beyond Tauri's template (tools/android-patch.mjs): share to the app,
+      # the app icon presets as launcher aliases, the screenshot guard, and plain http to the app's own
+      # media server on 127.0.0.1 (it only listens on loopback and wants a per-launch token).
+      - name: Fit the Android project (share target, icon presets, screenshot guard, cleartext)
         run: |
-          cd src-tauri/gen/android
-          grep -rn 'usesCleartextTraffic' app/build.gradle.kts app/src/main/AndroidManifest.xml || true
-          sed -i 's/manifestPlaceholders\["usesCleartextTraffic"\] = "false"/manifestPlaceholders["usesCleartextTraffic"] = "true"/' app/build.gradle.kts
-          if ! grep -q 'usesCleartextTraffic' app/src/main/AndroidManifest.xml; then
-            sed -i 's/<application /<application android:usesCleartextTraffic="true" /' app/src/main/AndroidManifest.xml
-          fi
-          grep -rn 'usesCleartextTraffic' app/build.gradle.kts app/src/main/AndroidManifest.xml
+          node tools/android-patch.mjs
+          grep -n 'usesCleartextTraffic\|activity-alias\|SEND_MULTIPLE' src-tauri/gen/android/app/src/main/AndroidManifest.xml | head -20
       - name: Build the APK
         run: npx tauri android build --apk --target aarch64
       - name: Sign the APK

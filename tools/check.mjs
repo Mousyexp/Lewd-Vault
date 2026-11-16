@@ -175,15 +175,18 @@ step('the iOS port pieces the platform turns on are in place', () => {
   if (!builtCss.includes('html.phone .ios-tabbar')) throw new Error('mobile.css has no phone skin (mobile/ui/phone.css was not folded in)');
   // Every rule of the phone skin must start with `html.phone`: the file is appended to the stylesheet
   // Windows loads too, so one unscoped (or `html.desktop`) rule restyles the desktop app.
-  const skin = fs.readFileSync(path.join(root, 'mobile', 'ui', 'phone.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const file of ['phone.css', 'phone-plus.css']) {
+  const skin = fs.readFileSync(path.join(root, 'mobile', 'ui', file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   for (const m of skin.matchAll(/(^|[{}])\s*([^{}@]+?)\s*\{/g)) {
     // (split on the commas between selectors, not the ones inside :is(...) / :has(...))
     const parts = []; let depth = 0, cur = '';
     for (const ch of m[2]) { if (ch === '(') depth++; if (ch === ')') depth--; if (ch === ',' && !depth) { parts.push(cur); cur = ''; } else cur += ch; }
     parts.push(cur);
     const loose = parts.map(x => x.trim()).filter(x => x && !x.startsWith('html.phone') && !/^(from|to|\d+%)$/.test(x));
-    if (loose.length) throw new Error(`mobile/ui/phone.css: "${loose[0]}" is not scoped to html.phone (it would apply on Windows)`);
+    if (loose.length) throw new Error(`mobile/ui/${file}: "${loose[0]}" is not scoped to html.phone (it would apply on Windows)`);
   }
+  }
+  if (!page.includes('src="/phone-plus.js"')) throw new Error('the page does not load /phone-plus.js');
   // The iOS app launches through `main.mm`'s `ffi::start_app()`: `mobile_entry_point` turns `run()`
   // into an exported `start_app` symbol (a #[no_mangle] extern "C"). Rename `run` and the build still
   // succeeds, then the app dies on launch with a missing symbol — so pin the attribute here.

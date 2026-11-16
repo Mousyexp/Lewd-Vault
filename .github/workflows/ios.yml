@@ -31,6 +31,7 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'art/app-icon.png'
+      - 'art/icons/**'
       - '.github/workflows/ios.yml'
   pull_request:
     paths:
@@ -42,6 +43,7 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'art/app-icon.png'
+      - 'art/icons/**'
       - '.github/workflows/ios.yml'
 
 # The workflow only reads the repo (nothing is pushed), so the default token needs no write scopes.
@@ -143,6 +145,8 @@ jobs:
       # src-tauri/icons/ios otherwise), so running it first would leave the template's placeholder
       # icons in the build.
       - run: npx tauri icon art/app-icon.png
+      # The app icon presets as alternate icons, and the share extension (tools/ios-patch.mjs).
+      - run: node tools/ios-patch.mjs
       # Headless keychain: unlock it and grant codesign access so nothing waits on a password prompt
       # a cloud runner cannot answer. Each line is best-effort (`|| true`): with --no-sign none of this
       # is needed, and with the Apple secrets below the CLI signs from a temporary keychain.
@@ -186,6 +190,27 @@ jobs:
             export APPLE_DEVELOPMENT_TEAM="${APPLE_DEVELOPMENT_TEAM:-0000000000}"
             npx tauri ios build --no-sign
           fi
+      # Unsigned builds carry no entitlements, so a sideloading tool wouldn't give the app and its share
+      # extension their shared folder (the app group). An ad-hoc signature with the entitlements fixes
+      # that; AltStore/SideStore re-sign with your account and keep them.
+      - name: Give the IPA its entitlements (ad-hoc)
+        if: env.SIGNED != 'true'
+        env:
+          SIGNED: ${{ github.event_name == 'workflow_dispatch' && inputs.signed || 'false' }}
+        run: |
+          ipa=$(find src-tauri/gen/apple -name '*.ipa' | head -1)
+          test -n "$ipa"
+          ipa="$GITHUB_WORKSPACE/$ipa"
+          work="$RUNNER_TEMP/ipa"; rm -rf "$work"; mkdir -p "$work"; cd "$work"
+          unzip -q "$ipa"
+          app=$(ls -d Payload/*.app | head -1)
+          ls "$app/PlugIns" || echo "no PlugIns folder"
+          if [ -d "$app/PlugIns/ShareExtension.appex" ]; then
+            codesign -f -s - --entitlements "$GITHUB_WORKSPACE/mobile/ios/share.entitlements" "$app/PlugIns/ShareExtension.appex"
+          fi
+          codesign -f -s - --entitlements "$GITHUB_WORKSPACE/mobile/ios/app.entitlements" "$app"
+          codesign -d --entitlements - "$app" || true
+          rm "$ipa"; zip -qry "$ipa" Payload
       - uses: actions/upload-artifact@v4
         with:
           name: LewdVault-ipa

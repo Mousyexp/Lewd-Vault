@@ -42,6 +42,7 @@ mod maint;
 #[cfg(mobile)]
 mod media;
 mod pack;
+mod phone;
 mod recycle;
 mod storage;
 mod web;
@@ -1710,6 +1711,14 @@ fn serve(vault: &Vault, req: &HttpRequest<Vec<u8>>) -> Response<Vec<u8>> {
             Err(e) => fail(502, e),
         };
     }
+    // /inbox/<name>: a picture or video shared to the app on a phone, waiting to be added (phone.rs)
+    if let Some(rest) = req.uri().path().strip_prefix("/inbox/") {
+        let name = percent_decode_str(rest).decode_utf8_lossy().into_owned();
+        return match phone::inbox_file(&name).map(fs::read) {
+            Some(Ok(body)) => cors(200).header("Content-Type", phone::inbox_type(&name)).header("Content-Length", body.len().to_string()).body(body).unwrap(),
+            _ => fail(404, "Not in the inbox".into()),
+        };
+    }
     // /t/<thumb>?w=<width>: a thumbnail for the grid (see grid_thumb); never changes, so cached for good
     if let Some(rest) = req.uri().path().strip_prefix("/t/") {
         let thumb = percent_decode_str(rest).decode_utf8_lossy().into_owned();
@@ -2105,6 +2114,11 @@ pub fn run() {
     builder = builder.plugin(tauri_plugin_dialog::init());
     // opening a web address in the device's browser (openLink / openDownload); works on desktop too
     builder = builder.plugin(tauri_plugin_opener::init());
+    // the phones: haptics and Face ID / fingerprint, used through phone::phone_native
+    #[cfg(mobile)]
+    {
+        builder = builder.plugin(tauri_plugin_haptics::init()).plugin(tauri_plugin_biometric::init());
+    }
     // the emergency key (Settings → Privacy): hides everything at once, and brings it back.
     // Desktop only: iOS has no global hotkeys, and the plugin doesn't build there.
     #[cfg(desktop)]
@@ -2123,7 +2137,7 @@ pub fn run() {
             let vault = for_files.clone();
             std::thread::spawn(move || responder.respond(serve(&vault, &request)));
         })
-        .invoke_handler(tauri::generate_handler![api, upload, window_ready, window_action, pick_folder, restart_app, set_panic_key, set_panic_mode, pick_cover_video, unlock, export_excel, export_pack, open_pack, maint::install_update])
+        .invoke_handler(tauri::generate_handler![api, upload, window_ready, window_action, pick_folder, restart_app, set_panic_key, set_panic_mode, pick_cover_video, unlock, export_excel, export_pack, open_pack, maint::install_update, phone::phone_native])
         .setup(move |app| {
             // the window starts hidden (no white flash) in the theme's background colour; the page
             // shows it once it has drawn itself (window_ready), or after 3 s whatever happens
@@ -2180,8 +2194,15 @@ pub fn run() {
             });
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Lewd Vault");
+        .build(tauri::generate_context!())
+        .expect("error while running Lewd Vault")
+        .run(|_app, _event| {
+            // iOS: a file opened with the app ("Open in Lewd Vault") goes to the share inbox (phone.rs)
+            #[cfg(target_os = "ios")]
+            if let tauri::RunEvent::Opened { urls } = _event {
+                phone::opened(urls);
+            }
+        });
 }
 
 #[cfg(test)]

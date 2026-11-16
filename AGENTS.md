@@ -18,7 +18,7 @@ describes the features, the vault folder and the code layout; `mobile/README.md`
 - **Do not rename** the bundle identifier (`local.imagevault.desktop`), the data folder names
   ("Image Vault data", "Image Vault Desktop") or the config file: existing installs would lose
   their vault.
-- **`mobile/ui/phone.css`: every rule starts with `html.phone`** (`html.phone.ios` / `html.phone.android`
+- **`mobile/ui/phone.css` and `phone-plus.css`: every rule starts with `html.phone`** (`html.phone.ios` / `html.phone.android`
   for one phone only). The file ships in the Windows build.
 - Platform splits in Rust: `cfg(desktop)` / `cfg(windows)` for the PC, `cfg(mobile)` for both phones,
   `cfg(target_os = "ios")` / `cfg(target_os = "android")` for one.
@@ -31,6 +31,8 @@ describes the features, the vault folder and the code layout; `mobile/README.md`
 - `cd src-tauri && cargo test`: the backend (on Linux this needs the GTK/WebKit dev packages; CI
   runs it on Windows and Ubuntu).
 - `node tools/screenshots.mjs <5 pictures>` drives the real page against the real backend.
+- The generated mobile projects (`src-tauri/gen`) are fitted by `tools/ios-patch.mjs` and
+  `tools/android-patch.mjs` in CI (share extension/target, icon presets): change those, not `gen/`.
 - iOS can only be built by `.github/workflows/ios.yml` (a macOS runner), Android by
   `.github/workflows/android.yml` (or locally with the Android SDK and NDK). The Windows release is a
   version tag; see `docs/GUIDE.md`, "Building it".

@@ -511,16 +511,24 @@
     setTimeout(() => pinInput.focus(), 50);
   }
   let tries = 0;
+  // (the phone opens it with Face ID, and knows a second, decoy PIN: window.vaultPin)
+  function unlockNow() {
+    locked = false; tries = 0;
+    html.classList.remove('pin-locked');
+    lockScreen.classList.add('hidden');
+    lastSeen = Date.now();
+  }
   async function tryUnlock() {
     const v = pinInput.value;
     if (!v) return;
     if (await pinHash(v, settings.pin.salt) === settings.pin.hash) {
-      locked = false; tries = 0;
-      html.classList.remove('pin-locked');
-      lockScreen.classList.add('hidden');
-      lastSeen = Date.now();
+      unlockNow();
+      dispatchEvent(new CustomEvent('vault-pin', { detail: { ok: true } }));
+    } else if (window.vaultPinAlt && await window.vaultPinAlt(v)) {
+      unlockNow();
     } else {
       tries++;
+      dispatchEvent(new CustomEvent('vault-pin', { detail: { ok: false, tries } }));
       pinInput.value = '';
       pinErr.textContent = tries >= 5 ? 'Wrong PIN. Wait a moment before trying again.' : 'Wrong PIN';
       if (tries >= 5) { pinInput.disabled = true; setTimeout(() => { pinInput.disabled = false; pinInput.focus(); pinErr.textContent = ''; }, 30000); }
@@ -535,6 +543,7 @@
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && awayMinutes() && Date.now() - lastSeen > awayMinutes() * 60e3) lock(); });
   addEventListener('keydown', e => { if (e.ctrlKey && !e.shiftKey && (e.key === 'l' || e.key === 'L') && pinSet()) { e.preventDefault(); lock(); } });
   setupReady.then(() => { if (pinSet()) lock(); });
+  window.vaultPin = { lock, unlock: () => { if (locked) { unlockNow(); dispatchEvent(new CustomEvent('vault-pin', { detail: { ok: true, by: 'biometric' } })); } }, isLocked: () => locked, hash: pinHash, isSet: pinSet };
   async function askNewPin() {
     return window.vaultSites.sheet(pinSet() ? 'Change your PIN' : 'Set a PIN', (body, close) => {
       body.append(make('p', 'dc-sheet-lead', 'Four to twelve digits. The app asks for it when it starts, after you\'ve been away (if you choose), and on Ctrl+L. It covers the app; it doesn\'t encrypt your files.'));

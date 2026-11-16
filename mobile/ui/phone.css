@@ -921,3 +921,158 @@ html.phone .dc-view .dc-media img, html.phone .dc-view .dc-media video { transit
 html.phone .dc-view .nav-arrow { display: none; }
 html.phone .dc-view .dc-side { border-left: 0; border-radius: 26px 26px 0 0; margin-top: -22px; position: relative; z-index: 3; padding: 10px 18px calc(var(--safe-b) + 28px); min-height: 60vh; box-shadow: 0 -16px 40px -20px rgba(0, 0, 0, .8); }
 html.phone .dc-view .dc-side::before { content: ''; display: block; width: 38px; height: 5px; border-radius: 99px; margin: 0 auto 12px; background: color-mix(in srgb, var(--text) 28%, transparent); }
+
+/* =====================================================================================
+   The viewer, more: the picture as big as it gets, zoom, video gestures, the Photos filmstrip
+   ===================================================================================== */
+/* the picture fills the whole screen (under the bars, which float over it); its own colours glow
+   behind it where it doesn't reach */
+html.phone #detail .big img, html.phone #detail .big video { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; transform-origin: 50% 50%; will-change: transform; position: relative; z-index: 1; }
+html.phone #detail:not(.hidden)::before {
+  content: ''; position: absolute; inset: -12%; z-index: 0; pointer-events: none; background: var(--ambient, none) center / cover no-repeat;
+  filter: blur(46px) saturate(1.5) brightness(.42); opacity: calc(var(--fade, 1) * .95); transition: background-image .4s;
+}
+html.phone #detail .big { z-index: 1; }
+html.phone #detail .filmstrip { display: none !important; }
+/* zoomed: only the picture (the bars step aside), and one finger pans */
+html.phone #detail.ph-zoomed .ios-viewtop { opacity: 0; transform: translateY(-20px); pointer-events: none; }
+html.phone #detail.ph-zoomed .ios-viewbar { opacity: 0; transform: translate(-50%, 30px); pointer-events: none; }
+html.phone #detail.ph-zoomed .ph-strip { opacity: 0; pointer-events: none; }
+/* the video gestures' little label */
+html.phone .ph-vbubble {
+  position: absolute; z-index: 3; left: 50%; top: 42%; transform: translate(-50%, -50%) scale(.8); padding: 10px 18px; border-radius: 99px;
+  background: rgba(0, 0, 0, .55); color: #fff; font-size: 17px; font-weight: 750; font-variant-numeric: tabular-nums; pointer-events: none;
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); opacity: 0; transition: opacity .2s, transform .3s var(--pop);
+}
+html.phone .ph-vbubble.on { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+html.phone .ph-vbubble.side-l { left: 22%; } html.phone .ph-vbubble.side-r { left: 78%; }
+html.phone .ph-vbubble.side-l.on, html.phone .ph-vbubble.side-r.on { animation: ph-ripple .6s var(--pop); }
+html.phone .ph-vbubble.scrub { top: auto; bottom: calc(var(--safe-b) + 150px); }
+@keyframes ph-ripple { 0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, .5); } 100% { box-shadow: 0 0 0 60px rgba(255, 255, 255, 0); } }
+/* the filmstrip, like Photos: thin, slim pictures, the one you're on opened out to its shape */
+html.phone .ph-strip {
+  position: absolute; z-index: 4; left: 0; right: 0; bottom: calc(var(--safe-b) + 76px); height: 48px; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch; transition: opacity .25s ease;
+  -webkit-mask: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); mask: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+}
+html.phone .ph-strip::-webkit-scrollbar { display: none; }
+html.phone .ph-strip.hidden { display: none; }
+html.phone .ph-strip-track { display: flex; align-items: center; gap: 2px; height: 100%; padding: 0 50vw; width: max-content; }
+html.phone .ph-strip-item {
+  position: relative; flex: none; width: 22px; height: 44px; padding: 0; border: 0; border-radius: 3px; overflow: hidden; background: #222;
+  transition: width .28s var(--spring), margin .28s var(--spring), border-radius .28s;
+}
+html.phone .ph-strip-item.on { margin: 0 5px; border-radius: 6px; box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .9); }
+html.phone .ph-strip-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+html.phone .ph-strip-item i { position: absolute; right: 2px; bottom: 1px; font-size: 8px; color: #fff; font-style: normal; text-shadow: 0 0 3px #000; }
+html.phone #detail.ios-clean .ph-strip { opacity: 0; pointer-events: none; }
+/* while you slide the strip: the picture under its middle, at once (the real one loads when you stop) */
+html.phone .ph-scrub { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; object-fit: contain; opacity: 0; pointer-events: none; transition: opacity .15s; background: #000; }
+html.phone .ph-scrub.on { opacity: 1; }
+/* landscape: the picture edge to edge, the bars along the sides */
+@media (orientation: landscape) and (max-height: 560px) {
+  html.phone .ios-viewtop { padding: 10px calc(var(--safe-r) + 14px) 10px calc(var(--safe-l) + 14px); background: linear-gradient(to bottom, rgba(0, 0, 0, .4), transparent); }
+  html.phone .ios-viewbar { left: auto; right: calc(var(--safe-r) + 10px); top: 50%; bottom: auto; transform: translateY(-50%); flex-direction: column; padding: 8px 5px; }
+  html.phone #detail.ios-clean .ios-viewbar, html.phone #detail.ph-zoomed .ios-viewbar { transform: translate(30px, -50%); }
+  html.phone .ios-tool { width: 46px; height: 42px; }
+  html.phone .ph-strip { bottom: calc(var(--safe-b) + 6px); right: calc(var(--safe-r) + 76px); left: calc(var(--safe-l) + 10px); height: 40px; }
+  html.phone .ph-strip-item { height: 36px; }
+  html.phone #detail aside, html.phone #detail.no-info aside { left: auto; width: min(420px, 60vw); max-height: 100vh; border-radius: 26px 0 0 26px; top: 0; transform: translateX(104%); }
+  html.phone #detail.ios-info aside { transform: none; }
+}
+/* the little player: a video that keeps going while you browse */
+html.phone .ph-float {
+  position: fixed; z-index: 450; right: 12px; bottom: calc(var(--tabbar) + var(--tab-b) + 70px); width: 46vw; max-width: 260px; aspect-ratio: 16 / 10;
+  border-radius: 18px; overflow: hidden; background: #000; box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .8); touch-action: none;
+  transform: scale(.4); opacity: 0; transition: transform .4s var(--pop), opacity .25s, left .35s var(--spring), top .35s var(--spring);
+}
+html.phone .ph-float.in { transform: none; opacity: 1; }
+html.phone .ph-float.out { transform: scale(.4); opacity: 0; }
+html.phone .ph-float.held { transition: none; transform: scale(1.04); }
+html.phone .ph-float video { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+html.phone .ph-float-x, html.phone .ph-pin-x {
+  position: absolute; right: 6px; top: 6px; width: 30px; height: 30px; border: 0; border-radius: 50%; background: rgba(0, 0, 0, .55); color: #fff; display: grid; place-items: center;
+}
+html.phone .ph-float-x::before, html.phone .ph-pin-x::before { content: ''; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
+html.phone .ph-float-grow { position: absolute; inset: 0; border: 0; background: transparent; }
+
+/* ---------- the dial in more places ---------- */
+html.phone .ph-dialbtn {
+  display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 54px; margin: 6px 0 4px; padding: 0 18px; border: 0; border-radius: 16px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--heat-b) 22%, var(--panel)), var(--ios-fill)); color: var(--text); font: inherit; font-size: 15px; font-weight: 650;
+}
+html.phone .ph-dialbtn b { font-size: 26px; font-weight: 850; color: var(--heat-b); }
+html.phone .ph-dialbtn:active { transform: scale(.97); }
+html.phone #tagForm #nsfw, html.phone #tagForm #nsfwScale { display: none; }
+html.phone .ph-showcap {
+  position: fixed; z-index: 2147482000; left: calc(var(--safe-l) + 14px); bottom: calc(var(--safe-b) + 18px); display: flex; flex-direction: column; align-items: center; justify-content: center;
+  width: 64px; height: 64px; border: 0; border-radius: 50%; color: #fff; font: inherit; background: rgba(0, 0, 0, .45); box-shadow: inset 0 0 0 2.5px var(--heat-b);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); transition: opacity .3s;
+}
+html.phone .ph-showcap span { font-size: 10px; font-weight: 700; opacity: .8; text-transform: uppercase; letter-spacing: .06em; }
+html.phone .ph-showcap b { font-size: 20px; line-height: 1; }
+html.phone #show.hidden .ph-showcap { display: none; }
+
+/* ---------- pinned previews ---------- */
+html.phone .ph-peek-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+html.phone .ph-peek-top .ios-peek-name { flex: 1; min-width: 0; }
+html.phone .ph-peek-pin { flex: none; height: 32px; padding: 0 14px; margin: 0 0 12px; border: 0; border-radius: 99px; background: var(--ios-fill); color: var(--accent); font: inherit; font-size: 14px; font-weight: 700; }
+html.phone .ph-pin {
+  position: fixed; z-index: 45; right: 10px; width: 110px; height: 140px; border-radius: 16px; overflow: hidden; touch-action: none;
+  box-shadow: 0 0 0 2px var(--accent), 0 14px 30px -10px rgba(0, 0, 0, .8); background: #000;
+  transform: scale(.3) rotate(-8deg); opacity: 0; transition: transform .45s var(--pop), opacity .25s, left .3s var(--spring);
+}
+html.phone .ph-pin.in { transform: rotate(-2deg); opacity: 1; }
+html.phone .ph-pin.out { transform: scale(.3); opacity: 0; }
+html.phone .ph-pin img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+html.phone body:has(#detail:not(.hidden), .ph-story, .ph-sort) .ph-pin { display: none; }
+
+/* ---------- tagging cards (Add) ---------- */
+html.phone #tagger #preview { border-radius: 24px; overflow: hidden; box-shadow: 0 20px 40px -18px rgba(0, 0, 0, .8); transition: transform .3s var(--spring), opacity .25s; position: relative; touch-action: pan-y; }
+html.phone #tagger #preview.fly-r { transform: translateX(120%) rotate(18deg) !important; opacity: 0; transition: transform .25s ease-in, opacity .25s; }
+html.phone #tagger #preview.fly-l { transform: translateX(-120%) rotate(-18deg) !important; opacity: 0; transition: transform .25s ease-in, opacity .25s; }
+html.phone #tagger #preview.in { animation: ph-card-rise .38s var(--spring); }
+html.phone #tagger #preview::after {
+  content: ''; position: absolute; top: 18px; left: 50%; transform: translateX(-50%) rotate(-10deg) scale(.6); padding: 6px 14px; border-radius: 12px; border: 4px solid; font-size: 24px; font-weight: 900;
+  opacity: 0; transition: opacity .15s, transform .25s var(--pop); pointer-events: none; background: rgba(0, 0, 0, .2);
+}
+html.phone #tagger #preview[data-lean="save"]::after { content: 'SAVE'; color: #5ef2a4; opacity: 1; transform: translateX(-50%) rotate(-10deg) scale(1); }
+html.phone #tagger #preview[data-lean="skip"]::after { content: 'SKIP'; color: #ffb86b; opacity: 1; transform: translateX(-50%) rotate(10deg) scale(1); }
+html.phone .ph-taghint { margin: -6px 0 12px; text-align: center; font-size: 12.5px; font-weight: 600; opacity: .6; }
+html.phone #catChips { display: flex; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 8px; padding: 2px; margin: 8px -2px 4px; }
+html.phone #catChips::-webkit-scrollbar { display: none; }
+html.phone #catChips > * { flex: none; }
+html.phone #quality { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+html.phone #quality button { min-height: 58px; border-radius: 16px; font-size: 19px; transition: transform .25s var(--pop); }
+html.phone #quality button:active { transform: scale(.92); }
+
+/* ---------- the Browser: saving flies to the Library; the downloads pill; the reader ---------- */
+html.phone .ph-fly { position: fixed; z-index: 2147482500; object-fit: cover; pointer-events: none; box-shadow: 0 16px 40px -10px rgba(0, 0, 0, .7); }
+html.phone .ios-tabbar button.ph-catch::before { animation: ph-catch .55s var(--pop); }
+@keyframes ph-catch { 0% { transform: scale(1); } 35% { transform: scale(1.45) rotate(-10deg); } 65% { transform: scale(.9) rotate(4deg); } 100% { transform: scale(1.08); } }
+html.phone #tab-discover .dc-tile.ph-pressed { transform: scale(.92); transition: transform .2s var(--spring); }
+html.phone .dl-fab.ph-dl {
+  position: relative; right: auto; bottom: auto; flex: none; width: 42px; height: 42px; border: 0; border-radius: 50%; background: transparent; color: var(--text); box-shadow: none;
+  display: grid; place-items: center;
+}
+html.phone .dl-fab.ph-dl.hidden { display: none; }
+html.phone .dl-fab.ph-dl svg { width: 22px; height: 22px; }
+html.phone .dl-fab.ph-dl b { position: absolute; right: 2px; top: 2px; min-width: 16px; height: 16px; border-radius: 99px; background: var(--accent); color: #fff; font-size: 10px; line-height: 16px; text-align: center; }
+html.phone .dl-fab.ph-dl.busy svg { animation: ph-bob 1s ease-in-out infinite; }
+@keyframes ph-bob { 50% { transform: translateY(3px); } }
+html.phone .ph-sbar.mini .dl-fab.ph-dl { display: none; }
+html.phone .dl-panel.ph-dlsheet {
+  position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto; max-width: none; max-height: 70vh; overflow-y: auto; z-index: 460;
+  border-radius: 26px 26px 0 0; padding: 14px 16px calc(var(--safe-b) + 18px); box-shadow: 0 -18px 50px -18px rgba(0, 0, 0, .8);
+  animation: ios-sheet-up .36s var(--spring);
+}
+html.phone.br-reader .ph-sbar, html.phone.br-reader .ios-tabbar, html.phone.br-reader #tab-discover .dc-status, html.phone.br-reader #tab-discover .dc-head { display: none !important; }
+html.phone.br-reader #tab-discover .dc-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; padding: calc(var(--safe-t)) 0 0; }
+html.phone.br-reader #tab-discover .dc-grid .jrow { display: contents; }
+html.phone.br-reader #tab-discover .dc-tile img { object-fit: contain; background: #000; }
+html.phone.br-reader #tab-discover .dc-tile .tag, html.phone.br-reader #tab-discover .dc-tile .dc-save { display: none; }
+html.phone.br-reader body { background: #000; }
+html.phone .ph-reader-done { position: fixed; z-index: 60; right: calc(var(--safe-r) + 12px); top: calc(var(--safe-t) + 10px); height: 38px; padding: 0 16px; border-radius: 99px; color: var(--text); font: inherit; font-size: 15px; font-weight: 700; animation: ph-drop-in .4s var(--pop); }
+html.phone body:has(.dc-view:not(.hidden)) .ph-reader-done { display: none; }
+/* the picture handles its own pinch and pan: the web view must not zoom the page */
+html.phone #detail .big { touch-action: none; }

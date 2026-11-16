@@ -3320,6 +3320,9 @@ function orderForShow(pool, o) {
   }[o.order]);
 }
 function takeFrom(key, pool) {
+  // a cap on the level (the phone's dial turns it live): its own queue, so nothing above it comes up
+  const cap = +window.vaultShowCap || 0;
+  if (cap) { const under = pool.filter(i => +i.nsfw <= cap); if (under.length) { pool = under; key = key + '@' + cap; } }
   if (!pool.length) return null;
   let q = queues.get(key);
   if (!q || !q.length) {

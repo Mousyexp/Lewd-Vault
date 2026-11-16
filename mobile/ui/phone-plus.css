@@ -1,0 +1,234 @@
+/* =====================================================================================
+   The phone layer, part two (mobile/ui/phone-plus.js): themes, Settings → Phone, the Library's
+   chips and scrubber, privacy. Like phone.css, every rule starts with html.phone (npm test checks):
+   the file is folded into the stylesheet Windows loads too.
+   ===================================================================================== */
+
+/* ---------- the themes: colours ---------- */
+html.phone[data-ptheme="sakura"] { --bg: #2b1c24; --panel: #3a2630; --line: #553a47; --text: #ffeef4; --dim: #d7a9bb; --accent: #ff8fb3; --on-accent: #2b0f1b; }
+html.phone[data-ptheme="midnight"] { --bg: #0b0e22; --panel: #161a36; --line: #262c52; --text: #e9ebff; --dim: #9aa2d6; --accent: #8f9bff; --on-accent: #0b0e22; }
+html.phone[data-ptheme="bubblegum"] { --bg: #2a1530; --panel: #3a1e43; --line: #573063; --text: #fff0fb; --dim: #e0a9d6; --accent: #ff6ad5; --on-accent: #2a0b25; }
+html.phone[data-ptheme="aurora"] { --bg: #06181d; --panel: #0e282e; --line: #1a4249; --text: #e6fffb; --dim: #8fc9c0; --accent: #4fe3c1; --on-accent: #032019; }
+html.phone[data-ptheme="kitten"] { --bg: #29201b; --panel: #382c25; --line: #54423a; --text: #fff3ea; --dim: #d6b4a0; --accent: #ffb07c; --on-accent: #2a160a; }
+html.phone[data-ptheme="neon"] { --bg: #07060c; --panel: #12101c; --line: #2a2340; --text: #f4f0ff; --dim: #a59ad0; --accent: #ff2bd6; --on-accent: #12001a; }
+html.phone[data-ptheme="lavender"] { --bg: #211c2d; --panel: #2e283f; --line: #463d5f; --text: #f5f0ff; --dim: #bfb0e0; --accent: #b69cff; --on-accent: #1a1030; }
+html.phone[data-ptheme="mono"] { --bg: #0b0b0c; --panel: #1a1a1c; --line: #2c2c30; --text: #f2f2f3; --dim: #a1a1a8; --accent: #ffffff; --on-accent: #000000; }
+/* with a theme (or a season) drifting, the page's ground is the html, so the canvas shows through */
+html.phone[data-ptheme], html.phone.ph-fx-on { background: var(--bg); }
+html.phone[data-ptheme] body, html.phone.ph-fx-on body { background: transparent !important; }
+html.phone .ph-fx { position: fixed; inset: 0; z-index: -1; width: 100vw; height: 100vh; pointer-events: none; opacity: 0; transition: opacity .8s; }
+html.phone .ph-fx.on { opacity: 1; }
+/* Aurora: slow, soft curtains of colour behind everything */
+html.phone[data-pfx="aurora"]::before {
+  content: ''; position: fixed; inset: -20%; z-index: -2; pointer-events: none;
+  background: radial-gradient(40% 30% at 30% 20%, rgba(79, 227, 193, .22), transparent 70%), radial-gradient(35% 28% at 75% 35%, rgba(143, 155, 255, .2), transparent 70%), radial-gradient(45% 30% at 50% 80%, rgba(255, 106, 213, .12), transparent 70%);
+  animation: ph-aurora 18s ease-in-out infinite alternate;
+}
+@keyframes ph-aurora { 0% { transform: translate(-4%, -2%) rotate(0deg) scale(1); } 50% { transform: translate(5%, 3%) rotate(8deg) scale(1.1); } 100% { transform: translate(-2%, 5%) rotate(-6deg) scale(1.05); } }
+/* Neon: the bars glow and breathe */
+html.phone[data-pfx="neon"] .ios-tabbar, html.phone[data-pfx="neon"] .ph-sbar-glass, html.phone[data-pfx="neon"] .ios-seg { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent), 0 0 22px -2px color-mix(in srgb, var(--accent) 55%, transparent); animation: ph-neon 3.2s ease-in-out infinite; }
+html.phone[data-pfx="neon"] .ios-title { text-shadow: 0 0 12px var(--accent), 0 0 2px #fff; }
+@keyframes ph-neon { 50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 90%, transparent), 0 0 34px 2px color-mix(in srgb, var(--accent) 70%, transparent); } }
+/* the theme's own little mark, hopping above the chosen tab */
+html.phone[data-pfx]:not([data-pfx=""]) .ios-tabbar button.on::after {
+  content: ''; position: absolute; top: -9px; left: 50%; width: 14px; height: 14px; margin-left: -7px; background: var(--accent);
+  -webkit-mask: var(--mark) center / contain no-repeat; mask: var(--mark) center / contain no-repeat; animation: ph-markhop 2.6s ease-in-out infinite;
+}
+@keyframes ph-markhop { 0%, 100% { transform: translateY(0) rotate(-8deg); } 50% { transform: translateY(-4px) rotate(8deg); } }
+html.phone[data-pfx="petals"] { --mark: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2c4 3 5 8 0 13-5-5-4-10 0-13z'/><path d='M12 15c-5-1-8 1-9 5 4 1 7 0 9-5zM12 15c5-1 8 1 9 5-4 1-7 0-9-5z'/></svg>"); --spark: var(--mark); }
+html.phone[data-pfx="stars"] { --mark: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2l2.6 6.6L21 9.3l-5 4.4 1.6 7L12 17l-5.6 3.7L8 13.7 3 9.3l6.4-.7z'/></svg>"); --spark: var(--mark); }
+html.phone[data-pfx="bubbles"] { --mark: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 21s-8-5-8-11a4.5 4.5 0 0 1 8-2.8A4.5 4.5 0 0 1 20 10c0 6-8 11-8 11z'/></svg>"); --spark: var(--mark); }
+html.phone[data-pfx="paws"] { --mark: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><ellipse cx='12' cy='16' rx='5.5' ry='4.5'/><ellipse cx='5.5' cy='10' rx='2.2' ry='2.8'/><ellipse cx='9.5' cy='6' rx='2.2' ry='2.8'/><ellipse cx='14.5' cy='6' rx='2.2' ry='2.8'/><ellipse cx='18.5' cy='10' rx='2.2' ry='2.8'/></svg>"); --spark: var(--mark); }
+html.phone[data-pfx="sparkles"], html.phone[data-pfx="aurora"], html.phone[data-pfx="neon"] { --mark: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 1c1 6 5 10 11 11-6 1-10 5-11 11-1-6-5-10-11-11C7 11 11 7 12 1z'/></svg>"); --spark: var(--mark); }
+/* the sparks of a heart take the theme's shape */
+html.phone[data-pfx]:not([data-pfx=""]) .ph-spark { width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 0; box-shadow: none; background: var(--accent); -webkit-mask: var(--spark) center / contain no-repeat; mask: var(--spark) center / contain no-repeat; }
+/* the Library's title shimmers in the accent */
+html.phone[data-ptheme] .ios-title { background: linear-gradient(100deg, #fff 30%, var(--accent) 50%, #fff 70%) 0 0 / 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: ph-shimmer 7s ease-in-out infinite; }
+@keyframes ph-shimmer { 0%, 100% { background-position: 100% 0; } 50% { background-position: 0 0; } }
+/* a new theme spreads out from where you tapped */
+html.phone::view-transition-new(root) { animation: ph-reveal .7s cubic-bezier(.3, .7, .2, 1); }
+html.phone::view-transition-old(root) { animation: none; }
+@keyframes ph-reveal { from { clip-path: circle(0 at var(--vt-x, 50%) var(--vt-y, 50%)); } to { clip-path: circle(150% at var(--vt-x, 50%) var(--vt-y, 50%)); } }
+
+/* ---------- milestones ---------- */
+html.phone .ph-confetti { position: fixed; inset: 0; z-index: 2147483300; width: 100vw; height: 100vh; pointer-events: none; }
+html.phone .ph-cheer {
+  position: fixed; z-index: 2147483301; left: 50%; top: 38%; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 20px 28px; border-radius: 26px; text-align: center;
+  transform: translate(-50%, -50%) scale(.5); opacity: 0; transition: transform .5s var(--pop), opacity .3s; pointer-events: none; box-shadow: 0 24px 60px -16px rgba(0, 0, 0, .8);
+}
+html.phone .ph-cheer.in { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+html.phone .ph-cheer b { font-size: 24px; font-weight: 850; letter-spacing: -.01em; }
+html.phone .ph-cheer span { font-size: 14.5px; opacity: .8; }
+
+/* ---------- the Library: grid size, chips, scrubber ---------- */
+html.phone #grid[data-layout="grid"] { grid-template-columns: repeat(var(--ph-cols, 3), minmax(0, 1fr)); touch-action: pan-x pan-y; transform-origin: 50% 0; }
+html.phone .ph-chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 0 14px 12px; -webkit-overflow-scrolling: touch; }
+html.phone .ph-chips::-webkit-scrollbar { display: none; }
+html.phone #tab-library.hidden .ph-chips { display: none; }
+html.phone .ph-chip {
+  flex: none; height: 32px; padding: 0 14px; border: 0; border-radius: 99px; background: var(--ios-fill); color: var(--text); font: inherit; font-size: 13.5px; font-weight: 650;
+  transition: transform .25s var(--pop), background-color .2s, color .2s; animation: ph-ring-in .45s var(--pop) both;
+}
+html.phone .ph-chip:active { transform: scale(.9); }
+html.phone .ph-chip.on { background: var(--accent); color: var(--on-accent, #fff); }
+html.phone .ph-chip.add { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ios-fill); color: var(--accent); }
+html.phone .ph-chip.preset { background: color-mix(in srgb, var(--accent) 18%, var(--ios-fill-2)); }
+html.phone .ph-chips-sep { flex: none; width: 1px; margin: 6px 2px; background: var(--ios-fill); }
+html.phone .ph-scrubber { position: fixed; z-index: 35; right: 2px; top: calc(var(--safe-t) + 110px); bottom: calc(var(--tabbar) + var(--tab-b) + 70px); width: 40px; pointer-events: none; opacity: 0; transition: opacity .3s; }
+html.phone .ph-scrubber.on { opacity: 1; }
+html.phone .ph-scrubber.on .ph-scrubber-knob { pointer-events: auto; }
+html.phone #tab-library.hidden .ph-scrubber { display: none; }
+html.phone .ph-scrubber-knob {
+  position: absolute; right: 4px; top: 0; width: 30px; height: 44px; border-radius: 15px; background: var(--panel); box-shadow: 0 4px 14px rgba(0, 0, 0, .5), inset 0 0 0 1px var(--glass-edge); touch-action: none;
+}
+html.phone .ph-scrubber-knob::before, html.phone .ph-scrubber-knob::after { content: ''; position: absolute; left: 50%; width: 10px; height: 2px; margin-left: -5px; border-radius: 2px; background: var(--dim); }
+html.phone .ph-scrubber-knob::before { top: 18px; } html.phone .ph-scrubber-knob::after { top: 24px; }
+html.phone .ph-scrubber-when {
+  position: absolute; right: 44px; top: 8px; white-space: nowrap; padding: 6px 12px; border-radius: 99px; background: var(--panel); color: var(--text); font-size: 13.5px; font-weight: 700;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .45); opacity: 0; transition: opacity .2s;
+}
+html.phone .ph-scrubber.drag .ph-scrubber-when:not(:empty) { opacity: 1; }
+
+/* ---------- Settings → Phone ---------- */
+html.phone .ph-settile { background: color-mix(in srgb, var(--accent) 18%, var(--ios-fill)); }
+html.phone .ph-setcard {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: calc(100% - 28px); margin: calc(var(--safe-t) + 12px) 14px 14px; padding: 16px 18px; border: 0; border-radius: 20px; text-align: left; color: var(--text); font: inherit;
+  background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 30%, var(--panel)), var(--panel)); box-shadow: 0 10px 24px -14px rgba(0, 0, 0, .7);
+}
+html.phone .ph-setcard b { font-size: 18px; }
+html.phone .ph-setcard span { font-size: 13px; opacity: .75; }
+html.phone .ph-settings {
+  position: fixed; inset: 0; z-index: 410; display: flex; flex-direction: column; background: var(--bg); color: var(--text);
+  transform: translateX(100%); transition: transform .42s var(--pop);
+}
+html.phone .ph-settings.in { transform: none; }
+html.phone .ph-set-head { display: flex; align-items: center; justify-content: space-between; padding: calc(var(--safe-t) + 10px) 16px 10px; border: 0; border-radius: 0; }
+html.phone .ph-set-head h2 { margin: 0; font-size: 28px; font-weight: 850; letter-spacing: -.02em; }
+html.phone .ph-set-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 16px calc(var(--safe-b) + 30px); }
+html.phone .ph-set-sec { margin: 0 0 26px; animation: ph-in-up .45s var(--spring) both; }
+html.phone .ph-set-sec:nth-child(2) { animation-delay: .04s; } html.phone .ph-set-sec:nth-child(3) { animation-delay: .08s; } html.phone .ph-set-sec:nth-child(n+4) { animation-delay: .12s; }
+html.phone .ph-set-sec h3 { margin: 0 2px 6px; font-size: 20px; font-weight: 800; letter-spacing: -.01em; text-transform: none; }
+html.phone .ph-small { margin: 0 2px 10px; font-size: 13px; line-height: 1.4; opacity: .65; }
+html.phone .ph-pad { padding: 12px 16px; margin: 0; }
+html.phone .ph-rowbtn { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; min-height: 58px; }
+html.phone .ph-chev { font-size: 22px; opacity: .45; }
+html.phone .ph-select { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 50px; padding: 0 2px; border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent); font-size: 16px; }
+html.phone .ph-select select { max-width: 55%; }
+/* theme cards: each one a little live preview of its world */
+html.phone .ph-themes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+html.phone .ph-theme {
+  position: relative; height: 112px; display: flex; align-items: flex-end; padding: 10px; border: 0; border-radius: 18px; overflow: hidden; color: var(--t-text, #fff); font: inherit; text-align: left;
+  background: var(--t-bg, #222); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); animation: ph-pop-in .45s var(--pop) both; animation-delay: calc(var(--n, 0) * 35ms);
+  transition: transform .25s var(--pop), box-shadow .25s;
+}
+html.phone .ph-theme:active { transform: scale(.94); }
+html.phone .ph-theme.on { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5.5px var(--t-acc, var(--accent)); }
+html.phone .ph-theme b { position: relative; z-index: 1; font-size: 13.5px; font-weight: 800; }
+html.phone .ph-theme::before { content: ''; position: absolute; left: 10px; right: 10px; top: 10px; height: 22px; border-radius: 8px; background: var(--t-panel, #333); box-shadow: inset 30px 0 0 -8px var(--t-acc, #f69); }
+html.phone .ph-theme[data-t="app"] { --t-bg: var(--bg); --t-panel: var(--panel); --t-acc: var(--accent); --t-text: var(--text); }
+html.phone .ph-theme[data-t="sakura"] { --t-bg: #2b1c24; --t-panel: #3a2630; --t-acc: #ff8fb3; --t-text: #ffeef4; }
+html.phone .ph-theme[data-t="midnight"] { --t-bg: linear-gradient(160deg, #141a3c, #070a1c); --t-panel: #161a36; --t-acc: #8f9bff; }
+html.phone .ph-theme[data-t="bubblegum"] { --t-bg: #2a1530; --t-panel: #3a1e43; --t-acc: #ff6ad5; }
+html.phone .ph-theme[data-t="aurora"] { --t-bg: radial-gradient(60% 50% at 30% 30%, rgba(79, 227, 193, .35), transparent), radial-gradient(60% 50% at 80% 60%, rgba(143, 155, 255, .3), transparent), #06181d; --t-panel: #0e282e; --t-acc: #4fe3c1; }
+html.phone .ph-theme[data-t="kitten"] { --t-bg: #29201b; --t-panel: #382c25; --t-acc: #ffb07c; }
+html.phone .ph-theme[data-t="neon"] { --t-bg: #07060c; --t-panel: #12101c; --t-acc: #ff2bd6; }
+html.phone .ph-theme[data-t="neon"]::before { box-shadow: inset 30px 0 0 -8px #ff2bd6, 0 0 14px rgba(255, 43, 214, .6); }
+html.phone .ph-theme[data-t="lavender"] { --t-bg: #211c2d; --t-panel: #2e283f; --t-acc: #b69cff; }
+html.phone .ph-theme[data-t="mono"] { --t-bg: #0b0b0c; --t-panel: #1a1a1c; --t-acc: #ffffff; }
+/* the little worlds in the cards */
+html.phone .ph-theme-sw { position: absolute; inset: 0; pointer-events: none; }
+html.phone .ph-theme-sw i { position: absolute; display: block; width: 7px; height: 7px; border-radius: 50%; opacity: 0; }
+html.phone .ph-theme-sw i:nth-child(1) { left: 15%; } html.phone .ph-theme-sw i:nth-child(2) { left: 38%; animation-delay: -1.2s !important; } html.phone .ph-theme-sw i:nth-child(3) { left: 60%; animation-delay: -2.1s !important; }
+html.phone .ph-theme-sw i:nth-child(4) { left: 78%; animation-delay: -.6s !important; } html.phone .ph-theme-sw i:nth-child(5) { left: 88%; animation-delay: -2.8s !important; }
+html.phone .ph-theme[data-fx="petals"] .ph-theme-sw i { background: #ffb7ce; border-radius: 60% 0; animation: ph-fall 3.4s linear infinite; }
+html.phone .ph-theme[data-fx="stars"] .ph-theme-sw i { width: 3px; height: 3px; background: #fff; top: 50%; animation: ph-twinkle 2.2s ease-in-out infinite; }
+html.phone .ph-theme[data-fx="stars"] .ph-theme-sw i:nth-child(odd) { top: 62%; }
+html.phone .ph-theme[data-fx="bubbles"] .ph-theme-sw i { width: 10px; height: 10px; box-shadow: inset 0 0 0 1.2px rgba(255, 255, 255, .6); animation: ph-rise 3.6s linear infinite; }
+html.phone .ph-theme[data-fx="paws"] .ph-theme-sw i { width: 8px; height: 7px; background: #ffb07c; top: 58%; animation: ph-twinkle 2.6s ease-in-out infinite; border-radius: 50% 50% 45% 45%; }
+html.phone .ph-theme[data-fx="sparkles"] .ph-theme-sw i, html.phone .ph-theme[data-fx="neon"] .ph-theme-sw i { width: 6px; height: 6px; background: var(--t-acc); top: 55%; animation: ph-twinkle 1.8s ease-in-out infinite; }
+html.phone .ph-theme[data-fx="aurora"] .ph-theme-sw { background: inherit; animation: ph-aurora 8s ease-in-out infinite alternate; }
+@keyframes ph-fall { 0% { top: -10%; opacity: 0; transform: rotate(0); } 15% { opacity: .9; } 100% { top: 105%; opacity: .7; transform: translateX(10px) rotate(240deg); } }
+@keyframes ph-rise { 0% { top: 105%; opacity: 0; } 20% { opacity: .9; } 100% { top: -10%; opacity: 0; transform: translateX(-6px); } }
+@keyframes ph-twinkle { 0%, 100% { opacity: .1; transform: scale(.6); } 50% { opacity: 1; transform: scale(1.2); } }
+/* accents */
+html.phone .ph-accents { display: flex; flex-wrap: wrap; gap: 10px; }
+html.phone .ph-accent { position: relative; width: 36px; height: 36px; border: 0; border-radius: 50%; background: var(--c, var(--ios-fill)); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .15); transition: transform .25s var(--pop); padding: 0; overflow: hidden; }
+html.phone .ph-accent.on { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--c, var(--text)); transform: scale(1.06); }
+html.phone .ph-accent.auto { width: auto; padding: 0 12px; border-radius: 99px; color: var(--text); font: inherit; font-size: 13px; font-weight: 700; }
+html.phone .ph-accent.own { background: conic-gradient(#ff6f96, #ffd166, #7bd88f, #4fe3c1, #8f9bff, #ff6ad5, #ff6f96); }
+html.phone .ph-accent.own input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; }
+/* the tab bar's order */
+html.phone .ph-tabrow { display: flex; align-items: center; gap: 12px; min-height: 52px; touch-action: none; background: var(--panel); transition: transform .2s; }
+html.phone .ph-tabrow.drag { z-index: 2; position: relative; box-shadow: 0 10px 26px -10px rgba(0, 0, 0, .8); transition: none; }
+html.phone .ph-tabrow-ico { width: 24px; height: 24px; background: var(--accent); -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
+html.phone .ph-tabrow-name { flex: 1; font-size: 16px; }
+html.phone .ph-grip { width: 34px; height: 34px; background: var(--dim); -webkit-mask: var(--icon) center / 20px no-repeat; mask: var(--icon) center / 20px no-repeat; touch-action: none; }
+html.phone .ph-tabsort-more { padding: 8px 16px 4px; font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; opacity: .55; }
+/* app icons */
+html.phone .ph-icons { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px 10px; }
+html.phone .ph-icon { display: flex; flex-direction: column; align-items: center; gap: 6px; border: 0; padding: 0; background: none; color: var(--text); font: inherit; font-size: 12px; animation: ph-pop-in .4s var(--pop) both; animation-delay: calc(var(--n, 0) * 30ms); }
+html.phone .ph-icon img { width: 60px; height: 60px; border-radius: 14px; box-shadow: 0 6px 16px -8px rgba(0, 0, 0, .7); transition: transform .25s var(--pop); }
+html.phone .ph-icon:active img { transform: scale(.88); }
+html.phone .ph-icon.on img { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent); }
+/* break-in photos */
+html.phone .ph-intruder-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+html.phone .ph-intruder { margin: 0; }
+html.phone .ph-intruder img { width: 100%; border-radius: 14px; display: block; }
+html.phone .ph-intruder figcaption { font-size: 11.5px; opacity: .7; margin-top: 4px; }
+
+/* ---------- privacy ---------- */
+html.phone .ph-biobtn { margin-top: 14px; height: 46px; padding: 0 20px; border: 0; border-radius: 99px; background: var(--accent); color: var(--on-accent, #fff); font: inherit; font-size: 16px; font-weight: 700; }
+html.phone .ph-biobtn.hidden { display: none; }
+/* the decoy: an empty, ordinary-looking vault */
+html.phone.ph-decoy .ph-rings, html.phone.ph-decoy .ph-chips, html.phone.ph-decoy .ios-tabbar button[data-tab="discover"],
+html.phone.ph-decoy .ios-tabbar button[data-tab="slideshow"], html.phone.ph-decoy .ph-pin, html.phone.ph-decoy .ph-float { display: none !important; }
+/* being recorded or mirrored (iOS): nothing to see */
+html.phone.ph-captured body > *:not(.ios-cover) { filter: blur(40px) brightness(.4); }
+html.phone.ph-captured body::after { content: 'Lewd Vault'; position: fixed; inset: 0; z-index: 2147483640; display: grid; place-items: center; background: #15171c; color: #888; font-size: 20px; font-weight: 700; }
+
+/* ---------- text size, density, low data ---------- */
+html.phone .ios-sheet-body, html.phone .ios-dock > *, html.phone .tag-panel > *, html.phone .ph-set-body, html.phone #tab-settings > *, html.phone #tab-profile > *, html.phone #tagForm { zoom: var(--ph-text, 1); }
+html.phone.ph-compact .ios-row { min-height: 42px; }
+html.phone.ph-compact .ios-tabbar { height: 54px; }
+html.phone.ph-compact #grid, html.phone.ph-compact #grid.rows { gap: 1px; }
+html.phone.ph-compact .ph-rings { padding-bottom: 8px; }
+html.phone.ph-compact .ph-ring-face { width: 56px; height: 56px; }
+html.phone.ph-compact .ios-tile { min-height: 74px; }
+html.phone.ph-lowdata #tab-discover .dc-tile-clip { display: none; }
+
+/* ---------- the selection bar: one row you scroll sideways, not a block over the grid ---------- */
+html.phone .ms-bar:not(.hidden) {
+  display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  justify-content: flex-start; padding: 8px 10px; max-height: 64px; box-sizing: border-box;
+}
+html.phone .ms-bar::-webkit-scrollbar { display: none; }
+html.phone .ms-bar > * { flex: none; flex-wrap: nowrap !important; }
+html.phone .ms-bar .ms-group { display: flex; align-items: center; gap: 6px; }
+html.phone .ms-bar .ms-label { display: none; }
+html.phone .ms-bar input { width: 120px; min-height: 38px; }
+html.phone .ms-bar .ms-count { padding: 0 6px; white-space: nowrap; }
+html.phone .ms-bar .ph-mslevel { flex: none; }
+/* the decoy looks like a vault that was never filled: no count, no "nothing matches these filters" */
+html.phone.ph-decoy .ios-sub { visibility: hidden; }
+html.phone.ph-decoy #grid > * { display: none !important; }
+html.phone.ph-decoy #grid::before {
+  content: 'Nothing here yet. Add pictures, GIFs and videos in Add.'; display: block; grid-column: 1 / -1; padding: 80px 30px; text-align: center;
+  color: var(--dim); font-size: 16px; line-height: 1.5;
+}
+
+/* ---------- the Browser's "Add to your vault" question: a bottom sheet that fits the phone ---------- */
+html.phone .ask-back { place-items: end stretch; padding: 0; }
+html.phone .ask-card {
+  width: 100%; max-width: none; box-sizing: border-box; grid-template-columns: minmax(0, 1fr); max-height: 88vh; padding: 16px 16px calc(var(--safe-b) + 16px);
+  border-radius: 26px 26px 0 0; border-width: 0; animation: ios-sheet-up .36s var(--spring);
+}
+html.phone .ask-card > * { min-width: 0; }
+html.phone .ask-pic { width: 72px; height: 72px; }
+html.phone .ask-levels { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 4px 2px; margin: -4px -2px; }
+html.phone .ask-levels::-webkit-scrollbar { display: none; }
+html.phone .ask-levels > * { flex: none; }
+html.phone .ask-stars { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+html.phone .ask-stars > * { min-width: 0; }
+html.phone .ask-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+html.phone .ask-foot .ask-need { flex: 1 1 100%; }
+html.phone .ask-foot .btn { flex: 1; min-height: 50px; }

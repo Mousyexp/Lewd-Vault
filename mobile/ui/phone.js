@@ -49,10 +49,29 @@
     tabs: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.100' stroke-linejoin='round'><rect x='4' y='7' width='13' height='13' rx='3'/><path d='M8 4h9a3 3 0 0 1 3 3v9'/></svg>",
     star: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.100' stroke-linejoin='round'><path d='M12 3.500l2.600 5.400 5.900.8-4.300 4.100 1 5.800L12 16.900l-5.200 2.700 1-5.800L3.500 9.700l5.900-.8z'/></svg>",
     brush: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M14.500 4.500l5 5L11 18l-5-5z'/><path d='M6 13c-2 0-3 1.500-3 3.500S2 20 2 20s3.500.5 5-1 1-3.500 1-3.500'/></svg>",
+    pip: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'><rect x='2.500' y='4.500' width='19' height='15' rx='3'/><rect x='11.500' y='11.500' width='7.500' height='5.500' rx='1.500' fill='black'/></svg>",
+    reader: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'><rect x='5' y='3' width='14' height='8' rx='2'/><rect x='5' y='13' width='14' height='8' rx='2'/></svg>",
     cards: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'><rect x='6' y='3' width='12' height='16' rx='2.500' transform='rotate(-8 12 11)'/><rect x='6' y='5' width='12' height='16' rx='2.500' transform='rotate(7 12 13)'/></svg>",
     tags: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 12V4h8l10 10-8 8z'/><circle cx='7.500' cy='8.500' r='1.300' fill='black'/></svg>"
   };
   const icon = name => `url("data:image/svg+xml;utf8,${ICON[name].replace(/"/g, "'").replace(/#/g, '%23')}")`;
+
+  // ---------- the phone's own settings (Settings → Phone, in phone-plus.js), kept in the vault ----------
+  const OPT = { tabs: ['library', 'discover', 'add', 'slideshow'], gDouble: 'zoom', gTwo: 'like', gHold: 'level', haptics: true };
+  const opt = { ...OPT };
+  (typeof setupReady !== 'undefined' ? setupReady : Promise.resolve()).then(async () => {
+    try { const v = await api('kvGet', 'phone'); if (v && typeof v === 'object') Object.assign(opt, v); } catch (e) {}
+    dispatchEvent(new Event('phone-opt'));
+  });
+  let optTimer = null;
+  const saveOpt = () => { clearTimeout(optTimer); optTimer = setTimeout(() => api('kvSet', 'phone', opt).catch(() => {}), 300); dispatchEvent(new Event('phone-opt')); };
+  // the phones' native pieces (src-tauri/src/phone.rs): haptics, Face ID, the share inbox, the icon...
+  const native = (what, arg = null) => (window.__TAURI__ && window.__TAURI__.core ? Promise.resolve(window.__TAURI__.core.invoke('phone_native', { what, arg })) : Promise.reject(new Error('not in the app')));
+  // a tap felt in the hand ("select" for a tick, "light"/"medium"/"heavy", "success"/"warning"/"error")
+  const buzz = (kind = 'select') => {
+    if (opt.haptics === false) return;
+    native('haptic', kind).catch(() => { try { if (navigator.vibrate) navigator.vibrate(kind === 'select' ? 6 : 14); } catch (e) {} });
+  };
 
   // ---------- sheets (the More list, confirm/prompt, the Tags panel's backdrop) ----------
   // One at a time, from the bottom, closed by its backdrop. Returns { el, body, close }.
@@ -84,7 +103,7 @@
   const side = tab => sideTabs.find(b => b.dataset.tab === tab);
   const label = b => (b.querySelector('.nt-title') || b).textContent.trim();
   const iconOf = b => getComputedStyle(b).getPropertyValue('--icon').trim(); // (the sidebar's own icon)
-  const PRIMARY = ['library', 'discover', 'add', 'slideshow'].filter(side);
+  let PRIMARY = OPT.tabs.filter(side); // (which four sit in the bar: Settings → Phone → Tab bar)
   // (a <div>, not a <nav>: the desktop's sidebar rules are `html.desktop nav …`, and a phone carries both classes)
   const tabbar = make('div', 'ios-tabbar glass');
   tabbar.setAttribute('role', 'navigation');
@@ -97,10 +116,19 @@
     tabbar.append(t);
     return t;
   };
-  for (const tab of PRIMARY) tabButton(label(side(tab)), iconOf(side(tab)), () => side(tab).click()).dataset.tab = tab;
   const moreBtn = tabButton('More', icon('more'), openMore);
   moreBtn.dataset.tab = 'more';
   document.body.append(tabbar);
+  function drawTabs() {
+    const want = (Array.isArray(opt.tabs) ? opt.tabs : OPT.tabs).filter(side).slice(0, 4);
+    const next = want.length ? want : OPT.tabs.filter(side);
+    // (only when the order really changed: a button rebuilt under a finger loses its tap)
+    if (next.join() === [...tabbar.querySelectorAll('button:not([data-tab="more"])')].map(b => b.dataset.tab).join()) return;
+    PRIMARY = next;
+    tabbar.querySelectorAll('button:not([data-tab="more"])').forEach(b => b.remove());
+    for (const tab of PRIMARY) { const b = tabButton(label(side(tab)), iconOf(side(tab)), () => side(tab).click()); b.dataset.tab = tab; tabbar.insertBefore(b, moreBtn); }
+    syncTabs();
+  }
 
   // More: big tiles (Control Centre's shape), Hide now across the bottom
   function openMore() {
@@ -132,7 +160,8 @@
     tabbar.querySelectorAll('button').forEach(t => t.classList.toggle('on', t.dataset.tab === tab || (t === moreBtn && inMore)));
   };
   if (nav) new MutationObserver(syncTabs).observe(nav, { subtree: true, attributes: true, attributeFilter: ['class'] });
-  syncTabs();
+  drawTabs();
+  addEventListener('phone-opt', drawTabs);
   // a new section starts at its top
   tabbar.addEventListener('click', () => scrollTo(0, 0));
 
@@ -369,21 +398,354 @@
     }).observe(detail, { attributes: true, attributeFilter: ['class'] });
     if (big) gestures(big, {
       tap: () => { if (detail.classList.contains('ios-info')) info(false); else detail.classList.toggle('ios-clean'); },
-      double: (x, y) => { press('dLike'); heartAt(x, y); },
-      left: () => step(1), right: () => step(-1),
-      up: () => info(true),
-      down: () => { if (detail.classList.contains('ios-info')) info(false); else press('closeDetail'); },
+      double: (x, y) => act(opt.gDouble || 'zoom', x, y),
+      left: () => { if (!zoomed()) step(1); }, right: () => { if (!zoomed()) step(-1); },
+      up: () => { if (!zoomed()) info(true); },
+      down: () => { if (zoomed()) return; if (detail.classList.contains('ios-info')) info(false); else press('closeDetail'); },
       drag: (dx, dy, axis) => {
         const m = media();
-        if (!m || detail.classList.contains('ios-info')) return;
+        if (!m || zoomed() || detail.classList.contains('ios-info')) return;
         m.style.transition = 'none';
         m.style.transform = axis === 'x' ? `translateX(${dx}px)` : dy > 0 ? `translateY(${dy}px) scale(${Math.max(.8, 1 - dy / 900)})` : `translateY(${dy / 4}px)`;
         if (axis === 'y' && dy > 0) detail.style.setProperty('--fade', String(Math.max(.35, 1 - dy / 500)));
       },
-      settle: () => { const m = media(); if (m) { m.style.transition = 'transform .28s cubic-bezier(.2, .8, .2, 1)'; m.style.transform = ''; } detail.style.removeProperty('--fade'); }
-    }, 'button, input, .filmstrip, video');
+      settle: () => { const m = media(); if (m && !zoomed()) { m.style.transition = 'transform .28s cubic-bezier(.2, .8, .2, 1)'; m.style.transform = ''; } detail.style.removeProperty('--fade'); }
+    }, 'button, input, .filmstrip, .ph-strip, video');
     // the sheet itself: pull it down to put it away
     if (aside) gestures(aside, { down: () => { if (aside.scrollTop <= 0) info(false); } }, 'input, textarea, select, .tagbox');
+
+    // --- zoom: pinch, double tap, then pan (with momentum) ---
+    // The picture's own box fills the screen (object-fit: contain), so the zoom is a transform on it,
+    // around the screen's centre. While zoomed, one finger pans instead of swiping to the next.
+    const zoom = { s: 1, x: 0, y: 0, el: null, spin: 0 };
+    const zoomed = () => zoom.s > 1.01;
+    const shown = m => { // the picture's drawn size at scale 1 (inside its contain box)
+      const W = m.clientWidth || innerWidth, H = m.clientHeight || innerHeight;
+      const nw = m.naturalWidth || m.videoWidth || W, nh = m.naturalHeight || m.videoHeight || H;
+      const k = Math.min(W / nw, H / nh);
+      return { w: nw * k, h: nh * k, W, H };
+    };
+    const limits = () => { const m = zoom.el; if (!m) return { mx: 0, my: 0 }; const d = shown(m); return { mx: Math.max(0, (d.w * zoom.s - d.W) / 2), my: Math.max(0, (d.h * zoom.s - d.H) / 2) }; };
+    const paint = ms => {
+      const m = zoom.el;
+      if (!m) return;
+      m.style.transition = ms ? `transform ${ms}ms cubic-bezier(.2, .8, .2, 1)` : 'none';
+      m.style.transform = zoom.s > 1.001 || zoom.x || zoom.y ? `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})` : '';
+      if (detail.classList.contains('ph-zoomed') !== zoomed()) detail.classList.toggle('ph-zoomed', zoomed());
+    };
+    const settleZoom = () => {
+      if (zoom.s < 1) { zoom.s = 1; zoom.x = 0; zoom.y = 0; }
+      if (zoom.s > 6) zoom.s = 6;
+      const { mx, my } = limits();
+      zoom.x = Math.max(-mx, Math.min(mx, zoom.x)); zoom.y = Math.max(-my, Math.min(my, zoom.y));
+      paint(320);
+    };
+    const resetZoom = () => { cancelAnimationFrame(zoom.spin); zoom.s = 1; zoom.x = 0; zoom.y = 0; paint(0); };
+    // a point on screen stays under the finger while the scale changes
+    const zoomAt = (s, fx, fy, from = zoom) => {
+      const r = big.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const k = s / from.s;
+      zoom.x = (fx - cx) - k * (fx - cx - from.x); zoom.y = (fy - cy) - k * (fy - cy - from.y); zoom.s = s;
+    };
+    const zoomToggle = (x, y) => {
+      if (!zoom.el) return;
+      if (zoomed()) { zoom.s = 1; zoom.x = 0; zoom.y = 0; paint(320); }
+      else { zoomAt(2.6, x, y, { s: 1, x: 0, y: 0 }); settleZoom(); }
+      buzz('light');
+    };
+    // a new picture starts unzoomed
+    new MutationObserver(() => { const m = media(); if (m !== zoom.el) { if (zoom.el) zoom.el.style.transform = ''; zoom.el = m; resetZoom(); } })
+      .observe(big, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'src'] });
+
+    // --- what a double tap, a two-finger tap and a long press do (Settings → Phone → Gestures) ---
+    const act = (what, x, y) => {
+      if (what === 'zoom') return zoomToggle(x, y);
+      if (what === 'like') { press('dLike'); heartAt(x, y); buzz('light'); return; }
+      if (what === 'info') return info(!detail.classList.contains('ios-info'));
+      if (what === 'level') { const b = bar.querySelector('.ph-lvtool'); if (b) b.click(); return; }
+      if (what === 'hide') return hideNow();
+      if (what === 'close') return press('closeDetail');
+    };
+    detail._act = act;
+
+    // touches on the picture, ahead of the swipes: two fingers (pinch, or a two-finger tap), one
+    // finger on a zoomed picture (pan), and a video's own gestures (see below)
+    let pinch = null, pan = null, tapAt = 0, tapTimer = null, afterPinch = false;
+    const mid = t => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2, d: Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY) });
+    const onPicture = e => e.target.closest('.big') && !e.target.closest('button, input, .ph-strip, .filmstrip, .ph-vbubble');
+    detail.addEventListener('touchstart', e => {
+      if (!onPicture(e) || !zoom.el) return;
+      if (e.touches.length === 2) {
+        const m0 = mid(e.touches);
+        pinch = { ...m0, s: zoom.s, x: zoom.x, y: zoom.y, t: Date.now(), moved: 0 };
+        pan = null; vid = null;
+        cancelAnimationFrame(zoom.spin);
+        e.stopPropagation();
+      } else if (e.touches.length === 1 && zoomed()) {
+        const t = e.touches[0];
+        pan = { x: t.clientX, y: t.clientY, zx: zoom.x, zy: zoom.y, t: Date.now(), vx: 0, vy: 0, lx: t.clientX, ly: t.clientY, lt: Date.now(), moved: 0 };
+        cancelAnimationFrame(zoom.spin);
+        e.stopPropagation();
+      }
+    }, { capture: true, passive: true });
+    detail.addEventListener('touchmove', e => {
+      if (afterPinch) { e.stopPropagation(); return; }
+      if (pinch && e.touches.length >= 2) {
+        const m1 = mid(e.touches);
+        const s = Math.max(.7, Math.min(8, pinch.s * m1.d / pinch.d));
+        zoomAt(s, m1.x, m1.y, pinch);
+        zoom.x += m1.x - pinch.x; zoom.y += m1.y - pinch.y;
+        pinch.moved = Math.max(pinch.moved, Math.abs(m1.d - pinch.d), Math.hypot(m1.x - pinch.x, m1.y - pinch.y));
+        paint(0);
+        e.stopPropagation();
+      } else if (pan && e.touches.length === 1) {
+        const t = e.touches[0], now = Date.now();
+        const { mx, my } = limits();
+        let x = pan.zx + t.clientX - pan.x, y = pan.zy + t.clientY - pan.y;
+        // past the edge: a rubber band
+        const rub = (v, m) => (v > m ? m + (v - m) / 3 : v < -m ? -m + (v + m) / 3 : v);
+        zoom.x = rub(x, mx); zoom.y = rub(y, my);
+        const dt = Math.max(1, now - pan.lt);
+        pan.vx = (t.clientX - pan.lx) / dt; pan.vy = (t.clientY - pan.ly) / dt; pan.lx = t.clientX; pan.ly = t.clientY; pan.lt = now;
+        pan.moved = Math.max(pan.moved, Math.hypot(t.clientX - pan.x, t.clientY - pan.y));
+        paint(0);
+        e.stopPropagation();
+      }
+    }, { capture: true, passive: true });
+    detail.addEventListener('touchend', e => {
+      if (afterPinch) { if (!e.touches.length) afterPinch = false; e.stopPropagation(); return; }
+      if (pinch) {
+        if (e.touches.length >= 2) return;
+        const quick = Date.now() - pinch.t < 320 && pinch.moved < 10;
+        const at = { x: pinch.x, y: pinch.y };
+        pinch = null;
+        e.stopPropagation();
+        if (quick) act(opt.gTwo || 'like', at.x, at.y);
+        if (e.touches.length) afterPinch = true; // (the finger still down must not end in a swipe or a tap)
+        settleZoom();
+        return;
+      }
+      if (pan) {
+        const p = pan; pan = null;
+        e.stopPropagation();
+        if (p.moved < 8 && Date.now() - p.t < 300) {
+          // a tap on a zoomed picture: a second soon after is the double tap (back to whole)
+          const t = e.changedTouches[0];
+          if (Date.now() - tapAt < 300) { clearTimeout(tapTimer); tapAt = 0; act(opt.gDouble === 'zoom' ? 'zoom' : opt.gDouble, t.clientX, t.clientY); }
+          else { tapAt = Date.now(); tapTimer = setTimeout(() => detail.classList.toggle('ios-clean'), 280); }
+          return;
+        }
+        // momentum, slowing down, then back inside the edges
+        let vx = p.vx * 16, vy = p.vy * 16;
+        const glide = () => {
+          vx *= .93; vy *= .93;
+          const { mx, my } = limits();
+          zoom.x += vx; zoom.y += vy;
+          if (Math.abs(zoom.x) > mx) vx *= .5;
+          if (Math.abs(zoom.y) > my) vy *= .5;
+          paint(0);
+          if (Math.abs(vx) + Math.abs(vy) > .4) zoom.spin = requestAnimationFrame(glide);
+          else settleZoom();
+        };
+        if (Math.abs(vx) + Math.abs(vy) > 2) zoom.spin = requestAnimationFrame(glide); else settleZoom();
+      }
+    }, { capture: true, passive: true });
+    detail.addEventListener('touchcancel', () => { if (pinch || pan) { pinch = pan = null; settleZoom(); } }, { capture: true, passive: true });
+
+    // --- videos: scrub, skip, 2× ---
+    // Drag sideways in the lower half to scrub (the time shows as you go), double-tap the left or right
+    // third to skip 10 seconds back or forward, hold anywhere for 2× while your finger is down.
+    const bubble = make('div', 'ph-vbubble');
+    big.append(bubble);
+    const say = (text, side) => {
+      bubble.textContent = text;
+      bubble.className = 'ph-vbubble on' + (side ? ' side-' + side : '');
+      clearTimeout(bubble._t);
+      bubble._t = setTimeout(() => { bubble.className = 'ph-vbubble'; }, 700);
+    };
+    const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+    let vid = null, sideTap = null;
+    big.addEventListener('touchstart', e => {
+      const v = e.target.closest('video');
+      if (!v || e.touches.length !== 1 || zoomed()) { vid = null; return; }
+      const t = e.touches[0], W = innerWidth;
+      vid = { v, x: t.clientX, y: t.clientY, t: Date.now(), axis: '', from: v.currentTime, held: false, side: t.clientX < W * .3 ? -1 : t.clientX > W * .7 ? 1 : 0 };
+      vid.timer = setTimeout(() => { if (!vid || vid.axis) return; vid.held = true; vid.rate = v.playbackRate; v.playbackRate = 2; if (v.paused) v.play().catch(() => {}); bubble.textContent = '2× ▸▸'; bubble.className = 'ph-vbubble on hold'; buzz('light'); }, 380);
+    }, { passive: true });
+    big.addEventListener('touchmove', e => {
+      if (!vid) return;
+      const t = e.touches[0], dx = t.clientX - vid.x, dy = t.clientY - vid.y;
+      if (!vid.axis && Math.hypot(dx, dy) > 10) { vid.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'; clearTimeout(vid.timer); }
+      if (vid.axis === 'x' && vid.y > innerHeight * .5 && isFinite(vid.v.duration)) {
+        const span = Math.min(vid.v.duration, 90);
+        const to = Math.max(0, Math.min(vid.v.duration - .1, vid.from + dx / innerWidth * span));
+        vid.v.currentTime = to;
+        vid.scrub = true;
+        bubble.textContent = `${clock(to)} / ${clock(vid.v.duration)}`;
+        bubble.className = 'ph-vbubble on scrub';
+      }
+    }, { passive: true });
+    big.addEventListener('touchend', e => {
+      if (!vid) return;
+      const v = vid; vid = null;
+      clearTimeout(v.timer);
+      if (v.held) { v.v.playbackRate = v.rate || 1; bubble.className = 'ph-vbubble'; return; }
+      if (v.scrub) { clearTimeout(bubble._t); bubble._t = setTimeout(() => { bubble.className = 'ph-vbubble'; }, 500); return; }
+      if (v.axis === 'x') { const dx = e.changedTouches[0].clientX - v.x; if (Math.abs(dx) > 64) step(dx < 0 ? 1 : -1); return; }
+      if (v.axis === 'y') { const dy = e.changedTouches[0].clientY - v.y; if (dy > 90) press('closeDetail'); else if (dy < -90) info(true); return; }
+      if (Date.now() - v.t > 300) return;
+      // a tap: on the sides, a double tap skips; in the middle, the usual double-tap choice
+      const t = e.changedTouches[0];
+      if (sideTap && Date.now() - sideTap.at < 300 && sideTap.side === v.side) {
+        clearTimeout(sideTap.timer); sideTap = null;
+        if (v.side) { v.v.currentTime = Math.max(0, Math.min((v.v.duration || 0) - .1, v.v.currentTime + 10 * v.side)); say(v.side > 0 ? '10 s ▸▸' : '◂◂ 10 s', v.side > 0 ? 'r' : 'l'); buzz('light'); }
+        else act(opt.gDouble, t.clientX, t.clientY);
+        return;
+      }
+      sideTap = { at: Date.now(), side: v.side, timer: setTimeout(() => { sideTap = null; if (detail.classList.contains('ios-info')) info(false); else detail.classList.toggle('ios-clean'); }, 290) };
+    }, { passive: true });
+
+    // --- a video in its own little window: the system's picture-in-picture when it has one,
+    // else a floating player inside the app that stays while you browse ---
+    const pip = tool('pip', 'Keep playing in a little window', () => {
+      const v = big.querySelector('video:not(.hidden)');
+      if (!v) return;
+      try {
+        if (v.webkitSupportsPresentationMode && v.webkitSupportsPresentationMode('picture-in-picture')) { v.webkitSetPresentationMode('picture-in-picture'); return; }
+        if (document.pictureInPictureEnabled && v.requestPictureInPicture) { v.requestPictureInPicture().catch(() => floatVideo(v)); return; }
+      } catch (e) {}
+      floatVideo(v);
+    });
+    bar.insertBefore(pip, like.nextSibling);
+    function floatVideo(v) {
+      const it = typeof current !== 'undefined' ? current : null, list = typeof detailList !== 'undefined' ? detailList : null;
+      document.querySelectorAll('.ph-float').forEach(f => f._close());
+      const box = make('div', 'ph-float');
+      const fv = make('video');
+      Object.assign(fv, { src: v.currentSrc || v.src, muted: v.muted, loop: true, playsInline: true, autoplay: true });
+      fv.setAttribute('playsinline', '');
+      const at = v.currentTime;
+      fv.addEventListener('loadedmetadata', () => { try { fv.currentTime = at; } catch (e) {} fv.play().catch(() => {}); }, { once: true });
+      const x = make('button', 'ph-float-x'); x.type = 'button'; x.setAttribute('aria-label', 'Close'); x.style.setProperty('--icon', icon('close'));
+      const grow = make('button', 'ph-float-grow'); grow.type = 'button'; grow.setAttribute('aria-label', 'Open');
+      box.append(fv, grow, x);
+      box._close = () => { fv.pause(); box.classList.add('out'); setTimeout(() => box.remove(), 250); };
+      x.onclick = e => { e.stopPropagation(); box._close(); };
+      grow.onclick = e => { e.stopPropagation(); const t = fv.currentTime; box._close(); if (it && typeof openDetail === 'function') openDetail(it, list).then(() => { const nv = big.querySelector('video:not(.hidden)'); if (nv) { try { nv.currentTime = t; } catch (err) {} } }); };
+      // drag it anywhere; let go and it settles in the nearest corner
+      let from = null;
+      box.addEventListener('pointerdown', e => { if (e.target.closest('button')) return; from = { x: e.clientX, y: e.clientY, r: box.getBoundingClientRect() }; box.setPointerCapture(e.pointerId); box.classList.add('held'); });
+      box.addEventListener('pointermove', e => { if (!from) return; box.style.left = (from.r.left + e.clientX - from.x) + 'px'; box.style.top = (from.r.top + e.clientY - from.y) + 'px'; box.style.right = 'auto'; box.style.bottom = 'auto'; });
+      box.addEventListener('pointerup', () => {
+        if (!from) return; from = null; box.classList.remove('held');
+        const r = box.getBoundingClientRect(), left = r.left + r.width / 2 < innerWidth / 2, topHalf = r.top + r.height / 2 < innerHeight / 2;
+        box.style.left = left ? '12px' : (innerWidth - r.width - 12) + 'px';
+        box.style.top = topHalf ? 'calc(var(--safe-t) + 12px)' : (innerHeight - r.height - 110) + 'px';
+      });
+      v.pause();
+      press('closeDetail');
+      document.body.append(box);
+      requestAnimationFrame(() => box.classList.add('in'));
+    }
+    new MutationObserver(() => { const isVideo = !!big.querySelector('video:not(.hidden)'); if (pip.classList.contains('hidden') === isVideo) pip.classList.toggle('hidden', !isVideo); })
+      .observe(big, { subtree: true, attributes: true, attributeFilter: ['class'] });
+
+    // --- the filmstrip, like Photos: a thin row along the bottom, the picture you're on opened out to
+    // its shape; slide it and the picture follows (a quick preview while you slide, the real one when
+    // you stop) ---
+    const strip = make('div', 'ph-strip');
+    const track = make('div', 'ph-strip-track');
+    strip.append(track);
+    const peekImg = make('img', 'ph-scrub');
+    peekImg.alt = '';
+    detail.append(strip);
+    big.append(peekImg);
+    let stripList = null, stripAt = -1, stripTouch = false, stripIdle = null, stripLock = false;
+    const listNow = () => {
+      if (typeof detailList !== 'undefined' && detailList && detailList.length > 1) return detailList;
+      const g = $('grid');
+      if (g && lib && !lib.classList.contains('hidden')) { const shown = [...g.querySelectorAll('.card')].map(c => c._item).filter(Boolean); if (shown.length > 1) return shown; }
+      return null;
+    };
+    const thumbFor = it => (typeof thumbSrc === 'function' ? thumbSrc(it, 160) : '');
+    const W0 = 22, H0 = 44;
+    const centerOn = (k, smooth) => {
+      const el = track.children[k];
+      if (!el) return;
+      stripLock = true;
+      strip.scrollTo({ left: el.offsetLeft + el.offsetWidth / 2 - strip.clientWidth / 2, behavior: smooth ? 'smooth' : 'auto' });
+      setTimeout(() => { stripLock = false; }, smooth ? 420 : 50);
+    };
+    const markOn = k => {
+      [...track.children].forEach((el, i) => {
+        const it = stripList[i], on = i === k;
+        if (el.classList.contains('on') !== on) el.classList.toggle('on', on);
+        const ar = it && it.width && it.height ? it.width / it.height : 1;
+        const w = on ? Math.round(Math.max(30, Math.min(84, H0 * ar))) : W0;
+        if (el.style.width !== w + 'px') el.style.width = w + 'px';
+      });
+    };
+    function drawStripNow() {
+      const it = typeof current !== 'undefined' ? current : null;
+      const list = listNow();
+      if (!it || !list || !list.includes(it)) { strip.classList.add('hidden'); stripList = null; return; }
+      strip.classList.remove('hidden');
+      if (list !== stripList || track.children.length !== list.length) {
+        stripList = list;
+        track.replaceChildren(...list.map((x, i) => {
+          const b = make('button', 'ph-strip-item');
+          b.type = 'button';
+          b.setAttribute('aria-label', 'Picture ' + (i + 1));
+          const im = make('img'); im.alt = ''; im.loading = 'lazy'; im.decoding = 'async'; im.src = thumbFor(x);
+          b.append(im);
+          if (moving(x)) b.append(make('i', '', '▶'));
+          b.onclick = e => { e.stopPropagation(); if (stripList[i] !== current) openDetail(stripList[i], stripList); };
+          return b;
+        }));
+      }
+      stripAt = list.indexOf(it);
+      markOn(stripAt);
+      if (!stripTouch) requestAnimationFrame(() => centerOn(stripAt, strip.dataset.ready === '1'));
+      strip.dataset.ready = '1';
+    }
+    // which picture sits under the middle of the strip
+    const atMiddle = () => {
+      const mid = strip.scrollLeft + strip.clientWidth / 2;
+      let best = -1, bestD = Infinity;
+      [...track.children].forEach((el, i) => { const d = Math.abs(el.offsetLeft + el.offsetWidth / 2 - mid); if (d < bestD) { bestD = d; best = i; } });
+      return best;
+    };
+    // when the strip comes to rest (finger up and no more scrolling): open the picture in its middle
+    const settleStrip = () => {
+      clearTimeout(stripIdle);
+      stripIdle = setTimeout(() => {
+        if (stripTouch || !stripList) return;
+        const it = stripList[stripAt];
+        if (it && it !== current) openDetail(it, stripList).finally(() => setTimeout(() => peekImg.classList.remove('on'), 150));
+        else peekImg.classList.remove('on');
+        centerOn(stripAt, true);
+      }, 180);
+    };
+    strip.addEventListener('touchstart', () => { stripTouch = true; }, { passive: true });
+    strip.addEventListener('touchend', () => { stripTouch = false; settleStrip(); }, { passive: true });
+    strip.addEventListener('scroll', () => {
+      if (stripLock || !stripList) return;
+      const k = atMiddle();
+      if (k >= 0 && k !== stripAt) {
+        stripAt = k;
+        markOn(k);
+        peekImg.src = thumbFor(stripList[k]);
+        peekImg.classList.add('on');
+        buzz('select');
+      }
+      settleStrip();
+    }, { passive: true });
+    if (typeof openDetail === 'function') {
+      const open0 = openDetail;
+      openDetail = function () { const r = open0.apply(this, arguments); setTimeout(drawStripNow, 0); return r; };
+    }
+    new MutationObserver(() => { if (detail.classList.contains('hidden')) { stripList = null; strip.dataset.ready = ''; } })
+      .observe(detail, { attributes: true, attributeFilter: ['class'] });
   }
 
   // ---------- the slideshow: the same gestures ----------
@@ -483,7 +845,14 @@
       s.el.before(pic); // (above the sheet, on the dimmed backdrop)
     }
     const name = card._item && (card._item.name || card._item.file);
-    if (name) s.body.append(make('p', 'ios-peek-name', name));
+    const top = make('div', 'ph-peek-top');
+    top.append(make('p', 'ios-peek-name', name || ''));
+    const pinB = make('button', 'ph-peek-pin', 'Pin');
+    pinB.type = 'button';
+    pinB.title = 'Keep it over the Library while you scroll';
+    pinB.onclick = () => { s.close(); if (window.__phonePin) window.__phonePin(card); };
+    top.append(pinB);
+    s.body.append(top);
     const list = make('div', 'ios-list');
     for (const it of items) {
       const text = (it.querySelector(':scope > .lv-label') || it).textContent.trim();
@@ -529,14 +898,21 @@
       hold = null;
       const card = target.closest('#grid .card');
       if (card && !html.classList.contains('ios-dock-open')) { if (peek(card, t.clientX, t.clientY)) swallowTap(); return; }
+      // the viewer: a long press does what Settings → Phone → Gestures says
+      if (detail && detail._act && target.closest('#detail .big') && !target.closest('button, .ph-strip')) { buzz('light'); detail._act(opt.gHold || 'level', t.clientX, t.clientY); swallowTap(); return; }
+      // the Browser: a long press saves the picture (it flies to the Library)
+      const tile = target.closest('#tab-discover .dc-tile');
+      if (tile && window.__phoneSaveTile) { window.__phoneSaveTile(tile); swallowTap(); return; }
       // anywhere else the desktop listens for a right-click, long-press is that right-click
       const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: t.clientX, clientY: t.clientY });
       if (!target.dispatchEvent(ev)) swallowTap();
     }, 420) };
-  }, { passive: true });
-  addEventListener('touchmove', e => { const t = e.touches[0]; if (hold && t && Math.hypot(t.clientX - hold.x, t.clientY - hold.y) > 10) cancelHold(); }, { passive: true });
-  addEventListener('touchend', () => { cancelHold(); dropSwallow(); }, { passive: true });
-  addEventListener('touchcancel', () => { cancelHold(); dropSwallow(); }, { passive: true });
+  }, { passive: true, capture: true });
+  // (all on the way down, capture: the viewer's pinch stops its touches from going further, and a
+  // second finger landing must still cancel the long press the first one started)
+  addEventListener('touchmove', e => { const t = e.touches[0]; if (hold && (e.touches.length > 1 || (t && Math.hypot(t.clientX - hold.x, t.clientY - hold.y) > 10))) cancelHold(); }, { passive: true, capture: true });
+  addEventListener('touchend', () => { cancelHold(); dropSwallow(); }, { passive: true, capture: true });
+  addEventListener('touchcancel', () => { cancelHold(); dropSwallow(); }, { passive: true, capture: true });
 
   // ---------- 6. privacy ----------
   // "Hide now" (More, or a three-finger tap anywhere) is the emergency key. What it shows is the same
@@ -572,6 +948,7 @@
   function hideNow() {
     if (document.querySelector('.pv-screen, .ios-calc')) return;
     overlays.slice().reverse().forEach(o => o._close()); // (Stories and Sort go at once, not under the cover)
+    document.querySelectorAll('.ph-pin, .ph-float').forEach(p => p._close()); // (and the pinned pictures, the little player)
     if (mode() === 'hide') { emit({ on: true, mode: 'hide' }); calculator(); } // (the message pauses everything that plays)
     else emit({ on: true, mode: mode() });
   }
@@ -651,7 +1028,13 @@
   let coveredAt = 0;
   const setCover = on => {
     if (on) { coveredAt = Date.now(); cover.classList.add('on'); document.querySelectorAll('video, audio').forEach(m => { try { m.pause(); } catch (e) {} }); }
-    else { cover.classList.remove('on'); if (coveredAt && Date.now() - coveredAt > 1500) lockIfPin(); coveredAt = 0; }
+    else {
+      cover.classList.remove('on');
+      // back in front: locked again after the time chosen (Settings → Phone → Lock after), else 1.5 s
+      const after = opt.autolock === -1 ? Infinity : opt.autolock > 0 ? opt.autolock * 60e3 : 1500;
+      if (coveredAt && Date.now() - coveredAt > after) lockIfPin();
+      coveredAt = 0;
+    }
   };
   document.addEventListener('visibilitychange', () => setCover(document.visibilityState !== 'visible'));
   addEventListener('pagehide', () => setCover(true));
@@ -672,7 +1055,6 @@
   const fileUrl = it => (typeof vaultUrl === 'function' ? vaultUrl(it.id) : '');
   const thumbOf = it => (typeof thumbUrl === 'function' ? thumbUrl(it).catch(() => '') : Promise.resolve(''));
   const likes = it => (typeof likesOf === 'function' ? likesOf(it.id) : 0);
-  const buzz = () => { try { if (navigator.vibrate) navigator.vibrate(8); } catch (e) {} };
   let redraw = null;
   const renderSoon = () => { clearTimeout(redraw); redraw = setTimeout(() => { if (typeof renderLibrary === 'function') renderLibrary(); }, 500); };
   // level and rating, saved the way the detail panel's Save does it (and the file is renamed to match)
@@ -911,7 +1293,7 @@
       const slide = make('div', 'ph-story-slide' + (dir ? ' from-' + dir : ''));
       const blur = make('div', 'ph-story-blur');
       slide.append(blur);
-      if (moving(it)) {
+      if (moving(it) && !window.vaultLowData) {
         const v = make('video');
         Object.assign(v, { muted: true, playsInline: true, autoplay: true, loop: false, preload: 'auto' });
         v.setAttribute('playsinline', ''); v.setAttribute('muted', '');
@@ -921,7 +1303,8 @@
         const img = make('img');
         img.alt = '';
         img.decoding = 'async';
-        img.src = fileUrl(it);
+        // (low data, or a video: its picture)
+        if (moving(it)) thumbOf(it).then(u => { img.src = u; }); else img.src = fileUrl(it);
         media = img;
       }
       slide.append(media);
@@ -1136,7 +1519,7 @@
       const before = { quality: it.quality };
       c = c || deck.querySelector('.ph-card.top');
       if (c) { c.classList.add('fly-' + dir); c._stamp.textContent = dir === 'up' ? '♥ ★★★' : dir === 'right' ? '★★ KEEP' : '★'; c.classList.add('stamped', 's-' + dir); }
-      buzz();
+      buzz('medium');
       history.push({ it, before, k });
       sortState.done.add(it.id); saveSort();
       sorted++; k++;
@@ -1475,6 +1858,7 @@
       // (it asks for a name: the answer replays the tap, so the tap must be the star's own)
       row('Bookmark this search', 'star', () => { const m = dq('.dc-markbtn'); if (m) { lastTap = m; m.click(); } });
       row('Filters', 'sliders', () => openFilters());
+      row('Reader: only the pictures', 'reader', () => window.__phoneReader(true));
       row('Sources and keys', 'tabs', () => { const m = dq('.dc-manage'); if (m) m.click(); });
       row('Customise the Browser', 'brush', customise);
       s.body.append(make('h2', 'ios-sheet-title', words.textContent || 'Browser'), list);
@@ -1601,6 +1985,176 @@
     }, { passive: true });
   }
 
+  // ---------- 10. more of the dial, pinned previews, tagging cards, and the Browser's extras ----------
+
+  // --- the dial in more places: the Add screen's level, a whole selection at once, the slideshow ---
+  const nsfwField = $('nsfw');
+  if (nsfwField) {
+    const b = make('button', 'ph-dialbtn');
+    b.type = 'button';
+    const show = () => { b.replaceChildren(make('span', '', 'Level'), make('b', '', nsfwField.value || '–')); };
+    b.onclick = () => dial(+nsfwField.value || 5, l => { nsfwField.value = l; nsfwField.dispatchEvent(new Event('input', { bubbles: true })); nsfwField.dispatchEvent(new Event('change', { bubbles: true })); show(); });
+    nsfwField.after(b);
+    nsfwField.addEventListener('input', show);
+    new MutationObserver(show).observe(nsfwField, { attributes: true });
+    const tagger = $('tagger');
+    if (tagger) new MutationObserver(show).observe(tagger, { attributes: true, attributeFilter: ['class'] });
+    show();
+  }
+  const msBar = document.querySelector('.ms-bar');
+  if (msBar) {
+    const b = make('button', 'btn ph-mslevel', 'Level…');
+    b.type = 'button';
+    b.onclick = () => {
+      const items = [...document.querySelectorAll('#grid .card.picked-many')].map(c => c._item).filter(Boolean);
+      if (!items.length) return;
+      const avg = Math.round(items.reduce((t, i) => t + (+i.nsfw || 0), 0) / items.length) || 5;
+      dial(avg, async l => {
+        let n = 0;
+        for (const it of items) if (+it.nsfw !== l && await setProps(it, { nsfw: l })) n++;
+        toast(n ? `Level ${l} for ${n} ${n === 1 ? 'picture' : 'pictures'}` : 'Nothing changed', 'ok');
+        renderSoon();
+      });
+    };
+    // (the bar is drawn again on every change: the button goes back in each time)
+    const put = () => { if (!msBar.contains(b) && msBar.children.length) msBar.insertBefore(b, msBar.querySelector('.ms-end') || null); };
+    new MutationObserver(put).observe(msBar, { childList: true });
+    put();
+  }
+  const showEl = $('show');
+  if (showEl) {
+    const b = make('button', 'ph-showcap');
+    b.type = 'button';
+    b.setAttribute('aria-label', 'Highest level in this slideshow');
+    const draw = () => { const c = +window.vaultShowCap || 0; b.replaceChildren(make('span', '', 'Up to'), make('b', '', c ? String(c) : 'All')); };
+    b.onclick = e => {
+      e.stopPropagation();
+      dial(+window.vaultShowCap || 10, l => { window.vaultShowCap = l >= 10 ? 0 : l; draw(); toast(l >= 10 ? 'Every level' : `Up to level ${l} from the next slide`, 'ok'); });
+    };
+    showEl.append(b);
+    draw();
+  }
+
+  // --- pinned previews: a picture held over the Library while you scroll (to compare, or come back to) ---
+  function pinPreview(card) {
+    const it = card._item, img = card.querySelector('img');
+    if (!it || !img) return;
+    const pins = document.querySelectorAll('.ph-pin');
+    if (pins.length >= 3) pins[0]._close();
+    const box = make('div', 'ph-pin');
+    const pic = make('img'); pic.alt = ''; pic.src = img.currentSrc || img.src;
+    const x = make('button', 'ph-pin-x'); x.type = 'button'; x.setAttribute('aria-label', 'Unpin'); x.style.setProperty('--icon', icon('close'));
+    box.append(pic, x);
+    const k = document.querySelectorAll('.ph-pin').length;
+    box.style.top = `calc(var(--safe-t) + ${110 + k * 150}px)`;
+    box._close = () => { box.classList.add('out'); setTimeout(() => box.remove(), 250); };
+    x.onclick = e => { e.stopPropagation(); box._close(); };
+    let from = null, moved = false;
+    box.addEventListener('pointerdown', e => { if (e.target.closest('button')) return; from = { x: e.clientX, y: e.clientY, r: box.getBoundingClientRect() }; moved = false; box.setPointerCapture(e.pointerId); });
+    box.addEventListener('pointermove', e => { if (!from) return; const dx = e.clientX - from.x, dy = e.clientY - from.y; if (Math.hypot(dx, dy) > 6) moved = true; box.style.left = (from.r.left + dx) + 'px'; box.style.top = (from.r.top + dy) + 'px'; box.style.right = 'auto'; });
+    box.addEventListener('pointerup', () => {
+      if (!from) return; from = null;
+      if (!moved) { if (typeof openDetail === 'function') openDetail(it); return; }
+      const r = box.getBoundingClientRect();
+      box.style.left = (r.left + r.width / 2 < innerWidth / 2 ? 10 : innerWidth - r.width - 10) + 'px';
+    });
+    document.body.append(box);
+    requestAnimationFrame(() => box.classList.add('in'));
+    buzz('light');
+  }
+  window.__phonePin = pinPreview;
+
+  // --- tagging cards: new uploads one at a time, as a card you swipe (right saves, left skips) ---
+  const tagger = $('tagger'), preview = $('preview');
+  if (tagger && preview) {
+    const hint = make('p', 'ph-taghint', 'Swipe the picture right to save it, left to skip it');
+    preview.after(hint);
+    gestures(preview, {
+      right: () => { const b = $('saveBtn'); if (!b || b.disabled) return; preview.classList.remove('fly-l', 'fly-r'); void preview.offsetWidth; preview.classList.add('fly-r'); buzz('success'); setTimeout(() => { b.click(); preview.classList.remove('fly-r'); preview.classList.add('in'); setTimeout(() => preview.classList.remove('in'), 400); }, 230); },
+      left: () => { const b = $('skipBtn'); if (!b) return; preview.classList.remove('fly-l', 'fly-r'); void preview.offsetWidth; preview.classList.add('fly-l'); setTimeout(() => { b.click(); preview.classList.remove('fly-l'); preview.classList.add('in'); setTimeout(() => preview.classList.remove('in'), 400); }, 230); },
+      drag: (dx, dy, axis) => { if (axis !== 'x') return; preview.style.transition = 'none'; preview.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`; preview.dataset.lean = dx > 40 ? 'save' : dx < -40 ? 'skip' : ''; },
+      settle: () => { preview.style.transition = ''; preview.style.transform = ''; preview.dataset.lean = ''; }
+    }, 'video, button');
+    // each new card starts in view, without the keyboard (the desktop puts the cursor in Category,
+    // which on a phone pops the keyboard up over the picture)
+    new MutationObserver(() => {
+      if (tagger.classList.contains('hidden')) return;
+      setTimeout(() => { const a = document.activeElement; if (a && a.matches && a.matches('#tagForm input')) a.blur(); scrollTo({ top: 0 }); }, 80);
+    }).observe(tagger, { attributes: true, attributeFilter: ['class'] });
+    const fname = $('filename');
+    if (fname) new MutationObserver(() => setTimeout(() => { const a = document.activeElement; if (a && a.matches && a.matches('#tagForm input')) a.blur(); scrollTo({ top: 0 }); }, 80)).observe(fname, { childList: true, characterData: true, subtree: true });
+    // the category chips: a row you scroll, the chosen one lit
+    const cat = $('category');
+    if (cat) cat.addEventListener('input', () => document.querySelectorAll('#catChips > *').forEach(c => c.classList.toggle('on', c.textContent.trim() === cat.value.trim())));
+  }
+
+  // --- the Browser: a long press saves; the picture flies to the Library ---
+  const flyToLibrary = from => {
+    const img = from.querySelector('img');
+    const target = tabbar.querySelector('button[data-tab="library"]') || tabbar;
+    if (!img) return;
+    const a = from.getBoundingClientRect(), b = target.getBoundingClientRect();
+    const f = make('img', 'ph-fly');
+    f.src = img.currentSrc || img.src; f.alt = '';
+    Object.assign(f.style, { left: a.left + 'px', top: a.top + 'px', width: a.width + 'px', height: a.height + 'px' });
+    document.body.append(f);
+    const dx = b.left + b.width / 2 - (a.left + a.width / 2), dy = b.top + b.height / 2 - (a.top + a.height / 2);
+    const k = Math.min(.25, 40 / Math.max(a.width, a.height));
+    f.animate([
+      { transform: 'translate(0, 0) scale(1)', opacity: 1, borderRadius: '6px' },
+      { transform: `translate(${dx * .45}px, ${dy * .45 - 120}px) scale(${(1 + k) / 2}) rotate(-8deg)`, opacity: 1, borderRadius: '18px', offset: .45 },
+      { transform: `translate(${dx}px, ${dy}px) scale(${k}) rotate(6deg)`, opacity: .2, borderRadius: '40px' }
+    ], { duration: 720, easing: 'cubic-bezier(.4, 0, .2, 1)' }).onfinish = () => {
+      f.remove();
+      target.classList.remove('ph-catch'); void target.offsetWidth; target.classList.add('ph-catch');
+      setTimeout(() => target.classList.remove('ph-catch'), 600);
+    };
+  };
+  window.__phoneSaveTile = tile => {
+    if (tile.classList.contains('saved') || tile.classList.contains('pending')) { toast('Already in your vault', 'ok'); return; }
+    const heart = tile.querySelector('.dc-save');
+    if (!heart) return;
+    buzz('medium');
+    tile.classList.add('ph-pressed');
+    setTimeout(() => tile.classList.remove('ph-pressed'), 300);
+    // it flies once the save is really on its way (after its question, when the Browser asks one)
+    const watch = new MutationObserver(() => { if (tile.classList.contains('pending') || tile.classList.contains('saved')) { watch.disconnect(); flyToLibrary(tile); } });
+    watch.observe(tile, { attributes: true, attributeFilter: ['class'] });
+    setTimeout(() => watch.disconnect(), 120000);
+    lastTap = heart;
+    heart.click();
+  };
+  // the downloads (saves on their way): a pill in the address bar, the list as a sheet
+  const dlFab = document.querySelector('.dl-fab'), dlPanel = document.querySelector('.dl-panel');
+  const sbarGlass = document.querySelector('.ph-sbar-glass');
+  if (dlFab && sbarGlass) {
+    sbarGlass.insertBefore(dlFab, sbarGlass.querySelector('.ph-sb.tabs'));
+    dlFab.classList.add('ph-dl');
+  }
+  if (dlPanel) dlPanel.classList.add('ph-dlsheet');
+
+  // --- the Browser's reader: only the pictures, one under another, nothing else on screen ---
+  window.__phoneReader = on => {
+    html.classList.toggle('br-reader', on);
+    let done = document.querySelector('.ph-reader-done');
+    if (on && !done) {
+      done = make('button', 'ph-reader-done glass', 'Done');
+      done.type = 'button';
+      done.onclick = () => window.__phoneReader(false);
+      document.body.append(done);
+    }
+    if (!on && done) done.remove();
+    scrollTo({ top: 0 });
+  };
+
+  // what phone-plus.js (the settings, the themes, the privacy extras, the native parts) builds on
+  window.__phone = {
+    html, make, icon, ICON, sheet, gestures, heartAt, dial, layer, unlayer, overlays, setProps, swallowTap, all, moving, thumbOf, fileUrl,
+    opt, OPT, saveOpt, native, buzz, hideNow, drawTabs, openSort, renderSoon, lockIfPin, pinOk, pin, rings: () => rings, tabbar,
+    sections: () => sideTabs.map(b => ({ tab: b.dataset.tab, label: label(b), icon: iconOf(b) })),
+    setLastTap: t => { lastTap = t; }
+  };
+
   // ---------- 7. Android's back button ----------
   // The web view goes back in its history when there is some, and leaves the app when there isn't.
   // So while anything is open, one history entry is kept pushed; back pops it, and the topmost thing
@@ -1616,6 +2170,7 @@
       const back = [...document.querySelectorAll('.ios-back.in')].pop();
       if (back) return () => back.click();
       if (overlays.length) { const o = overlays[overlays.length - 1]; return () => o._close(); } // (the dial, Stories, Sort)
+      if (html.classList.contains('br-reader')) return () => window.__phoneReader(false);
       const sheetClose = [...document.querySelectorAll('.dc-sheet:not(.hidden) .dc-sheet-head .btn')].pop(); // (Discover keeps a hidden one)
       if (sheetClose) return () => sheetClose.click();
       if (visible('#detail')) return () => {
