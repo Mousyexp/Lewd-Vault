@@ -365,7 +365,20 @@
       if (b && !b.classList.contains('hidden')) { b.click(); return true; }
       return false;
     };
-    const info = on => { if (detail.classList.contains('ios-info') !== !!on) detail.classList.toggle('ios-info', !!on); };
+    // The details, as in Photos: they rise from below as you pull the picture up, and the picture
+    // shrinks into the space above them (nothing is dimmed). --ih is the details' height, --is the
+    // picture's scale with them open, --ip how far open (0 to 1; the class sets 1).
+    const measure = () => {
+      const a = detail.querySelector('aside');
+      const ih = Math.min(a ? a.scrollHeight : 0, innerHeight * .62) || innerHeight * .5;
+      detail.style.setProperty('--ih', ih + 'px');
+      detail.style.setProperty('--is', String(Math.max(.3, (innerHeight - ih - 12) / innerHeight)));
+      return ih;
+    };
+    const info = on => {
+      if (on) measure();
+      if (detail.classList.contains('ios-info') !== !!on) detail.classList.toggle('ios-info', !!on);
+    };
     const top = make('div', 'ios-viewtop');
     const close = make('button', 'ios-round');
     close.type = 'button'; close.title = 'Close';
@@ -406,7 +419,7 @@
     // there still rewrites the attribute, which would call this observer again, for ever.)
     new MutationObserver(() => {
       if (!detail.classList.contains('hidden')) return;
-      for (const c of ['ios-info', 'ios-clean']) if (detail.classList.contains(c)) detail.classList.remove(c);
+      for (const c of ['ios-info', 'ios-clean', 'ios-pull']) if (detail.classList.contains(c)) detail.classList.remove(c);
     }).observe(detail, { attributes: true, attributeFilter: ['class'] });
     if (big) gestures(big, {
       tap: () => { if (detail.classList.contains('ios-info')) info(false); else detail.classList.toggle('ios-clean'); },
@@ -417,11 +430,23 @@
       drag: (dx, dy, axis) => {
         const m = media();
         if (!m || zoomed() || detail.classList.contains('ios-info')) return;
+        // pulling up: the details follow the finger
+        if (axis === 'y' && dy < 0) {
+          if (!detail.classList.contains('ios-pull')) { measure(); detail.classList.add('ios-pull'); }
+          const ih = parseFloat(detail.style.getPropertyValue('--ih')) || innerHeight * .5;
+          detail.style.setProperty('--ip', String(Math.min(1, -dy / ih)));
+          return;
+        }
         m.style.transition = 'none';
-        m.style.transform = axis === 'x' ? `translateX(${dx}px)` : dy > 0 ? `translateY(${dy}px) scale(${Math.max(.8, 1 - dy / 900)})` : `translateY(${dy / 4}px)`;
+        m.style.transform = axis === 'x' ? `translateX(${dx}px)` : `translateY(${dy}px) scale(${Math.max(.8, 1 - dy / 900)})`;
         if (axis === 'y' && dy > 0) detail.style.setProperty('--fade', String(Math.max(.35, 1 - dy / 500)));
       },
-      settle: () => { const m = media(); if (m && !zoomed()) { m.style.transition = 'transform .28s cubic-bezier(.2, .8, .2, 1)'; m.style.transform = ''; } detail.style.removeProperty('--fade'); }
+      settle: () => {
+        const m = media(); if (m && !zoomed()) { m.style.transition = 'transform .28s cubic-bezier(.2, .8, .2, 1)'; m.style.transform = ''; }
+        detail.style.removeProperty('--fade');
+        // (a pull that went far enough opens them: "up" comes next; otherwise they sink back)
+        if (detail.classList.contains('ios-pull')) { detail.classList.remove('ios-pull'); detail.style.removeProperty('--ip'); }
+      }
     }, 'button, input, .filmstrip, .ph-strip, video');
     // the sheet itself: pull it down to put it away
     if (aside) gestures(aside, { down: () => { if (aside.scrollTop <= 0) info(false); } }, 'input, textarea, select, .tagbox');

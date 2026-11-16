@@ -75,6 +75,12 @@ ones in the chosen category.
 - **Right-click** a tile for everything else: edit the picture, change category or level, find the
   source (SauceNAO, IQDB), collections.
 - **Clean up** finds what you never open, exact duplicates and look-alikes, and can compact videos.
+- **The full view** gives the picture the whole window. Scroll down (or **Details**, or **I**) and the
+  details rise from below while the picture shrinks into the space above, as in Photos; scroll up for
+  the whole picture again. On a phone, pull the picture up.
+- **Themes** (Settings → Look): each has two accents of its own, seen in the background's glow, the
+  buttons, the sidebar and Chat. Besides the first ones: Ocean, Sunset, Matcha, Cyber, Vaporwave,
+  Honey, Noir, Galaxy, and the light Latte, Lilac, Sorbet and Cloud, or Custom.
 
 ## The Browser
 
@@ -237,7 +243,8 @@ On a phone the app is laid out like Photos:
 - **Sharing to the app**: share pictures or videos from Photos, Safari or any app to Lewd Vault
   (or "Open in"); they're waiting in Add next time you open it.
 - **Settings → Phone** (also in More) gathers the phone's own settings: animated themes (Sakura,
-  Midnight, Bubblegum, Aurora, Kitten, Neon, Lavender, Mono) and your own accent; seasonal touches and
+  Midnight, Bubblegum, Aurora, Kitten, Neon, Lavender, Mono, Ocean, Sunset, Matcha, Galaxy, Cherry,
+  Frost, Vaporwave, Honey: each with two accents and its own drifting petals, leaves, snow, hearts...) and your own accent; seasonal touches and
   milestone celebrations; haptics; text size and density; the tab bar (drag to choose which five sit
   in it); what double-tap, two-finger tap and long-press do in the viewer; Face ID / fingerprint
   unlock; a decoy PIN that opens an empty vault; locking again after leaving the app; shake to hide;

@@ -520,19 +520,40 @@
   openBtn.onclick = () => current && api('openFile', current.id).catch(e => toast(errMsg(e), 'err'));
   $('dOpen').before(openBtn);
   $('dOpen').textContent = 'Show in folder';
-  // hide the details panel (button or I) so the picture gets the whole window; remembered
-  const INFO_KEY = 'imageVault.detailInfo';
+  // The full view, as in Photos: the picture has the whole window and the details lie below it.
+  // Scroll down (or the Details button, or I) and they rise while the picture shrinks into the space
+  // above them; scroll back up and the picture is whole again. (Phones: phone.js does it by touch.)
   const infoBtn = make('button', 'info-toggle');
   infoBtn.type = 'button';
-  const setInfo = show => {
-    $('detail').classList.toggle('no-info', !show);
-    infoBtn.textContent = show ? 'Hide details' : 'Details';
-    infoBtn.title = (show ? 'Hide the details panel' : 'Show the details panel') + ' (I)';
-    try { localStorage.setItem(INFO_KEY, show ? '1' : '0'); } catch (e) {}
+  const detailEl = $('detail'), stage = document.querySelector('#detail .big'), aside = document.querySelector('#detail aside');
+  const sheetMode = () => !document.documentElement.classList.contains('phone');
+  const shownInfo = () => detailEl.scrollTop > 40;
+  const drawInfoBtn = () => {
+    const on = shownInfo();
+    infoBtn.textContent = on ? 'Picture' : 'Details';
+    infoBtn.title = (on ? 'Back to the whole picture' : 'Show the details') + ' (I)';
+    infoBtn.classList.toggle('up', on);
   };
-  setInfo((() => { try { return localStorage.getItem(INFO_KEY) !== '0'; } catch (e) { return true; } })());
-  infoBtn.onclick = () => setInfo($('detail').classList.contains('no-info'));
-  document.querySelector('#detail .big').append(infoBtn);
+  const follow = () => {
+    if (!sheetMode()) return;
+    // how far the details have come up: the picture keeps the space above them
+    const H = stage.clientHeight || innerHeight;
+    const k = Math.max(.3, Math.min(1, (H - detailEl.scrollTop) / H));
+    stage.style.setProperty('--dk', k.toFixed(4));
+    stage.style.setProperty('--dp', (1 - k).toFixed(4));
+    drawInfoBtn();
+  };
+  detailEl.addEventListener('scroll', follow, { passive: true });
+  infoBtn.onclick = () => {
+    const to = shownInfo() ? 0 : Math.min(aside.offsetTop, detailEl.scrollHeight - detailEl.clientHeight) - stage.clientHeight * .42;
+    detailEl.scrollTo({ top: Math.max(0, to), behavior: 'smooth' });
+  };
+  // a picture opened afresh starts whole
+  new MutationObserver(() => { if (!detailEl.classList.contains('hidden') && sheetMode()) { detailEl.scrollTop = 0; follow(); } })
+    .observe(detailEl, { attributes: true, attributeFilter: ['class'] });
+  detailEl.classList.remove('no-info');
+  drawInfoBtn();
+  stage.append(infoBtn);
   document.addEventListener('keydown', e => {
     if (current && e.key.toLowerCase() === 'i' && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && !e.ctrlKey) infoBtn.click();
   });
@@ -551,9 +572,10 @@
   };
   document.querySelector('#detail .big').append(bigClose, bigBin);
   // nothing scrolls behind a full view (the Library here, Discover's post view too)
+  // (the full view itself scrolls: down to its details)
   document.addEventListener('wheel', e => {
-    const full = e.target.closest('#detail, .dc-view');
-    if (full && !e.target.closest('aside, .dc-side')) e.preventDefault();
+    const full = e.target.closest('.dc-view');
+    if (full && !e.target.closest('.dc-side')) e.preventDefault();
   }, { passive: false });
   document.addEventListener('keydown', e => {
     if (current && e.key === 'Delete' && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) bigBin.click();

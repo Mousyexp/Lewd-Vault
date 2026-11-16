@@ -12,7 +12,7 @@ html.desktop {
   --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 32%, transparent);
   --shadow: 0 12px 32px -12px rgba(0, 0, 0, .45), 0 2px 6px -2px rgba(0, 0, 0, .25);
 }
-html.desktop:is([data-theme="white"], [data-theme="pink"], [data-theme="lavender"], [data-theme="mint"], [data-theme="peach"], [data-theme="sky"]) {
+html.desktop:is([data-theme="white"], [data-theme="pink"], [data-theme="lavender"], [data-theme="mint"], [data-theme="peach"], [data-theme="sky"], [data-theme="latte"], [data-theme="lilac"], [data-theme="sorbet"], [data-theme="cloud"]) {
   --t-artist: #d1343a; --t-character: #17905a; --t-series: #8248d4; --t-meta: #c27400; --t-general: #2477d6;
   --shadow: 0 12px 30px -14px rgba(40, 20, 60, .28), 0 2px 6px -2px rgba(40, 20, 60, .12);
 }
@@ -507,7 +507,7 @@ html.desktop[data-theme="rose"] .titlebar { background: color-mix(in srgb, var(-
 .decor { position: absolute; pointer-events: none; user-select: none; z-index: 0; }
 html.no-decor .decor { display: none !important; }
 /* softer on the dark themes, where the pale pink would glare */
-html.desktop:not([data-theme="rose"], [data-theme="white"], [data-theme="pink"], [data-theme="lavender"], [data-theme="mint"], [data-theme="peach"], [data-theme="sky"]) .decor:not(.decor-splash) { opacity: .42; }
+html.desktop:not([data-theme="rose"], [data-theme="white"], [data-theme="pink"], [data-theme="lavender"], [data-theme="mint"], [data-theme="peach"], [data-theme="sky"], [data-theme="latte"], [data-theme="lilac"], [data-theme="sorbet"], [data-theme="cloud"]) .decor:not(.decor-splash) { opacity: .42; }
 
 /* small, standing at the bottom of the sidebar, behind the status box */
 html.desktop header { overflow: hidden; }
@@ -3372,3 +3372,94 @@ html.desktop.side-compact nav [data-tab="chat"] { grid-column: auto; }
 .ch-send:not(:disabled):active::before { animation: ch-launch .35s ease; }
 @keyframes ch-launch { 50% { transform: translateY(-5px); } }
 @media (prefers-reduced-motion: reduce) { .ch-msg, .ch-sparkle, .ch-float-heart, .ch-c-head, .ch-navbadge, .ch-new, .ch-row, .ch-sys { animation: none !important; transition: none !important; } .ch-float-heart, .ch-sparkle { display: none; } }
+
+/* =====================================================================================
+   The full view, as in Photos: the picture has the whole window, the details lie below it.
+   Scrolling down brings them up and the picture shrinks into the space above (desktop.js sets
+   --dk, its scale, and --dp, how far the details are up). Not on phones (phone.css has theirs).
+   ===================================================================================== */
+html.desktop:not(.phone) #detail, html.desktop:not(.phone) #detail.no-info {
+  display: block; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: none; grid-template-columns: none;
+}
+html.desktop:not(.phone) #detail::-webkit-scrollbar { display: none; }
+html.desktop:not(.phone) #detail .big { position: sticky; top: 0; height: calc(100vh - var(--bar, 0px)); z-index: 1; transform-origin: 50% 0; transform: scale(var(--dk, 1)); }
+html.desktop:not(.phone) #detail .big :is(img, video) { border-radius: calc(var(--dp, 0) * 40px); }
+/* what floats over the picture fades as the details come up (Close and the Details button stay) */
+html.desktop:not(.phone) #detail .big :is(.filmstrip, .fs-fold, .nav-arrow, .view-bin, .lv-edit-btn) { opacity: calc(1 - var(--dp, 0) * 3); }
+html.desktop:not(.phone) #detail aside, html.desktop:not(.phone) #detail.no-info aside {
+  display: block; position: relative; z-index: 2; width: auto; max-width: 760px; min-height: 46vh; margin: 0 auto; padding: 26px 34px 46px; overflow: visible;
+  border: 1px solid var(--line); border-bottom: 0; border-radius: 26px 26px 0 0;
+  background: color-mix(in srgb, var(--panel) 97%, transparent); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  box-shadow: 0 -24px 60px -24px rgba(0, 0, 0, .85); animation: none !important;
+}
+html.desktop:not(.phone) #detail aside::before { content: ''; position: absolute; top: 9px; left: 50%; width: 40px; height: 5px; margin-left: -20px; border-radius: 99px; background: color-mix(in srgb, var(--text) 22%, transparent); }
+html.desktop:not(.phone) #detail aside .filename { font-size: 17px; font-weight: 700; color: var(--text); margin-top: 6px; }
+/* the Details button: a pill at the top right, its arrow turning */
+html.desktop:not(.phone) #detail .info-toggle { opacity: .75; display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; }
+html.desktop:not(.phone) #detail .info-toggle::after { content: ''; width: 9px; height: 9px; border: solid currentColor; border-width: 0 2px 2px 0; transform: translateY(-2px) rotate(45deg); transition: transform .25s; }
+html.desktop:not(.phone) #detail .info-toggle.up::after { transform: translateY(2px) rotate(-135deg); }
+html.desktop:not(.phone) #detail .big:hover .info-toggle { opacity: 1; }
+/* a hint at the bottom edge that there is more below */
+html.desktop:not(.phone) #detail .big::after { content: ''; position: absolute; left: 50%; bottom: 6px; width: 46px; height: 5px; margin-left: -23px; border-radius: 99px; z-index: 4;
+  background: rgba(255, 255, 255, .35); opacity: calc(1 - var(--dp, 0) * 4); pointer-events: none; }
+html.strip-folded.desktop:not(.phone) #detail .big::after { bottom: 30px; }
+
+/* =====================================================================================
+   Themes with two accents. Every theme has a second accent (--accent-2), a colour of its own rather
+   than a shade of the first: it shows in the background's glow, the main buttons, some sidebar
+   tiles, bars and Chat. New themes, each a palette of its own. (Not prefixed with html.desktop, so
+   the theme picker's swatches and the phones show them too.)
+   ===================================================================================== */
+[data-theme="dark"] { --accent-2: #a78bfa; }
+[data-theme="gray"] { --accent-2: #f28b82; }
+[data-theme="white"] { --accent-2: #ff8fab; }
+[data-theme="pink"] { --accent-2: #a58bff; }
+[data-theme="lavender"] { --accent-2: #ff8fc7; }
+[data-theme="mint"] { --accent-2: #ff9eb5; }
+[data-theme="peach"] { --accent-2: #ff6f9f; }
+[data-theme="sky"] { --accent-2: #9b87ff; }
+[data-theme="berry"] { --accent-2: #ffb86b; }
+[data-theme="rose"] { --accent-2: #f2b880; }
+:is([data-theme="ocean"], [data-theme="sunset"], [data-theme="matcha"], [data-theme="cyber"], [data-theme="vapor"], [data-theme="honey"], [data-theme="noir"], [data-theme="galaxy"],
+    [data-theme="latte"], [data-theme="lilac"], [data-theme="sorbet"], [data-theme="cloud"]) {
+  --pattern: none; --logo: none; --logo-size: 0px; --radius: 14px; --btn-radius: 10px; --field-radius: 10px;
+  --font: "Nunito", "Segoe UI", system-ui, sans-serif;
+}
+/* the dark ones */
+[data-theme="ocean"] { --bg: #0b1a22; --panel: #12262f; --line: #1f3a45; --text: #e6f6f7; --dim: #8fb3ba; --accent: #ff7a6b; --accent-2: #2ec4b6; --on-accent: #2a0d08; color-scheme: dark; }
+[data-theme="sunset"] { --bg: #1f1020; --panel: #2c172c; --line: #46253f; --text: #fff0ea; --dim: #d3a3a6; --accent: #ff8a5b; --accent-2: #ff4f8b; --on-accent: #2b0e00; color-scheme: dark; }
+[data-theme="matcha"] { --bg: #121a14; --panel: #1b261d; --line: #2d3f30; --text: #eef6e8; --dim: #9fb39a; --accent: #a3d977; --accent-2: #f4a9bd; --on-accent: #13230a; color-scheme: dark; }
+[data-theme="cyber"] { --bg: #0a0a10; --panel: #14141e; --line: #262638; --text: #f3f3ff; --dim: #9a9ab8; --accent: #f9e900; --accent-2: #00e5ff; --on-accent: #111100; color-scheme: dark;
+  --font: "Inter Variable", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif; --radius: 6px; --btn-radius: 4px; --field-radius: 4px; }
+[data-theme="vapor"] { --bg: #1a1035; --panel: #251849; --line: #3c2a6b; --text: #fbefff; --dim: #b7a3e0; --accent: #ff71ce; --accent-2: #01cdfe; --on-accent: #2a0420; color-scheme: dark; }
+[data-theme="honey"] { --bg: #1d150d; --panel: #2a1f14; --line: #45331f; --text: #fff4e2; --dim: #c9ae8a; --accent: #ffb84d; --accent-2: #e8743b; --on-accent: #2a1800; color-scheme: dark; }
+[data-theme="noir"] { --bg: #0d0809; --panel: #191011; --line: #2f1c1e; --text: #f8ecec; --dim: #b39a9b; --accent: #e5383b; --accent-2: #d4a94a; --on-accent: #ffffff; color-scheme: dark;
+  --font: "Inter Variable", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif; }
+[data-theme="galaxy"] { --bg: #0b0920; --panel: #161236; --line: #2a2458; --text: #eeeaff; --dim: #a59fd6; --accent: #9d7bff; --accent-2: #ff7ad9; --on-accent: #0d0628; color-scheme: dark; }
+/* the light ones */
+[data-theme="latte"] { --bg: #f4ece2; --panel: #fffaf3; --line: #e6d6c3; --text: #3b2a20; --dim: #8c715e; --accent: #b0693a; --accent-2: #d99a5b; --on-accent: #ffffff; color-scheme: light; }
+[data-theme="lilac"] { --bg: #f3eefb; --panel: #ffffff; --line: #e0d5f5; --text: #33224f; --dim: #8a78a8; --accent: #8b6cf0; --accent-2: #2fbf9a; --on-accent: #ffffff; color-scheme: light; }
+[data-theme="sorbet"] { --bg: #fff3ef; --panel: #ffffff; --line: #ffd9cf; --text: #4a2330; --dim: #b07a85; --accent: #ff5d7a; --accent-2: #26b99b; --on-accent: #ffffff; color-scheme: light; }
+[data-theme="cloud"] { --bg: #eef3f8; --panel: #ffffff; --line: #d6e1ec; --text: #1f2d3d; --dim: #6f8296; --accent: #ff7a59; --accent-2: #5b8def; --on-accent: #ffffff; color-scheme: light; }
+
+/* where the second accent shows */
+html.desktop body {
+  background: radial-gradient(1100px 520px at 105% -8%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 62%),
+              radial-gradient(900px 520px at -10% 110%, color-mix(in srgb, var(--accent-2, var(--accent)) 10%, transparent), transparent 60%),
+              var(--bg) fixed;
+}
+html.desktop .btn.primary { background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent-2, var(--accent)) 55%, var(--accent))); border-color: transparent; }
+html.desktop .btn.primary:hover { filter: brightness(1.06) saturate(1.05); }
+html.desktop nav :is([data-tab="discover"], [data-tab="chat"]) { --tile: linear-gradient(135deg, color-mix(in srgb, var(--accent-2, var(--accent)) 82%, #16121a), color-mix(in srgb, var(--accent-2, var(--accent)) 42%, #16121a)); }
+html.desktop nav [data-tab="stats"] { --tile: linear-gradient(135deg, color-mix(in srgb, var(--accent) 70%, var(--accent-2, #2a2230)), color-mix(in srgb, var(--accent-2, var(--accent)) 50%, #2a2230)); }
+html.desktop :is(.hbars, .cols) .bar { background: linear-gradient(90deg, var(--accent), var(--accent-2, var(--accent))); }
+#tab-chat { --ch-b: var(--accent-2, color-mix(in srgb, var(--accent) 55%, #7b5cff)); }
+/* the picker: the two accents as a pill */
+.sw-card::after { width: 30px !important; border-radius: 99px !important; background: linear-gradient(90deg, var(--accent), var(--accent-2, var(--accent))) !important; }
+/* the cyber theme's sharp edges glow */
+html.desktop[data-theme="cyber"] .btn.primary { box-shadow: 0 0 0 1px var(--accent), 0 0 18px -4px var(--accent-2); }
+html.desktop[data-theme="cyber"] nav button.on { box-shadow: inset 0 0 0 2px var(--accent-2), 0 0 22px -6px var(--accent-2); }
+html.desktop[data-theme="noir"] .titlebar { background: color-mix(in srgb, #000 70%, var(--bg)); }
+/* Cyber's tiles are bright (yellow, cyan): dark writing on them */
+html.desktop[data-theme="cyber"] nav button, html.desktop[data-theme="cyber"] nav button:hover, html.desktop[data-theme="cyber"] nav button.on { color: #0a0a10; }
+html.desktop[data-theme="cyber"] nav :is([data-tab="cleanup"], [data-tab="settings"]) { color: #f3f3ff; }

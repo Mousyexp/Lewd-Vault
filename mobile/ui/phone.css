@@ -405,16 +405,21 @@ html.phone .tag-panel .tl-name { text-align: left; font-size: 16px; }
   html.phone #detail.ios-clean .ios-viewtop { opacity: 0; transform: translateY(-20px); pointer-events: none; }
   html.phone #detail.ios-clean .ios-viewbar { opacity: 0; transform: translate(-50%, 30px); pointer-events: none; }
   html.phone #detail.ios-clean .filmstrip { opacity: 0; pointer-events: none; }
-  /* the details: a sheet you pull up */
+  /* the details, as in Photos: pull the picture up and they rise beneath it while the picture shrinks
+     into the space above (nothing dimmed); --ip runs 0 to 1 under the finger, the class sets 1 */
+  html.phone #detail { --ip: 0; }
+  html.phone #detail.ios-info { --ip: 1; }
   html.phone #detail aside, html.phone #detail.no-info aside {
-    display: block; position: absolute; left: 0; right: 0; bottom: 0; top: auto; z-index: 6; width: auto; max-width: none; height: auto; max-height: 72vh;
-    overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 8px 16px calc(22px + var(--safe-b)); border: 0; border-radius: 26px 26px 0 0;
-    background: var(--panel); box-shadow: 0 -18px 50px -18px rgba(0, 0, 0, .8);
-    transform: translateY(104%); transition: transform .36s var(--spring);
+    display: block; position: absolute; left: 0; right: 0; bottom: 0; top: auto; z-index: 6; width: auto; max-width: none; height: auto; max-height: 62vh;
+    overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 8px 16px calc(22px + var(--safe-b)); border: 0; border-radius: 24px 24px 0 0;
+    background: var(--panel); box-shadow: 0 -10px 30px -16px rgba(0, 0, 0, .7);
+    transform: translateY(calc((1 - var(--ip)) * 104%)); transition: transform .4s cubic-bezier(.2, .9, .25, 1);
   }
-  html.phone #detail.ios-info aside { transform: none; }
-  html.phone .ios-infoback { position: absolute; inset: 0; z-index: 5; background: rgba(0, 0, 0, 0); pointer-events: none; transition: background .25s ease; }
-  html.phone #detail.ios-info .ios-infoback { background: rgba(0, 0, 0, .45); pointer-events: auto; }
+  html.phone #detail .big { transform-origin: 50% 0; transform: translateY(calc(var(--ip) * var(--safe-t))) scale(calc(1 - var(--ip) * (1 - var(--is, .55)))); transition: transform .4s cubic-bezier(.2, .9, .25, 1); }
+  html.phone #detail.ios-pull :is(aside, .big) { transition: none; }
+  html.phone #detail:is(.ios-info, .ios-pull) :is(.ios-viewbar, .ph-strip) { opacity: 0; pointer-events: none; }
+  html.phone .ios-infoback { position: absolute; inset: 0; z-index: 5; background: transparent; pointer-events: none; }
+  html.phone #detail.ios-info .ios-infoback { pointer-events: auto; }
   html.phone #detail #closeDetail, html.phone #detail #dTrash { display: none; }
   /* handing a file to another app or a file manager: there is neither on a phone */
   html.phone #dOpen, html.phone .ios-no { display: none !important; }

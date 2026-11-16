@@ -38,7 +38,10 @@
   // of the sparks when you appreciate something. "The app's theme" leaves the colours alone.
   const THEMES = [
     ['app', 'The app\'s theme', ''], ['sakura', 'Sakura', 'petals'], ['midnight', 'Midnight', 'stars'], ['bubblegum', 'Bubblegum', 'bubbles'],
-    ['aurora', 'Aurora', 'aurora'], ['kitten', 'Kitten', 'paws'], ['neon', 'Neon', 'neon'], ['lavender', 'Lavender', 'sparkles'], ['mono', 'Mono', '']
+    ['aurora', 'Aurora', 'aurora'], ['kitten', 'Kitten', 'paws'], ['neon', 'Neon', 'neon'], ['lavender', 'Lavender', 'sparkles'], ['mono', 'Mono', ''],
+    // (each its own palette of two accents)
+    ['ocean', 'Ocean', 'bubbles'], ['sunset', 'Sunset', 'sparkles'], ['matcha', 'Matcha', 'leaves'], ['galaxy', 'Galaxy', 'stars'],
+    ['cherry', 'Cherry', 'hearts'], ['frost', 'Frost', 'snow'], ['vapor', 'Vaporwave', 'neon'], ['honey', 'Honey', 'sparkles']
   ];
   const ACCENTS = ['#ff6f96', '#ff8fb3', '#ff6ad5', '#b69cff', '#8f9bff', '#4fe3c1', '#7bd88f', '#ffb07c', '#ffd166', '#ffffff'];
   const fxOf = () => (THEMES.find(t => t[0] === opt.theme) || THEMES[0])[2];

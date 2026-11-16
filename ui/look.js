@@ -44,6 +44,10 @@
     settings[key] = saved[key] !== undefined ? cleanSetting(spec, saved[key]) : spec.def;
   }
 
+  // ---------- more themes: each its own palette of two accents (desktop.css, "Themes with two accents") ----------
+  THEME_LIST.push(['ocean', 'Ocean'], ['sunset', 'Sunset'], ['matcha', 'Matcha'], ['cyber', 'Cyber'], ['vapor', 'Vaporwave'], ['honey', 'Honey'],
+    ['noir', 'Noir'], ['galaxy', 'Galaxy'], ['latte', 'Latte'], ['lilac', 'Lilac'], ['sorbet', 'Sorbet'], ['cloud', 'Cloud']);
+
   // ---------- Custom: a theme of your own ----------
   THEME_LIST.push(['custom', 'Custom']);
   const isHex = v => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);
