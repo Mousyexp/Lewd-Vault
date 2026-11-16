@@ -18,6 +18,9 @@ int lv_video_paused(const LvVideo *v);
 void lv_video_pause(LvVideo *v, int on);
 void lv_video_seek(LvVideo *v, int64_t ms);
 void lv_video_set_volume(LvVideo *v, int vol);
+// 100 (normal), 200 or 400: faster, without sound.
+void lv_video_set_speed(LvVideo *v, int pct);
+int lv_video_speed(const LvVideo *v);
 void lv_video_close(LvVideo *v);
 // How the player lets go of its textures: the app sets this to free them after the frame that may
 // still draw them (by default: wait for the GPU, then free).

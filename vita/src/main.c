@@ -6,8 +6,12 @@
 // into its views.csv, like on the PC, so copying the folder back carries them home.
 //
 // Touch works as on the phone (tap, drag, swipe, pinch); the buttons do it all too:
-//   Library  D-pad/stick move · ✕ open · L/R category · △ sort · □ kind · START slideshow · SELECT cover
+//   Library  D-pad/stick move · ✕ open (hold: quick actions) · L/R category · △ sort · □ filters ·
+//            START slideshow · ○ next tab · SELECT cover
 //   Viewer   ←/→ or L/R previous/next · ✕ play/pause or zoom · △ details · □ heart · ○ back
+//   Video    ←/→ 10 s · stick scrubs · ↑ 2×/4× · ↓ A-B loop · L/R previous/next
+//   Slideshow tab: the PC's level sessions (show.c) or a simple one; Continue watching is shared
+//            with the PC through the vault's _app/kv/resume.json
 #include <psp2/apputil.h>
 #include <psp2/common_dialog.h>
 #include <psp2/ctrl.h>
@@ -38,6 +42,7 @@
 #include "lvcrypt.h"
 #include "vault.h"
 #include "video.h"
+#include "json.h"
 #include <psp2/kernel/clib.h>
 #ifdef LV_DEBUG
 #define LOG(...) do { char lb_[256]; int ln_ = snprintf(lb_, sizeof lb_, __VA_ARGS__); SceUID lf_ = sceIoOpen("ux0:data/LWDV00001/log.txt", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666); if (lf_ >= 0) { sceIoWrite(lf_, lb_, ln_ > 255 ? 255 : ln_); sceIoClose(lf_); } } while (0)
@@ -242,7 +247,8 @@ static struct {
   char wquery[128], save_cat[64];
   int wpages, wsel; // where the Browser was: pages loaded, the post picked (it picks up there)
   int sounds;       // the interface sounds' volume, 0-100 (0: off)
-} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70};
+  int dbltap, glow; // double tap in the full view: 0 zoom, 1 heart; the picture's colours behind it
+} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1};
 static void cfg_load(void) {
   FILE *f = fopen(DATA "/config.txt", "r");
   if (!f) return;
@@ -266,6 +272,8 @@ static void cfg_load(void) {
     else if (!strcmp(line, "wpages")) cfg.wpages = atoi(eq);
     else if (!strcmp(line, "wsel")) cfg.wsel = atoi(eq);
     else if (!strcmp(line, "sounds")) cfg.sounds = atoi(eq);
+    else if (!strcmp(line, "dbltap")) cfg.dbltap = atoi(eq) != 0;
+    else if (!strcmp(line, "glow")) cfg.glow = atoi(eq) != 0;
   }
   fclose(f);
   if (cfg.interval < 2 || cfg.interval > 60) cfg.interval = 5;
@@ -282,9 +290,9 @@ static void cfg_load(void) {
 static void cfg_save(void) {
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
-          cfg.wpages, cfg.wsel, cfg.sounds);
+          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -577,6 +585,10 @@ static vita2d_texture *put_cell(int cell, const LvPixels *px) {
 
 static vita2d_texture *big_tex;
 static int big_item = -1, big_gen, big_failed;
+// (a slideshow that fades: the picture before stays a moment, fading out under the new one)
+static vita2d_texture *fade_tex;
+static unsigned fade_at;
+static int xfade_wanted;
 
 static short *slot_of; // per item: its slot, or -1 (no search through the slots for every card)
 static vita2d_texture *thumb_of(int i) {
@@ -596,7 +608,8 @@ static void take_results(void) {
     if (d->vgen != vgen || d->item >= vault.n) { free(d->px.rgba); continue; }
     if (d->big) {
       if (d->gen == big_gen) {
-        free_later(big_tex);
+        if (xfade_wanted && big_tex && big_item != d->item) { free_later(fade_tex); fade_tex = big_tex; fade_at = frame_no; }
+        else free_later(big_tex);
         big_tex = d->px.rgba ? upload(&d->px) : NULL;
         big_item = d->item;
         LOG("big %d: %dx%d tex=%p\n", d->item, d->px.w, d->px.h, (void *)big_tex);
@@ -644,6 +657,8 @@ static void drop_textures(void) {
   if (big_tex) vita2d_free_texture(big_tex);
   big_tex = NULL;
   big_item = -1;
+  if (fade_tex) vita2d_free_texture(fade_tex);
+  fade_tex = NULL;
   for (int k = 0; k < npending; k++) vita2d_free_texture(pending_free[k]);
   npending = 0;
 }
@@ -782,7 +797,7 @@ static int ime_poll(char *out, int cap) {
 }
 
 // ---------- screens ----------
-enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW };
+enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW };
 static int screen = S_PICK, cover_return = S_LIBRARY;
 static char found[16][512];
 static int nfound, pick_sel;
@@ -867,6 +882,7 @@ static void start_load(int unlock) {
   if (pthread_create(&t, &at, load_main, (void *)(intptr_t)unlock) != 0) { load_main((void *)(intptr_t)unlock); return; }
   pthread_detach(t);
 }
+static void show_opened(void); // (show.c: Continue watching read, the session's stages made again)
 static void finish_open(void) {
   const char *why = load_why;
   if (load_state != 2) { say(why ? why : "The vault could not be opened"); screen = S_PICK; load_state = 0; return; }
@@ -896,6 +912,7 @@ static void finish_open(void) {
   cat = -1;
   query[0] = 0;
   refilter();
+  show_opened();
   scroll = scroll_v = 0;
   sel = 0;
   screen = S_LIBRARY;
@@ -997,7 +1014,7 @@ static void draw_unlocking(int stage) {
   draw_splash(stage ? "Opening the vault\u2026" : "Checking the password\u2026", 255);
 }
 
-static int set_sel;
+static int set_sel, plan_sel;
 // ----- the library -----
 static void open_viewer(int k, int slideshow);
 static void draw_bar(void) {
@@ -1006,7 +1023,7 @@ static void draw_bar(void) {
   static const char *labels[] = {"Library", "Browser", "Slideshow", "Settings"};
   for (int k = 0; k < 4; k++) {
     int cx = W / 8 + k * W / 4;
-    int on = (k == 0 && screen == S_LIBRARY) || (k == 1 && screen == S_WEB) || (k == 3 && screen == S_SETTINGS);
+    int on = (k == 0 && screen == S_LIBRARY) || (k == 1 && screen == S_WEB) || (k == 2 && screen == S_SHOW) || (k == 3 && screen == S_SETTINGS);
     unsigned c = on ? ACC : DIM;
     int y = H - BAR + 20;
     switch (k) {
@@ -1021,14 +1038,14 @@ static void draw_bar(void) {
               break;
     }
     text_center(cx, H - 10, c, 13, labels[k]);
-    // (the button that leads here: ○ goes round Library, Browser, Settings)
-    int next = (screen == S_LIBRARY && k == 1) || (screen == S_WEB && k == 3) || (screen == S_SETTINGS && k == 0);
+    // (the button that leads here: ○ goes round Library, Browser, Slideshow, Settings)
+    int next = (screen == S_LIBRARY && k == 1) || (screen == S_WEB && k == 2) || (screen == S_SHOW && k == 3) || (screen == S_SETTINGS && k == 0);
     if (next) { circle(cx + 30, y - 6, 8, with_alpha(TEXT, 40)); text_center(cx + 30, y - 1, DIM, 12, "\u25cb"); }
     if (hit(cx - W / 8, H - BAR, W / 4, BAR)) {
       sfx(SFX_TAB);
       if (k == 0) { screen = S_LIBRARY; if (query[0]) { query[0] = 0; refilter(); } }
       if (k == 1) screen = S_WEB;
-      if (k == 2 && nshown) open_viewer(sel < nshown ? sel : 0, 1);
+      if (k == 2) { screen = S_SHOW; plan_sel = 0; }
       if (k == 3) screen = S_SETTINGS;
     }
   }
@@ -1043,6 +1060,7 @@ static int chip(int x, int y, const char *label, int on) {
 
 static float chips_scroll;
 #include "lib.c"
+#include "show.c"
 
 static int last_top_row = -1;
 static void draw_library(void) {
@@ -1114,6 +1132,13 @@ static void draw_library(void) {
       text(x + cw - tw - 10, y + ch - 11, TEXT, 13, d);
     }
     if (lv_likes_of(&vault, it) > 0) heart(x + 16, y + ch - 16, 6, ACC);
+    if (is_locked(i)) { // (above the level the slideshow session has reached)
+      vita2d_draw_rectangle(x, y, cw, ch, RGBA(14, 10, 14, 225));
+      rrect(x + cw / 2 - 7, y + ch / 2 - 10, 14, 12, 3, DIM);
+      circle(x + cw / 2, y + ch / 2 - 10, 5, DIM);
+      circle(x + cw / 2, y + ch / 2 - 10, 3, RGBA(14, 10, 14, 255));
+      textf(x + cw / 2 - text_w(13, "Level 10") / 2, y + ch / 2 + 18, DIM, 13, "Level %d", it->nsfw);
+    }
     if (!it->path) { rrect(x + 6, y + 6, 20, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 16, y + 21, ACC2, 14, "!"); }
     if (selecting && picked && picked[i]) { circle(x + cw - 16, y + 16, 11, ACC); text_center((int)(x + cw - 16), (int)y + 22, RGBA(20, 12, 16, 255), 14, "\u2713"); }
     else if (selecting) circle(x + cw - 16, y + 16, 10, with_alpha(TEXT, 90));
@@ -1223,6 +1248,10 @@ static float details_y;  // 0 hidden .. 1 up
 static unsigned chrome_until;
 static LvVideo *vid;
 static int vid_item = -1, vid_clip;
+static int64_t ab_a = -1, ab_b = -1; // the A-B loop (ms; -1: not set)
+static int64_t resume_to = -1;       // Continue watching: where to go once the video is open
+static float mo_x, mo_y;             // the slide's motion: which way it drifts (-1..1)
+static unsigned heart_at;            // (a double tap's heart, shown big for a moment)
 static unsigned view_started;
 static float pinch_d0, zoom0;
 
@@ -1242,8 +1271,19 @@ static void videos_close_now(void) {
   nclosing = 0;
 }
 static void stop_video(void) {
-  if (vid) { video_close_later(vid); vid = NULL; }
+  if (vid) {
+    // Continue watching: a real video left part-way (as the PC: after 20 s; forgotten near the end)
+    if (!vid_clip && vid_item >= 0 && vid_item < vault.n && resume_to < 0) {
+      uint64_t pos = lv_video_pos(vid), dur = lv_video_duration(vid);
+      if (dur > 0 && pos > dur * 95 / 100) resume_set(&vault.items[vid_item], 0);
+      else if (pos > 20000) resume_set(&vault.items[vid_item], (int)(pos / 1000));
+    }
+    video_close_later(vid);
+    vid = NULL;
+  }
   vid_item = -1;
+  ab_a = ab_b = -1;
+  resume_to = -1;
 }
 static void account_time(void) {
   if (view_started && vk < nshown) {
@@ -1256,9 +1296,14 @@ static void show_item(int k) {
   account_time();
   stop_video();
   if (nshown == 0) return;
-  vk = (k % nshown + nshown) % nshown;
+  int dir = k < vk ? -1 : 1;
+  k = (k % nshown + nshown) % nshown;
+  for (int n = 0; n < nshown && is_locked(shown[k]); n++) k = ((k + dir) % nshown + nshown) % nshown;
+  if (is_locked(shown[k])) return;
+  vk = k;
   LvItem *it = &vault.items[shown[vk]];
   zoom = 1; pan_x = pan_y = 0;
+  mo_x = (rnd() % 2001) / 1000.0f - 1; mo_y = (rnd() % 2001) / 1000.0f - 1;
   char now[40];
   now_iso(now, sizeof now);
   lv_viewed(&vault, it, now);
@@ -1271,11 +1316,19 @@ static void show_item(int k) {
     if (can) { vid = lv_video_open(it->path, lv_key(&vault), slideshow); vid_clip = 0; }
     if (!vid && lv_clip_path(&vault, it, clip, sizeof clip)) { vid = lv_video_open(clip, lv_key(&vault), 1); vid_clip = 1; }
     if (vid) { vid_item = shown[vk]; lv_video_set_volume(vid, cfg.volume * 32768 / 100); }
+    if (vid && !vid_clip && !slideshow) { int t = resume_of(it); if (t > 0) resume_to = (int64_t)t * 1000; }
   }
   ask_big(shown[vk]);
 }
 static void open_viewer(int k, int show) {
   LOG("open_viewer %d show=%d\n", k, show);
+  if (k >= 0 && k < nshown && is_locked(shown[k]) && !show) {
+    sfx(SFX_ERROR);
+    char m[80];
+    snprintf(m, sizeof m, "Locked until the slideshow reaches level %d", vault.items[shown[k]].nsfw);
+    say(m);
+    return;
+  }
   slideshow = show;
   details = 0;
   details_y = 0;
@@ -1291,6 +1344,7 @@ static void close_viewer(void) {
   LOG("close_viewer screen=%d\n", screen);
   account_time();
   stop_video();
+  resume_save();
   if (lv_vault_save_views(&vault) != 0) LOG("views.csv could not be saved\n");
   screen = S_LIBRARY;
   sel = vk;
@@ -1306,28 +1360,75 @@ static void draw_viewer(void) {
   if (nshown == 0) { screen = S_LIBRARY; return; }
   LvItem *it = &vault.items[shown[vk]];
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 255));
-  // --- what's shown: the video's frame, else the picture (the thumbnail while it loads) ---
+  xfade_wanted = slideshow && so.fade;
+  // the thumbnails wanted here: this one (its glow) and the filmstrip's
+  {
+    int want_t[16], nwt = 0;
+    for (int d = 0; d < 11 && nwt < 16; d++) {
+      int k = vk + (d % 2 ? (d + 1) / 2 : -(d / 2));
+      if (k >= 0 && k < nshown && !thumb_of(shown[k]) && tstate[shown[k]] != 3) want_t[nwt++] = shown[k];
+    }
+    if (nwt) ask_thumbs(want_t, nwt);
+  }
+  // --- the glow: the picture's own colours, dim, filling the screen around it ---
+  vita2d_texture *th_now = thumb_of(shown[vk]);
+  if (cfg.glow && th_now && zoom < 1.01f) draw_cover(th_now, 0, 0, W, H, RGBA(255, 255, 255, 60));
+  // --- what's shown: the video's frame, else the picture (the thumbnail while it loads; in a
+  //     fading slideshow, the one before until this one is ready) ---
   vita2d_texture *t = NULL;
   int is_frame = 0;
   if (vid) { t = lv_video_frame(vid); is_frame = t != NULL; }
   if (!t) t = big_item == shown[vk] ? big_tex : NULL;
-  if (!t) t = thumb_of(shown[vk]);
+  if (!t && xfade_wanted && big_tex && big_item >= 0 && !vid) t = big_tex;
+  if (!t) t = th_now;
   float avail_h = H - details_y * 300;
+  // the slide's motion (pictures in a slideshow): a slow pan, a slow zoom, or breathing
+  float ms = 1, mdx = 0, mdy = 0;
+  if (slideshow && so.motion && !is_frame && t != th_now) {
+    float p = (frame_no - slide_at) / (pace_now() * 60.0f);
+    p = p < 0 ? 0 : p > 1 ? 1 : p;
+    float e = p * p * (3 - 2 * p);
+    if (so.motion == 1) { ms = 1.08f; mdx = mo_x * W * 0.03f * (1 - 2 * e); mdy = mo_y * H * 0.02f * (1 - 2 * e); }
+    else if (so.motion == 2) { ms = 1 + 0.12f * (1 - (1 - p) * (1 - p)); mdx = mo_x * W * 0.02f * p; mdy = mo_y * H * 0.02f * p; }
+    else { ms = 1 + 0.015f * (1 - cosf((frame_no - slide_at) * 6.2832f / 252)); }
+  }
+  // (the picture before, fading out under this one)
+  float fade = 1;
+  if (fade_tex) {
+    unsigned age = frame_no - fade_at;
+    if (age >= 36 || !slideshow) { free_later(fade_tex); fade_tex = NULL; }
+    else {
+      fade = age / 36.0f;
+      float fw = vita2d_texture_get_width(fade_tex), fh = vita2d_texture_get_height(fade_tex);
+      float fs = fminf(W / fw, avail_h / fh) * (so.motion == 1 ? 1.08f : 1);
+      vita2d_draw_texture_tint_scale(fade_tex, (W - fw * fs) / 2, (avail_h - fh * fs) / 2, fs, fs, RGBA(255, 255, 255, (int)(255 * (1 - fade))));
+    }
+  }
   if (t) {
     float tw = is_frame ? lv_video_width(vid) : vita2d_texture_get_width(t);
     float th = is_frame ? lv_video_height(vid) : vita2d_texture_get_height(t);
-    float s = fminf(W / tw, avail_h / th) * zoom;
+    float s = fminf(W / tw, avail_h / th) * zoom * ms;
     float dw = tw * s, dh = th * s;
     // keep a zoomed picture's edges on screen
     float mx = fmaxf(0, (dw - W) / 2), my = fmaxf(0, (dh - avail_h) / 2);
     pan_x = fminf(mx, fmaxf(-mx, pan_x));
     pan_y = fminf(my, fmaxf(-my, pan_y));
-    float x = (W - dw) / 2 + pan_x + swipe_x, y = (avail_h - dh) / 2 + pan_y;
-    vita2d_draw_texture_scale(t, x, y, s, s);
+    float x = (W - dw) / 2 + pan_x + swipe_x + mdx, y = (avail_h - dh) / 2 + pan_y + mdy;
+    if (fade < 1) vita2d_draw_texture_tint_scale(t, x, y, s, s, RGBA(255, 255, 255, (int)(255 * fade)));
+    else vita2d_draw_texture_scale(t, x, y, s, s);
   } else {
     text_center(W / 2, H / 2, DIM, 18, big_failed ? "This file can't be shown on the Vita" : "Loading…");
   }
   if (!it->path) text_center(W / 2, (int)avail_h - 30, ACC2, 16, "This file isn't on the memory card (only its thumbnail)");
+  if (vid && !vid_clip && resume_to >= 0 && lv_video_duration(vid) > 0) {
+    lv_video_seek(vid, resume_to);
+    char a1[16], m[64];
+    fmt_time((uint64_t)resume_to, a1, sizeof a1);
+    snprintf(m, sizeof m, "Carrying on from %s", a1);
+    say(m);
+    resume_to = -1;
+  }
+  if (vid && !vid_clip && ab_a >= 0 && ab_b > ab_a && (int64_t)lv_video_pos(vid) >= ab_b) lv_video_seek(vid, ab_a);
   if (vid && vid_clip && is_video(it)) text_center(W / 2, 30, with_alpha(TEXT, 200), 15, "Preview clip: the Vita can't play this video's own file");
 
   // --- touch: swipe for the next one, pinch to zoom, drag when zoomed, tap for the controls ---
@@ -1349,7 +1450,8 @@ static void draw_viewer(void) {
     swipe_x *= 0.7f;
     if (zoom < 1.01f) zoom = 1;
   }
-  if (in.dbl) { zoom = zoom > 1.5f ? 1 : 2.5f; pan_x = (W / 2.0f - in.tap_x) * (zoom - 1); pan_y = (H / 2.0f - in.tap_y) * (zoom - 1); }
+  if (in.dbl && cfg.dbltap && details_y < 0.5f) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); heart_at = frame_no ? frame_no : 1; }
+  else if (in.dbl) { zoom = zoom > 1.5f ? 1 : 2.5f; pan_x = (W / 2.0f - in.tap_x) * (zoom - 1); pan_y = (H / 2.0f - in.tap_y) * (zoom - 1); }
   else if (in.tap && details_y < 0.5f) {
     if (vid && !vid_clip && in.tap_y > H - 70) {
       uint64_t d = lv_video_duration(vid);
@@ -1357,12 +1459,16 @@ static void draw_viewer(void) {
     } else if (frame_no < chrome_until && in.tap_x < 70 && in.tap_y < 60) { close_viewer(); return; }
     else if (frame_no < chrome_until && in.tap_x > W - 70 && in.tap_y < 60) { details = 1; }
     else if (frame_no < chrome_until && in.tap_x > W - 140 && in.tap_x < W - 70 && in.tap_y < 60) { char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); }
+    else if (frame_no < chrome_until && in.tap_y > H - 90 && !(vid && !vid_clip) && !slideshow && nshown > 1) {} // (the filmstrip's)
     else chrome_until = frame_no < chrome_until ? frame_no : frame_no + 240;
   }
 
   // --- buttons ---
-  if (in.pressed & (details ? SCE_CTRL_RTRIGGER : (SCE_CTRL_RIGHT | SCE_CTRL_RTRIGGER))) { sfx(SFX_TICK); show_item(vk + 1); return; }
-  if (in.pressed & (details ? SCE_CTRL_LTRIGGER : (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER))) { sfx(SFX_TICK); show_item(vk - 1); return; }
+  int playing_real = vid && !vid_clip;
+  unsigned next_b = details || playing_real ? SCE_CTRL_RTRIGGER : (SCE_CTRL_RIGHT | SCE_CTRL_RTRIGGER);
+  unsigned prev_b = details || playing_real ? SCE_CTRL_LTRIGGER : (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER);
+  if ((in.pressed & next_b) && !(in.now & SCE_CTRL_LTRIGGER)) { sfx(SFX_TICK); show_item(ss.on && slideshow ? session_pick(vk) : vk + 1); return; }
+  if ((in.pressed & prev_b) && !(in.now & SCE_CTRL_RTRIGGER)) { sfx(SFX_TICK); show_item(vk - 1); return; }
   if (in.pressed & SCE_CTRL_CIRCLE) { if (details) details = 0; else { close_viewer(); return; } }
   if (in.pressed & SCE_CTRL_TRIANGLE) { sfx(details ? SFX_CLOSE : SFX_OPEN); details = !details; }
   if (in.pressed & SCE_CTRL_SQUARE) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); chrome_until = frame_no + 120; }
@@ -1372,8 +1478,25 @@ static void draw_viewer(void) {
     else { zoom = zoom > 1.5f ? 1 : 2.5f; pan_x = pan_y = 0; }
   }
   if (vid && !vid_clip && !details) {
-    if (in.pressed & SCE_CTRL_UP) lv_video_seek(vid, (int64_t)lv_video_pos(vid) + 10000);
-    if (in.pressed & SCE_CTRL_DOWN) lv_video_seek(vid, (int64_t)lv_video_pos(vid) - 10000);
+    // ←→ ten seconds; ↑ faster (2×, 4×, back); ↓ the A-B loop (A here, B here, off)
+    if (in.pressed & SCE_CTRL_RIGHT) { lv_video_seek(vid, (int64_t)lv_video_pos(vid) + 10000); chrome_until = frame_no + 120; }
+    if (in.pressed & SCE_CTRL_LEFT) { lv_video_seek(vid, (int64_t)lv_video_pos(vid) - 10000); chrome_until = frame_no + 120; }
+    if (in.pressed & SCE_CTRL_UP) {
+      int sp = lv_video_speed(vid) == 100 ? 200 : lv_video_speed(vid) == 200 ? 400 : 100;
+      lv_video_set_speed(vid, sp);
+      sfx(SFX_TOGGLE);
+      say(sp == 100 ? "Normal speed" : sp == 200 ? "2\u00d7 (no sound)" : "4\u00d7 (no sound)");
+    }
+    if (in.pressed & SCE_CTRL_DOWN) {
+      int64_t pos = (int64_t)lv_video_pos(vid);
+      sfx(SFX_TOGGLE);
+      if (ab_a < 0) { ab_a = pos; say("Loop: A set \u00b7 \u2193 again for B"); }
+      else if (ab_b < 0 && pos > ab_a + 500) { ab_b = pos; lv_video_seek(vid, ab_a); say("Looping A to B \u00b7 \u2193 to stop"); }
+      else { ab_a = ab_b = -1; say("Loop off"); }
+      chrome_until = frame_no + 180;
+    }
+    // the left stick scrubs: further for a harder push
+    if (fabsf(in.lx) > 0.4f && frame_no % 6 == 0) { lv_video_seek(vid, (int64_t)lv_video_pos(vid) + (int64_t)(in.lx * 4000)); chrome_until = frame_no + 120; }
   } else if (zoom > 1.01f) {
     pan_x -= in.lx * 12; pan_y -= in.ly * 12;
   }
@@ -1382,14 +1505,35 @@ static void draw_viewer(void) {
   // --- the slideshow moves on by itself: pictures after the interval, videos when they end ---
   if (slideshow) {
     int is_moving = vid && !vid_clip;
-    if ((is_moving && lv_video_ended(vid)) || (!is_moving && frame_no - slide_at > (unsigned)cfg.interval * 60)) {
-      if (cfg.shuffle && nshown > 1) { int n; do n = rnd() % nshown; while (n == vk); show_item(n); }
+    // (in a session, videos and GIFs stay half as long again as a picture, as the PC's 1.5x)
+    float secs = ss.on ? pace_now() * (is_moving || vid ? 1.5f : 1) : (float)cfg.interval;
+    int over = ss.on ? (is_moving && lv_video_ended(vid)) || frame_no - slide_at > (unsigned)(secs * 60)
+                     : (is_moving && lv_video_ended(vid)) || (!is_moving && frame_no - slide_at > (unsigned)(secs * 60));
+    if (over) {
+      if (ss.on) {
+        int n = session_pick(vk);
+        if (n < 0) { slideshow = 0; say("Nothing more at this level"); }
+        else show_item(n);
+      } else if (cfg.shuffle && nshown > 1) { int n; do n = rnd() % nshown; while (n == vk); show_item(n); }
       else show_item(vk + 1);
       return;
     }
-    float p = is_moving ? 0 : (frame_no - slide_at) / (float)(cfg.interval * 60);
-    vita2d_draw_rectangle(0, H - 3, W * p, 3, with_alpha(ACC, 200));
+    float p = is_moving && !ss.on ? 0 : (frame_no - slide_at) / (secs * 60);
+    vita2d_draw_rectangle(0, H - 3, W * fminf(1, p), 3, with_alpha(ACC, 200));
+    // the session: how far it's come, a heart at the tip
+    if (ss.on && ss.nst) {
+      float q = (float)(ss.ms / (ss.nst * level_ms()));
+      q = q > 1 ? 1 : q;
+      vita2d_draw_rectangle(0, H - 9, W, 2, with_alpha(TEXT, 30));
+      vita2d_draw_rectangle(0, H - 9, W * q, 2, with_alpha(ACC, 150));
+      heart(fmaxf(8, W * q), H - 9, 5, ACC);
+    }
   }
+  // (a double tap's heart)
+  if (heart_at && frame_no - heart_at < 40) {
+    float a = 1 - (frame_no - heart_at) / 40.0f, sz = 20 + (frame_no - heart_at) * 0.6f;
+    heart(W / 2, H / 2, sz, with_alpha(ACC, (int)(230 * a)));
+  } else heart_at = 0;
 
   // --- the controls on top, fading away ---
   int chrome = frame_no < chrome_until || details || (vid && !vid_clip && lv_video_paused(vid));
@@ -1422,10 +1566,36 @@ static void draw_viewer(void) {
       fmt_time(d, a2, sizeof a2);
       text(40, H - 44, with_alpha(TEXT, a), 14, a1);
       text(W - 40 - text_w(14, a2), H - 44, with_alpha(TEXT, a), 14, a2);
+      // the loop's ends, the speed, and what the buttons do
+      if (d && ab_a >= 0) rrect(40 + (W - 80) * fminf(1, ab_a / (float)d) - 2, H - 40, 4, 18, 2, with_alpha(ACC2, a));
+      if (d && ab_b >= 0) rrect(40 + (W - 80) * fminf(1, ab_b / (float)d) - 2, H - 40, 4, 18, 2, with_alpha(ACC2, a));
+      char hint[96];
+      snprintf(hint, sizeof hint, "%s\u2190\u2192 10 s  \u00b7  \u2191 speed  \u00b7  \u2193 A-B loop  \u00b7  L R next",
+               lv_video_speed(vid) == 200 ? "2\u00d7  \u00b7  " : lv_video_speed(vid) == 400 ? "4\u00d7  \u00b7  " : "");
+      text_center(W / 2, H - 44, with_alpha(DIM, a), 13, hint);
       if (lv_video_paused(vid)) {
         circle(W / 2, H / 2, 40, RGBA(0, 0, 0, 140));
         for (int k = 0; k < 30; k++) vita2d_draw_rectangle(W / 2 - 10 + k, H / 2 - 15 + k / 2, 1, 30 - k, with_alpha(TEXT, a));
       }
+    }
+  }
+
+  // --- the filmstrip: the ones either side, to jump to (with the controls; not over a video's bar) ---
+  if (chrome && !(vid && !vid_clip) && details_y < 0.05f && nshown > 1 && !slideshow) {
+    int a = frame_no + 30 > chrome_until ? (int)((chrome_until - frame_no) * 8) : 240;
+    if (a > 240 || a < 0) a = 240;
+    for (int k = 0; k < 90; k++) vita2d_draw_rectangle(0, H - 90 + k, W, 1, RGBA(0, 0, 0, k * a / 300));
+    for (int d = -6; d <= 6; d++) {
+      int k = vk + d;
+      if (k < 0 || k >= nshown) continue;
+      float cx = W / 2.0f + d * 70, sz = d ? 58 : 66;
+      float x = cx - sz / 2, y = H - 14 - sz;
+      if (!d) rrect(x - 3, y - 3, sz + 6, sz + 6, 9, with_alpha(ACC, a));
+      vita2d_texture *ft = thumb_of(shown[k]);
+      if (ft) draw_cover(ft, x, y, sz, sz, RGBA(255, 255, 255, d ? a * 3 / 4 : a));
+      else rrect(x, y, sz, sz, 6, with_alpha(SURF2, a));
+      if (is_locked(shown[k])) vita2d_draw_rectangle(x, y, sz, sz, RGBA(14, 10, 14, 220));
+      if (d && in.tap && in.tap_x >= x && in.tap_x < x + sz && in.tap_y >= y && in.tap_y < y + sz) { sfx(SFX_TICK); show_item(k); return; }
     }
   }
 
@@ -1523,18 +1693,16 @@ static void draw_viewer(void) {
 // ----- settings -----
 static void draw_settings(void) {
   text(30, 44, TEXT, 26, "Settings");
-  char v1[64], v2[64], v3[64];
-  snprintf(v1, sizeof v1, "%d seconds", cfg.interval);
-  snprintf(v2, sizeof v2, "%s", cfg.shuffle ? "On" : "Off");
+  char v3[64];
   snprintf(v3, sizeof v3, "%d%%", cfg.volume);
   char v4[16];
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   struct { const char *name, *value, *hint; } rows[] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
-    {"Slideshow: each picture for", v1, "← → to change"},
-    {"Slideshow: shuffle", v2, "Plays the items in a random order"},
     {"Video volume", v3, "← → to change"},
     {"Interface sounds", v4, "The Vita's own clicks and chimes"},
+    {"Double tap in the full view", cfg.dbltap ? "Heart" : "Zoom", "Zooms in, or gives it a heart"},
+    {"Glow behind pictures", cfg.glow ? "On" : "Off", "The picture's own colours fill the screen around it"},
     {"Open another vault", "", "The vaults on the memory card"},
     {"Clear the thumbnail cache", "", "They're made again as you scroll"},
     {"Cover the screen", "SELECT", "A plain screen, at a press, anywhere"},
@@ -1558,11 +1726,11 @@ static void draw_settings(void) {
   if (d) {
     switch (set_sel - 1) {
       case -1: if (in.pressed & SCE_CTRL_CROSS && !ime_open) ime_start(2, "Search tags, names, categories", query, 0); break;
-      case 0: cfg.interval = cfg.interval + d * (cfg.interval >= 10 ? 5 : 1); if (cfg.interval > 60) cfg.interval = 2; if (cfg.interval < 2) cfg.interval = 60; break;
-      case 1: cfg.shuffle = !cfg.shuffle; break;
-      case 2: cfg.volume += d * 10; if (cfg.volume > 100) cfg.volume = 0; if (cfg.volume < 0) cfg.volume = 100; break;
-      case 3: cfg.sounds += d * 10; if (cfg.sounds > 100) cfg.sounds = 0; if (cfg.sounds < 0) cfg.sounds = 100; sfx_volume(cfg.sounds); sfx(SFX_TOGGLE); break;
-      case 4: if (in.pressed & SCE_CTRL_CROSS) { lv_vault_save_views(&vault); find_vaults(); screen = S_PICK; return; } break;
+      case 0: cfg.volume += d * 10; if (cfg.volume > 100) cfg.volume = 0; if (cfg.volume < 0) cfg.volume = 100; break;
+      case 2: cfg.dbltap = !cfg.dbltap; sfx(SFX_TOGGLE); break;
+      case 3: cfg.glow = !cfg.glow; sfx(SFX_TOGGLE); break;
+      case 1: cfg.sounds += d * 10; if (cfg.sounds > 100) cfg.sounds = 0; if (cfg.sounds < 0) cfg.sounds = 100; sfx_volume(cfg.sounds); sfx(SFX_TOGGLE); break;
+      case 4: if (in.pressed & SCE_CTRL_CROSS) { lv_vault_save_views(&vault); resume_save(); find_vaults(); screen = S_PICK; return; } break;
       case 5:
         if (in.pressed & SCE_CTRL_CROSS) {
           DIR *dd = opendir(cache_dir);
@@ -1650,6 +1818,7 @@ int main(void) {
   pgf = vita2d_load_default_pgf();
   rnd_state ^= (unsigned)time(NULL);
   cfg_load();
+  show_load();
   sfx_volume(cfg.sounds);
   sfx(SFX_START);
 
@@ -1722,6 +1891,7 @@ int main(void) {
       case S_VIEWER: draw_viewer(); break;
       case S_SETTINGS: draw_settings(); break;
       case S_WEB: draw_web(); break;
+      case S_SHOW: draw_show_plan(); break;
       case S_WEBVIEW: draw_webview(); break;
       case S_COVER: draw_cover_screen(); if (in.tap) { screen = cover_return; } break;
     }
@@ -1751,6 +1921,13 @@ int main(void) {
       } else if (load_state == 2 || load_state == 3) finish_open();
     }
     if (edits_at && frame_no - edits_at > 150 && lsheet == LS_NONE) save_edits_now();
+    // the slideshow session's clock, and the sleep timer
+    if (loaded_vault && show_tick(screen == S_VIEWER && slideshow)) {
+      slideshow = 0;
+      if (vid) lv_video_pause(vid, 1);
+      sfx(SFX_CLOSE);
+      say("Sleep timer: the slideshow has stopped");
+    }
     static unsigned cfg_tick;
     if ((screen == S_WEB || screen == S_WEBVIEW) && ++cfg_tick % 600 == 0) cfg_save();
     // views reach the card now and then while looking (and always when leaving the full view)

@@ -5,7 +5,9 @@
 // the day's backup), a moment after the last one. Compiled inside main.c (#include "lib.c").
 
 static const char *KIND4[] = {"Everything", "Pictures", "GIFs", "Videos"};
-static const char *ALBUMS[] = {"All", "Never opened", "Forgotten", "Long videos", "Most loved", "1 star"};
+static const char *ALBUMS[] = {"All", "Never opened", "Forgotten", "Long videos", "Most loved", "1 star", "Continue watching"};
+#define NALBUMS 7
+static int resume_of(const LvItem *it); // (show.c)
 static const char *SIZES[] = {"Small", "Medium", "Large"};
 static const int SIZE_H[] = {120, 168, 220};
 static struct { int nsfw_max, stars_min, album, size; char coll[64]; } lf = {0, 0, 0, 1, ""};
@@ -41,6 +43,7 @@ static int lib_pass(int i) {
     case 3: if (h->kind != LV_VIDEO || it->duration < 300) return 0; break;
     case 4: if (lv_likes_of(&vault, it) < 2) return 0; break;
     case 5: if (it->quality != 1) return 0; break;
+    case 6: if (resume_of(it) <= 0) return 0; break;
   }
   if (lsearch.n && !lv_search_match(&lsearch, it)) return 0;
   return 1;
@@ -94,7 +97,7 @@ static void saved_load(void) {
     if (n < 7) continue;
     snprintf(s.name, sizeof s.name, "%.39s", p[0]);
     snprintf(s.query, sizeof s.query, "%s", p[1]);
-    s.kind = atoi(p[2]); s.nsfw = atoi(p[3]); s.stars = atoi(p[4]); s.album = atoi(p[5]);
+    s.kind = atoi(p[2]); s.nsfw = atoi(p[3]); s.stars = atoi(p[4]); s.album = atoi(p[5]); if (s.album < 0 || s.album >= NALBUMS) s.album = 0;
     snprintf(s.coll, sizeof s.coll, "%s", p[6]);
     saved[nsaved_f++] = s;
   }
@@ -210,7 +213,7 @@ static void draw_filters_sheet(void) {
       case F_KIND: cfg.kind = (cfg.kind + d + 4) % 4; break;
       case F_NSFW: lf.nsfw_max = (lf.nsfw_max + d + 11) % 11; break;
       case F_STARS: lf.stars_min = (lf.stars_min + d + 4) % 4; break;
-      case F_ALBUM: lf.album = (lf.album + d + 6) % 6; break;
+      case F_ALBUM: lf.album = (lf.album + d + NALBUMS) % NALBUMS; break;
       case F_COLL: if (!coll_next(d)) { changed = 0; sfx(SFX_ERROR); say("No collections in this vault"); } break;
       case F_SIZE: lf.size = (lf.size + d + 3) % 3; break;
       case F_TAGS: changed = 0; if (in.pressed & SCE_CTRL_CROSS) { sfx(SFX_OPEN); lsheet = LS_TAGS; lsheet_sel = 0; } break;

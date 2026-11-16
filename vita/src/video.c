@@ -60,6 +60,7 @@ struct LvVideo {
   int volume;
   volatile int run;
   volatile int paused;
+  volatile int speed; // percent: 100, 200, 400 (faster plays without sound)
   int w, h;
   uint64_t duration;
   vita2d_texture tex; // (sceAvPlayer: points at its frame)
@@ -270,8 +271,8 @@ static int64_t io_seek(void *p, int64_t off, int whence) {
 
 static int64_t now_us(void) { return (int64_t)sceKernelGetProcessTimeWide(); }
 static int64_t sw_clock(LvVideo *v) {
-  if (v->as >= 0) return v->clock_base_ms + (int64_t)(v->played * 1000 / 48000);
-  return v->clock_base_ms + (now_us() - v->wall_start) / 1000;
+  if (v->as >= 0 && v->speed == 100) return v->clock_base_ms + (int64_t)(v->played * 1000 / 48000);
+  return v->clock_base_ms + (now_us() - v->wall_start) * v->speed / 100000;
 }
 
 static void ring_put(LvVideo *v, const int16_t *s, int frames) {
@@ -404,7 +405,7 @@ static void *sw_decode_main(void *arg) {
       v->ended = 0;
       continue;
     }
-    if (pkt->stream_index == v->as && v->actx) {
+    if (pkt->stream_index == v->as && v->actx && v->speed == 100) {
       if (avcodec_send_packet(v->actx, pkt) == 0) {
         while (avcodec_receive_frame(v->actx, af) == 0) {
           int n = swr_convert(v->swr, (uint8_t **)&pcm, 48000, (const uint8_t **)af->extended_data, af->nb_samples);
@@ -572,6 +573,7 @@ LvVideo *lv_video_open(const char *path, const uint8_t *key, int loop) {
   if (key) { memcpy(v->key, key, 32); v->has_key = 1; }
   v->loop = loop;
   v->volume = SCE_AUDIO_VOLUME_0DB;
+  v->speed = 100;
   v->add_thread = v->audio_thread = -1;
   v->run = 1;
   v->sw = ext(path, "webm") || ext(path, "mkv");
@@ -611,6 +613,27 @@ void lv_video_seek(LvVideo *v, int64_t ms) {
   else if (v->ready) sceAvPlayerJumpToTime(v->h_av, (uint64_t)ms);
 }
 void lv_video_set_volume(LvVideo *v, int vol) { if (v) v->volume = vol; }
+int lv_video_speed(const LvVideo *v) { return v ? v->speed : 100; }
+void lv_video_set_speed(LvVideo *v, int pct) {
+  if (!v || pct == v->speed || (pct != 100 && pct != 200 && pct != 400)) return;
+  if (!v->sw) {
+    if (v->ready) sceAvPlayerSetTrickSpeed(v->h_av, pct);
+    v->speed = pct;
+    return;
+  }
+  // the clock goes on from where it is, now at the new pace (on the wall clock while it's fast: the
+  // sound stops, as the system player's does)
+  pthread_mutex_lock(&v->mx);
+  int64_t t = sw_clock(v);
+  v->ring_n = 0;
+  v->ring_r = 0;
+  v->played = 0;
+  v->clock_base_ms = t;
+  v->wall_start = now_us();
+  v->speed = pct;
+  pthread_cond_broadcast(&v->cv);
+  pthread_mutex_unlock(&v->mx);
+}
 
 void lv_video_close(LvVideo *v) {
   if (!v) return;

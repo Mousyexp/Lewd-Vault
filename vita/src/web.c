@@ -824,7 +824,7 @@ static void draw_web(void) {
       say(m);
     }
     if ((in.pressed & SCE_CTRL_CROSS) && nposts) { sfx(SFX_SELECT); wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; screen = S_WEBVIEW; wv_show(wsel); return; }
-    if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_SETTINGS; set_sel = 0; }
+    if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_SHOW; plan_sel = 0; }
     if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = cfg.site; }
   }
   draw_bar();
