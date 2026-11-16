@@ -1577,7 +1577,7 @@
     requestAnimationFrame(() => el.classList.add('in'));
     drawDeck();
   }
-  window.vaultPhone = { openSort, dial };
+  window.vaultPhone = { openSort, dial, haptic: buzz };
 
   // --- motion ---
   // A freshly drawn grid (a new filter, a new order) ripples in from the top left, diagonal by

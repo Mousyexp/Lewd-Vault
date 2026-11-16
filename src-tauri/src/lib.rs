@@ -42,6 +42,7 @@ mod maint;
 #[cfg(mobile)]
 mod media;
 mod pack;
+mod chat;
 mod phone;
 mod recycle;
 mod storage;
@@ -1458,6 +1459,11 @@ fn api_call(vault: &Arc<Vault>, name: String, args: Vec<Value>) -> Res<Value> {
         "updateDownload" => maint::update_download(&str_of(&a(0))),
         "updateProgress" => Ok(maint::update_progress()),
         "appVersion" => Ok(json!(env!("CARGO_PKG_VERSION"))),
+        // Chat (chat.rs): messages and rooms between Lewd Vault users, over Nostr relays and nearby phones
+        n if n.starts_with("chat") => {
+            let v = vault.clone();
+            chat::api(&vault.app_dir("chat"), n, &args, &move |id: &str| v.resolve(id).and_then(|p| crypt::read(&p).map_err(err)))
+        }
         "findDuplicates" => dupes::start(vault.clone()),
         "duplicateProgress" => Ok(dupes::progress(&vault)),
         "setDiscreet" => discreet::start(vault.clone(), a(0).as_bool() == Some(true)),
@@ -1717,6 +1723,14 @@ fn serve(vault: &Vault, req: &HttpRequest<Vec<u8>>) -> Response<Vec<u8>> {
         return match phone::inbox_file(&name).map(fs::read) {
             Some(Ok(body)) => cors(200).header("Content-Type", phone::inbox_type(&name)).header("Content-Length", body.len().to_string()).body(body).unwrap(),
             _ => fail(404, "Not in the inbox".into()),
+        };
+    }
+    // /chat/<id>: a picture sent or received in a chat (chat.rs)
+    if let Some(rest) = req.uri().path().strip_prefix("/chat/") {
+        return match chat::media(rest) {
+            Some(body) => cors(200).header("Content-Type", "image/jpeg").header("Cache-Control", "no-store")
+                .header("Content-Length", body.len().to_string()).body(body).unwrap(),
+            None => fail(404, "Gone".into()),
         };
     }
     // /t/<thumb>?w=<width>: a thumbnail for the grid (see grid_thumb); never changes, so cached for good

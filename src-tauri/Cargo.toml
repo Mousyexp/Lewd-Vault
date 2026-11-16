@@ -32,6 +32,11 @@ getrandom = "0.2"
 chacha20 = "0.9" # (Untraceable mode, crypt.rs: the files encrypted)
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 image = { version = "0.25", default-features = false, features = ["webp", "jpeg", "png", "gif"] }
+k256 = { version = "0.13", features = ["schnorr", "ecdh"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+tungstenite = { version = "0.26", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 # Desktop-only (the iOS and Android builds skip them: no Recycle Bin, no second-instance forwarding, no global
 # hotkeys on a phone). The code that uses them is gated the same way.

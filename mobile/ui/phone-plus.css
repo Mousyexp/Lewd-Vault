@@ -351,3 +351,37 @@ html.phone #splash .sp-status { margin-top: 8px; font-size: 14px; font-weight: 5
 html.phone #splash.done { transform: none; }
 html.phone #splash.done .sp-heart { animation: none; transform: scale(2.4); opacity: 0; transition: transform .55s cubic-bezier(.6, 0, .3, 1), opacity .45s ease .1s; }
 html.phone #splash.done .sp-center::before, html.phone #splash.done .sp-title, html.phone #splash.done .sp-status { opacity: 0; transition: opacity .2s; }
+
+/* ---------- Chat (ui/chat.js) on the phones: the list, then a chat sliding over it ---------- */
+html.phone main:has(> #tab-chat:not(.hidden)) { padding: 0; }
+html.phone #tab-chat { height: auto; min-height: 100vh; }
+html.phone #tab-chat .ch-app { display: block; height: auto; }
+html.phone #tab-chat .ch-list { border: 0; background: transparent; min-height: 100vh; padding-top: var(--safe-t); }
+html.phone #tab-chat .ch-head { padding: 10px 16px 4px; }
+html.phone #tab-chat .ch-head h1 { font-size: 34px; }
+html.phone #tab-chat .ch-rows { overflow: visible; padding: 4px 6px calc(var(--tabbar) + var(--tab-b) + 120px); }
+html.phone #tab-chat .ch-net { position: fixed; bottom: calc(var(--tabbar) + var(--tab-b) + 76px); }
+html.phone #tab-chat .ch-new { position: fixed; right: 18px; bottom: calc(var(--tabbar) + var(--tab-b) + 16px); z-index: 30; }
+html.phone #tab-chat .ch-conv { position: fixed; inset: 0; height: var(--ch-vh, 100dvh); z-index: 60; transform: translateX(105%); transition: transform .34s cubic-bezier(.2, .9, .25, 1); box-shadow: -20px 0 40px rgba(0, 0, 0, .3); }
+html.phone #tab-chat .ch-app.in-chat .ch-conv { transform: none; }
+html.phone #tab-chat .ch-pick { display: none; }
+html.phone #tab-chat .ch-c-head { padding: calc(var(--safe-t) + 6px) 12px 10px; }
+html.phone #tab-chat .ch-c-head .ch-back { display: inline-grid; background: transparent; width: 34px; }
+html.phone #tab-chat .ch-composer { padding: 8px 10px calc(var(--safe-b) + 8px); background: color-mix(in srgb, var(--panel) 70%, transparent); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+html.phone.ch-chat-open .ios-tabbar { transform: translateY(160%); transition: transform .3s; }
+html.phone #tab-chat .ch-msg { max-width: 82%; }
+html.phone #tab-chat .ch-row:hover { background: transparent; }
+html.phone #tab-chat .ch-row:active { background: var(--ch-soft); }
+html.phone .ch-sheet-back { place-items: end center; }
+html.phone .ch-sheet { width: 100%; max-height: 88vh; border-radius: 26px 26px 0 0; border-bottom: 0; transform: translateY(100%); opacity: 1; padding-bottom: var(--safe-b); }
+html.phone .ch-sheet-back.in .ch-sheet { transform: none; }
+html.phone .ch-grab { display: block; width: 38px; height: 5px; border-radius: 99px; background: color-mix(in srgb, var(--text) 25%, transparent); margin: 8px auto 0; }
+html.phone .ch-attach { width: 100%; }
+html.phone .ch-grid { grid-template-columns: repeat(3, 1fr); gap: 3px; }
+html.phone .ch-pop-item { min-height: 46px; font-size: 16px; }
+html.phone .ch-viewer.protect img { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+html.phone .ios-tabbar button[data-tab="chat"], html.phone .ios-tabbar button[data-tab="more"] { position: relative; }
+html.phone.ch-has-unread .ios-tabbar button[data-tab="chat"]::after,
+html.phone.ch-has-unread:not(:has(.ios-tabbar button[data-tab="chat"])) .ios-tabbar button[data-tab="more"]::after {
+  content: var(--ch-unread); position: absolute; top: 2px; left: 54%; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 99px;
+  background: #ff3b5c; color: #fff; font: 700 11px/18px system-ui, -apple-system, sans-serif; text-align: center; }
