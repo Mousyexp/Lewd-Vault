@@ -194,7 +194,7 @@
   // milestones: the library reaching a size, a picture reaching 100 appreciations (each only once)
   const SIZES = [10, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
   const milestone = (key, title, sub) => {
-    if (!opt.milestones || opt.done.includes(key)) return;
+    if (!opt.milestones || opt.done.includes(key) || (key[0] === 'l' && html.classList.contains('no-fun'))) return;
     opt.done.push(key);
     saveOpt();
     cheer(title, sub);
@@ -366,7 +366,10 @@
       chips.append(b);
       return b;
     };
-    for (const [id, text] of SMART) chip(text, smart === id, () => { smart = smart === id ? '' : id; filterNow(); rerender(); drawChips(); buzz('select'); scrollTo({ top: 0, behavior: 'smooth' }); }, 'smart');
+    for (const [id, text] of SMART) {
+      const c = chip(text, smart === id, () => { smart = smart === id ? '' : id; filterNow(); rerender(); drawChips(); buzz('select'); scrollTo({ top: 0, behavior: 'smooth' }); }, 'smart');
+      if (id === 'loved' || id === 'unsure') c.dataset.fun = '1'; // (hearts and stars: fun features)
+    }
     if (opt.presets.length) chips.append(make('i', 'ph-chips-sep'));
     opt.presets.forEach((p, k) => {
       const b = chip(p.name, false, () => {
@@ -853,5 +856,109 @@
   addEventListener('phone-opt', applyAll);
   applyAll();
   new MutationObserver(() => checkSize()).observe($('count') || document.body, { childList: true, characterData: true, subtree: true });
-  window.vaultPhonePlus = { openSettings, cheer, confetti };
+
+  // =====================================================================================
+  // 6. the welcome, on a phone: an opening worth remembering
+  // =====================================================================================
+  // The first time the app opens: the heart fills up, the name rises letter by letter, hearts drift
+  // up, and "Get started" swipes it all away into the welcome's own steps (the fun features, then
+  // where the vault lives), each sliding in, with dots for where you are. At the end: confetti.
+  const HEART = 'M50 90C22 68 3 50 3 28 3 13 14 3 28 3c9 0 17 5 22 13C55 8 63 3 72 3c14 0 25 10 25 25 0 22-19 40-47 62z';
+  const welcomeEl = $('welcome');
+  function hello() {
+    if (document.querySelector('.ph-hello')) return;
+    const el = make('div', 'ph-hello');
+    el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Welcome');
+    el.innerHTML = `
+      <div class="ph-hello-sky" aria-hidden="true"><i></i><i></i><i></i></div>
+      <canvas class="ph-hello-hearts" aria-hidden="true"></canvas>
+      <div class="ph-hello-mid">
+        <svg class="ph-hello-heart" viewBox="-6 -8 112 110" aria-hidden="true">
+          <defs>
+            <clipPath id="phh-c"><path d="${HEART}"/></clipPath>
+            <linearGradient id="phh-f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffc2d6"/><stop offset=".5" stop-color="var(--accent, #ff6f96)"/><stop offset="1" stop-color="#7a2a48"/></linearGradient>
+          </defs>
+          <path d="${HEART}" fill="rgba(255,255,255,.08)" stroke="rgba(255,255,255,.75)" stroke-width="3.5" stroke-linejoin="round"/>
+          <g clip-path="url(#phh-c)"><g class="ph-hello-fill">
+            <path class="ph-hello-wave" d="M-100 20Q-87.5 12 -75 20T-50 20T-25 20T0 20T25 20T50 20T75 20T100 20T125 20T150 20T175 20T200 20V140H-100Z" fill="url(#phh-f)"/>
+            <path class="ph-hello-wave b" d="M-100 24Q-87.5 18 -75 24T-50 24T-25 24T0 24T25 24T50 24T75 24T100 24T125 24T150 24T175 24T200 24V140H-100Z" fill="rgba(255,255,255,.25)"/>
+          </g></g>
+          <ellipse cx="30" cy="24" rx="14" ry="9" fill="rgba(255,255,255,.35)"/>
+        </svg>
+        <h1 class="ph-hello-name" aria-label="Lewd Vault">${[...'Lewd Vault'].map((ch, k) => `<span style="--k:${k}">${ch === ' ' ? '&nbsp;' : ch}</span>`).join('')}</h1>
+        <p class="ph-hello-line">Your private collection. Only on this ${android ? 'phone' : 'iPhone'}.</p>
+        <div class="ph-hello-pills"><span>Private</span><span>Sorted</span><span>Yours</span></div>
+      </div>
+      <div class="ph-hello-foot">
+        <button class="ph-hello-go" type="button"><span>Get started</span></button>
+        <p class="ph-hello-swipe">or swipe up</p>
+      </div>`;
+    document.body.append(el);
+    // hearts drifting up behind it all
+    const cv = el.querySelector('canvas'), cx = cv.getContext('2d');
+    const dpr = Math.min(2, devicePixelRatio || 1);
+    cv.width = innerWidth * dpr; cv.height = innerHeight * dpr; cx.scale(dpr, dpr);
+    const hearts = Array.from({ length: 18 }, () => ({ x: Math.random() * innerWidth, y: innerHeight + Math.random() * innerHeight, s: .5 + Math.random() * 1.1, v: .4 + Math.random() * .9, t: Math.random() * 6 }));
+    let raf = 0;
+    const draw = () => {
+      cx.clearRect(0, 0, innerWidth, innerHeight);
+      for (const h of hearts) {
+        h.y -= h.v; h.t += .02;
+        if (h.y < -30) { h.y = innerHeight + 20; h.x = Math.random() * innerWidth; }
+        cx.save(); cx.translate(h.x + Math.sin(h.t) * 14, h.y); cx.scale(h.s, h.s); cx.globalAlpha = .18 + .2 * Math.abs(Math.sin(h.t));
+        cx.fillStyle = '#ff8fb3'; cx.beginPath(); cx.moveTo(0, 6); cx.bezierCurveTo(-11, -2, -6, -12, 0, -6); cx.bezierCurveTo(6, -12, 11, -2, 0, 6); cx.fill(); cx.restore();
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    if (!reduced()) raf = requestAnimationFrame(draw);
+    requestAnimationFrame(() => el.classList.add('in'));
+    const go = () => {
+      if (el.classList.contains('out')) return;
+      buzz('medium');
+      el.classList.add('out');
+      welcomeEl.classList.add('ph-steps-in');
+      setTimeout(() => { cancelAnimationFrame(raf); el.remove(); }, 750);
+    };
+    el.querySelector('.ph-hello-go').onclick = go;
+    let y0 = null;
+    el.addEventListener('touchstart', e => { y0 = e.touches[0].clientY; }, { passive: true });
+    el.addEventListener('touchmove', e => { if (y0 != null && y0 - e.touches[0].clientY > 0) el.style.setProperty('--lift', Math.min(160, y0 - e.touches[0].clientY) + 'px'); }, { passive: true });
+    el.addEventListener('touchend', e => { const d = y0 == null ? 0 : y0 - e.changedTouches[0].clientY; y0 = null; el.style.removeProperty('--lift'); if (d > 90) go(); }, { passive: true });
+  }
+  if (welcomeEl) {
+    // step dots and slide-ins for the welcome's own steps
+    const dots = make('div', 'ph-wl-dots');
+    dots.setAttribute('aria-hidden', 'true');
+    for (let k = 0; k < 3; k++) dots.append(make('i'));
+    const card = welcomeEl.querySelector('.wl-card');
+    if (card) card.prepend(dots);
+    const markDot = () => {
+      const fun = welcomeEl.classList.contains('on-fun');
+      const at = document.querySelector('.ph-hello') ? 0 : fun ? 1 : 2;
+      [...dots.children].forEach((d, k) => d.classList.toggle('on', k === at));
+    };
+    let wasFirst = false, helloShown = false;
+    const watch = () => {
+      const open = !welcomeEl.classList.contains('hidden');
+      const first = welcomeEl.classList.contains('first');
+      if (open && first) { wasFirst = true; if (!helloShown) { helloShown = true; hello(); } }
+      // the first welcome done: you're all set
+      if (!open && wasFirst) { wasFirst = false; setTimeout(() => cheer('You\'re all set!', 'Add your first pictures in Add.'), 400); }
+      markDot();
+    };
+    new MutationObserver(watch).observe(welcomeEl, { attributes: true, attributeFilter: ['class'] });
+    watch(); // (it may have opened before this file loaded)
+    // each step slides in as it appears
+    // (only a step going from hidden to shown: its own animation class changing must not set it off again)
+    new MutationObserver(list => {
+      for (const m of list) {
+        const t = m.target;
+        if (!t.classList || !t.classList.contains('wl-step') || t.classList.contains('hidden') || !/\bhidden\b/.test(m.oldValue || '')) continue;
+        t.classList.remove('ph-step-in'); void t.offsetWidth; t.classList.add('ph-step-in');
+      }
+      markDot();
+    }).observe(welcomeEl, { subtree: true, attributes: true, attributeFilter: ['class'], attributeOldValue: true });
+  }
+
+  window.vaultPhonePlus = { openSettings, cheer, confetti, hello };
 })();

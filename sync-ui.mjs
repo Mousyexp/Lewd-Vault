@@ -306,6 +306,7 @@ patch(`</body>`, `<script src="/desktop.js"></script>
 <script src="/share.js"></script>
 <script src="/extras.js"></script>
 <script src="/streamline.js"></script>
+<script src="/fun.js"></script>
 <script src="/phone.js"></script>
 <script src="/phone-plus.js"></script>
 </body>`);
@@ -346,6 +347,7 @@ copy(new URL('ui/coach.js', here), new URL('coach.js', out));
 copy(new URL('ui/share.js', here), new URL('share.js', out));
 copy(new URL('ui/extras.js', here), new URL('extras.js', out));
 copy(new URL('ui/streamline.js', here), new URL('streamline.js', out));
+copy(new URL('ui/fun.js', here), new URL('fun.js', out)); // (the fun features: appreciating, stars, NSFW levels)
 copy(new URL('mobile/ui/phone.js', here), new URL('phone.js', out));
 copy(new URL('mobile/ui/phone-plus.js', here), new URL('phone-plus.js', out));
 // the app icon presets' small pictures, for Settings → Phone → App icon (tools/make-icons.mjs)

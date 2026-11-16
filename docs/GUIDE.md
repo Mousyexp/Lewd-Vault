@@ -126,6 +126,14 @@ changed), **Health check** finds missing files and broken previews and fixes the
 installs a newer release in one click. The app also keeps 14 days of `index.csv`, `views.csv` and
 settings in `_app/backups`. **Export to Excel** writes the library as a spreadsheet.
 
+## Fun features
+
+Appreciating (the ♥ button and its counts), star ratings and NSFW levels are the "fun features". The
+welcome screen asks about them once, on a page of its own with a moving preview of each; keeping them
+is recommended. Without them the app is plainer: no hearts, stars or levels anywhere, a slideshow
+that simply plays, and new things saved with neutral values (level 5, two stars) so the vault is
+the same either way. **Settings → Look → Fun features** turns them on or off at any time.
+
 ## iPhone, iPad and Android
 
 The same app runs on iOS 26 as a sideloaded IPA; see the [README](../README.md#-on-iphone--ipad-sideloaded)
@@ -166,6 +174,8 @@ On a phone the app is laid out like Photos:
   **⋯ → Customise the Browser**: the bar at the bottom or the top; pictures whole, 2 or 3 across, or
   as a feed; filters in a sheet or at the top; hide the bars while scrolling; colour the bar like the
   site; edge swipes; pull to reload; blur the previews.
+- **The first start** opens on an animated welcome (the heart fills, the name rises), then asks about
+  the **fun features**.
 - **The grid**: pinch it for 2, 3, 5 or 7 across. After Select, slide a finger across pictures to
   pick a run of them, and a handle on the right edge flings through the whole library, showing the
   month. Over the grid: smart albums (Never opened, Forgotten, Long videos, Most loved, 1 star) and

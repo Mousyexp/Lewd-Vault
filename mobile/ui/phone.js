@@ -147,7 +147,7 @@
     for (const b of sideTabs) if (!PRIMARY.includes(b.dataset.tab)) tile(label(b), iconOf(b), () => b.click());
     if (window.vaultProfile) tile('You', icon('you'), () => window.vaultProfile.open());
     if (window.vaultCoach) tile('Coach', icon('coach'), () => window.vaultCoach.open());
-    if (window.vaultPhone) tile('Sort', icon('cards'), () => window.vaultPhone.openSort());
+    if (window.vaultPhone && !html.classList.contains('no-fun')) tile('Sort', icon('cards'), () => window.vaultPhone.openSort()); // (sorting is star ratings)
     tile('Hide now', icon('hide'), hideNow, 'wide danger').append(make('small', '', 'or tap anywhere with three fingers'));
     s.body.append(tiles);
   }
@@ -460,7 +460,7 @@
     // --- what a double tap, a two-finger tap and a long press do (Settings → Phone → Gestures) ---
     const act = (what, x, y) => {
       if (what === 'zoom') return zoomToggle(x, y);
-      if (what === 'like') { press('dLike'); heartAt(x, y); buzz('light'); return; }
+      if (what === 'like') { if (html.classList.contains('no-fun')) return; press('dLike'); heartAt(x, y); buzz('light'); return; }
       if (what === 'info') return info(!detail.classList.contains('ios-info'));
       if (what === 'level') { const b = bar.querySelector('.ph-lvtool'); if (b) b.click(); return; }
       if (what === 'hide') return hideNow();
@@ -1231,7 +1231,7 @@
         s.firstChild.style.setProperty('--icon', icon('cards'));
         s.firstChild.append(make('em', 'ph-ring-count', left > 99 ? '99+' : String(left)));
       }
-      groups.forEach((g, i) => ring(isNew(g) ? 'fresh' : 'old', g.name, b => openStories(groups, i, b), g.items[0]));
+      groups.forEach((g, i) => { const r = ring(isNew(g) ? 'fresh' : 'old', g.name, b => openStories(groups, i, b), g.items[0]); if (g.key === 'fav') r.dataset.fun = '1'; }); // (Favourites are three stars: a fun feature)
     };
     rings._draw = drawRings;
     // (re)drawn when the library loads or changes size, not on every render
