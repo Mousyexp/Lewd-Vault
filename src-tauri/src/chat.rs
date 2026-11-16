@@ -223,9 +223,15 @@ fn wrap_kind(me: &SigningKey, to: &str, payload: &str, kind: u32) -> Res<Event> 
 }
 
 /// The other way (bitchat's decryptPrivateMessage, with its checks): (sender, time sent, payload).
+#[cfg(test)]
 pub fn unwrap(me: &SigningKey, ev: &Event) -> Res<(String, i64, String)> {
+    unwrap_checked(me, ev, false)
+}
+
+/// (`checked`: its id and signature were checked already, as the relay link does for every event)
+fn unwrap_checked(me: &SigningKey, ev: &Event, checked: bool) -> Res<(String, i64, String)> {
     let my_pub = pub_of(me);
-    if !matches!(ev.kind, KIND_WRAP | KIND_WRAP_NOW) || ev.content.len() > MAX_ENVELOPE * 2 || ev.tags != vec![vec!["p".to_string(), my_pub.clone()]] || !ev.verify() {
+    if !matches!(ev.kind, KIND_WRAP | KIND_WRAP_NOW) || ev.content.len() > MAX_ENVELOPE * 2 || ev.tags != vec![vec!["p".to_string(), my_pub.clone()]] || !(checked || ev.verify()) {
         return Err("Not a wrap for me".into());
     }
     let seal: Event = serde_json::from_slice(&open_box(&shared_key(me, &ev.pubkey)?, &ev.content)?).map_err(|_| "Bad seal")?;
@@ -613,6 +619,15 @@ impl Chat {
 
     /// An event from a relay (or a nearby phone). Returns true if it was something for us.
     pub fn take(&self, ev: Event, via: &str) -> bool {
+        self.take_inner(ev, via, false)
+    }
+
+    /// The same, for an event whose id and signature were checked already (the relay link's).
+    pub(super) fn take_checked(&self, ev: Event, via: &str) -> bool {
+        self.take_inner(ev, via, true)
+    }
+
+    fn take_inner(&self, ev: Event, via: &str, checked: bool) -> bool {
         if ev.content.len() > MAX_ENVELOPE * 2 || !matches!(ev.kind, KIND_WRAP | KIND_WRAP_NOW | KIND_ROOM) {
             return false;
         }
@@ -621,7 +636,7 @@ impl Chat {
             return false;
         }
         let got = match ev.kind {
-            KIND_WRAP | KIND_WRAP_NOW => unwrap(&st.key, &ev).ok().map(|(from, at, payload)| {
+            KIND_WRAP | KIND_WRAP_NOW => unwrap_checked(&st.key, &ev, checked).ok().map(|(from, at, payload)| {
                 if ev.kind == KIND_WRAP {
                     st.saved.since_dm = st.saved.since_dm.max(ev.created_at.min(now()));
                 }
@@ -631,7 +646,7 @@ impl Chat {
                 let tag = ev.tag("r").unwrap_or_default().to_string();
                 let key = st.saved.rooms.get(&tag).and_then(|r| unhex(&r.key)).and_then(|k| <[u8; 32]>::try_from(k).ok());
                 match key {
-                    Some(k) if ev.verify() => open_box(&k, &ev.content).ok().and_then(|b| String::from_utf8(b).ok()).map(|p| {
+                    Some(k) if checked || ev.verify() => open_box(&k, &ev.content).ok().and_then(|b| String::from_utf8(b).ok()).map(|p| {
                         st.saved.since_room = st.saved.since_room.max(ev.created_at.min(now()));
                         (Some(tag), ev.pubkey.clone(), ev.created_at, p)
                     }),
@@ -1497,7 +1512,10 @@ pub fn api(dir: &Path, name: &str, args: &[Value], read_item: &dyn Fn(&str) -> R
         "chatRelays" => {
             // (your own list: exactly those relays; an empty one: automatic again)
             let list: Vec<String> = a(0).as_array().cloned().unwrap_or_default().iter().filter_map(|v| v.as_str())
-                .map(|u| u.trim().trim_end_matches('/').to_string()).filter(|u| u.starts_with("wss://") || u.starts_with("ws://")).take(12).collect();
+                .map(|u| u.trim().trim_end_matches('/').to_string()).filter(|u| pool::allowed(u)).take(12).collect();
+            if list.is_empty() && a(0).as_array().map(|x| !x.is_empty()).unwrap_or(false) {
+                return Err("Relays need an encrypted address: wss://…".into());
+            }
             {
                 let mut st = chat.st.lock().unwrap();
                 st.saved.manual = !list.is_empty();
@@ -1784,8 +1802,27 @@ mod tests {
 
     /// A test relay that can be switched off (its port, and the switch).
     pub fn test_relay_ctl() -> (u16, Arc<AtomicBool>) {
-        let off = Arc::new(AtomicBool::new(false));
-        (relay_with(0, off.clone()), off)
+        let t = TestRelay::start();
+        (t.port, t.off)
+    }
+
+    /// A test relay with its controls: off, tamper (it alters the events it hands over), and how
+    /// many events were published to it.
+    pub struct TestRelay {
+        pub port: u16,
+        pub off: Arc<AtomicBool>,
+        pub tamper: Arc<AtomicBool>,
+        pub published: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl TestRelay {
+        pub fn start() -> TestRelay {
+            let t = TestRelay { port: 0, off: Default::default(), tamper: Default::default(), published: Default::default() };
+            let port = relay_with(0, t.off.clone(), t.tamper.clone(), t.published.clone());
+            TestRelay { port, ..t }
+        }
+        pub fn url(&self) -> String {
+            format!("ws://127.0.0.1:{}", self.port)
+        }
     }
 
     /// The test relay on its own, for trying the chat screens by hand or in the screenshot harness:
@@ -1801,10 +1838,10 @@ mod tests {
     }
 
     pub fn test_relay_on(port: u16) -> u16 {
-        relay_with(port, Arc::new(AtomicBool::new(false)))
+        relay_with(port, Default::default(), Default::default(), Default::default())
     }
 
-    fn relay_with(port: u16, off: Arc<AtomicBool>) -> u16 {
+    fn relay_with(port: u16, off: Arc<AtomicBool>, tamper: Arc<AtomicBool>, published: Arc<std::sync::atomic::AtomicUsize>) -> u16 {
         use std::net::TcpListener;
         let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1821,7 +1858,7 @@ mod tests {
                     Err(_) => { std::thread::sleep(Duration::from_millis(20)); continue; }
                 };
                 stream.set_nonblocking(false).ok();
-                let (store, clients, off) = (store.clone(), clients.clone(), off.clone());
+                let (store, clients, off, tamper, published) = (store.clone(), clients.clone(), off.clone(), tamper.clone(), published.clone());
                 std::thread::spawn(move || {
                     let Ok(mut ws) = tungstenite::accept(stream.try_clone().unwrap()) else { return };
                     stream.set_read_timeout(Some(Duration::from_millis(50))).ok();
@@ -1840,7 +1877,10 @@ mod tests {
                         if off.load(Ordering::Relaxed) {
                             return;
                         }
-                        while let Ok(e) = rx.try_recv() {
+                        while let Ok(mut e) = rx.try_recv() {
+                            if tamper.load(Ordering::Relaxed) {
+                                e.content.push('x'); // (a relay that changes what it passes on)
+                            }
                             for (id, fs) in &subs {
                                 if fs.iter().any(|f| matches(f, &e)) && ws.send(tungstenite::Message::text(json!(["EVENT", id, e]).to_string())).is_err() { return; }
                             }
@@ -1850,6 +1890,7 @@ mod tests {
                                 let v: Value = serde_json::from_str(t.as_str()).unwrap_or(Value::Null);
                                 match v[0].as_str() {
                                     Some("EVENT") => {
+                                        published.fetch_add(1, Ordering::Relaxed);
                                         let e: Event = serde_json::from_value(v[1].clone()).unwrap();
                                         let ok = e.verify();
                                         let _ = ws.send(tungstenite::Message::text(json!(["OK", e.id, ok, ""]).to_string()));
