@@ -57,10 +57,17 @@
   const icon = name => `url("data:image/svg+xml;utf8,${ICON[name].replace(/"/g, "'").replace(/#/g, '%23')}")`;
 
   // ---------- the phone's own settings (Settings → Phone, in phone-plus.js), kept in the vault ----------
-  const OPT = { tabs: ['library', 'discover', 'add', 'slideshow'], gDouble: 'zoom', gTwo: 'like', gHold: 'level', haptics: true };
+  // (the bar like Instagram's: Library, Browser, Add in the middle, Chat; Slideshow and the rest in More)
+  const OPT = { tabs: ['library', 'discover', 'add', 'chat'], gDouble: 'zoom', gTwo: 'like', gHold: 'level', haptics: true };
   const opt = { ...OPT };
   (typeof setupReady !== 'undefined' ? setupReady : Promise.resolve()).then(async () => {
     try { const v = await api('kvGet', 'phone'); if (v && typeof v === 'object') Object.assign(opt, v); } catch (e) {}
+    // Chat joins the bar once, in Slideshow's place, for a bar still as it came (one you arranged stays)
+    if (!opt.chatInBar) {
+      if (Array.isArray(opt.tabs) && opt.tabs.join() === 'library,discover,add,slideshow') opt.tabs = OPT.tabs.slice();
+      opt.chatInBar = true;
+      setTimeout(() => api('kvSet', 'phone', opt).catch(() => {}), 0);
+    }
     dispatchEvent(new Event('phone-opt'));
   });
   let optTimer = null;

@@ -966,5 +966,52 @@
   // (each new line of the status fades in)
   if (spStatus) new MutationObserver(() => { spStatus.style.animation = 'none'; void spStatus.offsetWidth; spStatus.style.animation = ''; }).observe(spStatus, { childList: true });
 
+  // ---------- the profile button: on the main screen (the Library's top row), for You or Settings ----------
+  // (as on Instagram: your picture opens your corner of the app; Settings isn't in the bar)
+  const meBtn = make('button', 'ph-me');
+  meBtn.type = 'button';
+  meBtn.setAttribute('aria-label', 'Your profile and settings');
+  // it lives at the end of the Library's top row, beside Select and search (phone.js builds that row once)
+  const dock = () => { const tools = document.querySelector('.ios-libtools'); if (tools && meBtn.parentElement !== tools) tools.append(meBtn); };
+  dock();
+  if (typeof setupReady !== 'undefined') setupReady.then(dock);
+  const profileNow = () => (window.vaultProfile && window.vaultProfile.get && window.vaultProfile.get()) || {};
+  const avatarOf = (pf, size) => {
+    const lib = typeof library !== 'undefined' && Array.isArray(library) ? library : [];
+    const it = pf.avatarId && lib.find(i => i.id === pf.avatarId);
+    if (it && it.thumb) { const img = make('img'); img.alt = ''; img.src = `${vaultOrigin()}/t/${encodeURIComponent(it.thumb)}?w=${size}`; return img; }
+    return make('span', '', ((pf.name || '').trim()[0] || '♥').toUpperCase());
+  };
+  const drawMe = () => { meBtn.replaceChildren(avatarOf(profileNow(), 96)); };
+  if (window.vaultProfile && window.vaultProfile.ready) Promise.resolve(window.vaultProfile.ready).then(drawMe).catch(() => {});
+  if (typeof setupReady !== 'undefined') setupReady.then(() => setTimeout(drawMe, 1500));
+  drawMe();
+  meBtn.onclick = () => {
+    buzz('light');
+    drawMe();
+    const back = make('div', 'ph-me-back');
+    const card = make('div', 'ph-me-card glass');
+    const pf = profileNow();
+    const head = make('div', 'ph-me-head');
+    const av = make('span', 'ph-me-av'); av.append(avatarOf(pf, 160));
+    const who = make('div', 'ph-me-who');
+    who.append(make('b', '', pf.name || 'You'), make('small', '', pf.title || 'Your vault'));
+    head.append(av, who);
+    const row = (cls, title, sub, go) => {
+      const b = make('button', 'ph-me-row ' + cls); b.type = 'button';
+      b.append(make('i'), make('span', '', title), make('small', '', sub));
+      b.onclick = () => { close(); setTimeout(go, 120); };
+      return b;
+    };
+    card.append(head,
+      row('you', 'Your profile', 'Your picture, levels and stats', () => window.vaultProfile && window.vaultProfile.open()),
+      row('gear', 'Settings', 'Look, privacy, phone, library', () => { const s = document.querySelector('header nav button[data-tab="settings"]'); if (s) s.click(); }));
+    back.append(card);
+    document.body.append(back);
+    requestAnimationFrame(() => back.classList.add('in'));
+    function close() { back.classList.remove('in'); setTimeout(() => back.remove(), 220); }
+    back.onclick = e => { if (e.target === back) close(); };
+  };
+
   window.vaultPhonePlus = { openSettings, cheer, confetti, hello };
 })();
