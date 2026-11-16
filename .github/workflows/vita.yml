@@ -1,0 +1,62 @@
+# Builds the PS Vita app (vita/: a VPK to install with VitaShell) in VitaSDK's own container, and
+# runs its vault core against the golden vaults (the same fixtures the PC and phone tests use).
+#
+# Trigger it by hand (Actions -> Build PS Vita -> Run workflow), on a push to main or a pull request
+# that touches the Vita app or the fixtures.
+name: Build PS Vita
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Also attach the VPK to this release (its tag, e.g. v1.2.0), replacing a VPK already there'
+        type: string
+        default: ''
+  push:
+    branches: [main]
+    paths:
+      - 'vita/**'
+      - 'src-tauri/tests/fixtures/**'
+      - '.github/workflows/vita.yml'
+  pull_request:
+    paths:
+      - 'vita/**'
+      - 'src-tauri/tests/fixtures/**'
+      - '.github/workflows/vita.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vita-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vpk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # (write, only to attach the VPK to a release when the run asks for it; see the last step)
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      # the vault core on the runner's own compiler first: the format must match the PC byte for byte
+      - name: Vault core tests
+        run: sh vita/tests/run.sh
+      - name: Build the VPK
+        run: |
+          docker run --rm -v "$PWD":/w -w /w -u "$(id -u):$(id -g)" vitasdk/vitasdk:latest \
+            sh -c 'cmake -S vita -B vita/build -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake && cmake --build vita/build -j4'
+          cp vita/build/LewdVault.vpk Lewd.Vault.Vita.vpk
+          ls -la Lewd.Vault.Vita.vpk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LewdVault-vpk
+          path: Lewd.Vault.Vita.vpk
+          if-no-files-found: error
+      - name: Attach the VPK to the release
+        if: github.event_name == 'workflow_dispatch' && inputs.release != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release }}
+        run: gh release upload "$TAG" Lewd.Vault.Vita.vpk --clobber --repo "$GITHUB_REPOSITORY"

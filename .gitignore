@@ -5,3 +5,5 @@ src-tauri/gen/
 dist/
 
 __pycache__/
+
+vita/build/

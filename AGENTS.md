@@ -7,6 +7,8 @@ Notes for anyone (person or AI) working in this repository. Keep it short and tr
 Lewd Vault: a Tauri 2 app for collecting, tagging and viewing NSFW media, for Windows (a portable
 `.exe` or an MSI), iOS (a sideloaded IPA) and Android (an APK). One crate, one page. `docs/GUIDE.md`
 describes the features, the vault folder and the code layout; `mobile/README.md` covers the phones.
+`vita/` is a separate native viewer for the PS Vita (C, vita2d, a VPK) on the same vault format;
+`vita/README.md` covers it.
 
 ## Rules
 
@@ -31,6 +33,8 @@ describes the features, the vault folder and the code layout; `mobile/README.md`
 - `cd src-tauri && cargo test`: the backend (on Linux this needs the GTK/WebKit dev packages; CI
   runs it on Windows and Ubuntu).
 - `node tools/screenshots.mjs <5 pictures>` drives the real page against the real backend.
+- `sh vita/tests/run.sh`: the Vita app's vault core (C) against the same golden vaults. The VPK is built
+  by `.github/workflows/vita.yml` (VitaSDK's Docker image).
 - The generated mobile projects (`src-tauri/gen`) are fitted by `tools/ios-patch.mjs` and
   `tools/android-patch.mjs` in CI (share extension/target, icon presets): change those, not `gen/`.
 - iOS can only be built by `.github/workflows/ios.yml` (a macOS runner), Android by

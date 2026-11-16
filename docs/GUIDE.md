@@ -270,6 +270,15 @@ Not on the phones: the global emergency shortcut, opening files in other apps, c
 and in-app updates (install a newer IPA
 or APK instead).
 
+## PS Vita
+
+A separate, native viewer for the Vita (HENkaku/Ensō, installed with VitaShell): the library with
+its categories, sorting and search, the full view with details, pinch-zoom and hearts, the
+slideshow, videos (MP4 in hardware, WebM/MKV in software) and a SELECT cover screen. Copy the vault
+folder into `ux0:data/LewdVault/`; an Untraceable vault stays encrypted and opens with its password.
+Views, hearts and time go into the vault's `views.csv` as on the PC. It doesn't add or edit items.
+`vita/README.md` has the details; the VPK comes from Actions → Build PS Vita.
+
 ## The vault folder
 
 A vault is a plain folder you can read without the app:

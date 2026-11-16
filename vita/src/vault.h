@@ -1,0 +1,83 @@
+// A Lewd Vault vault on the Vita: index.csv and views.csv read the way src-tauri/src/lib.rs reads
+// them, files found where the PC and the phones put them, and views.csv written back byte for byte
+// in the same format (UTF-8 with a BOM, CRLF, RFC 4180 quoting, numbers as JavaScript prints them).
+// Portable C: tests/core_test.c runs it on a PC against src-tauri/tests/fixtures.
+#pragma once
+#include <stddef.h>
+#include <stdint.h>
+
+typedef struct {
+  char *id, *uid, *file, *name, *category, *kind, *added, *preview_id, *thumb, *collection, *tags, *source;
+  int nsfw, quality, width, height;
+  double duration;
+  char *path; // its file (NULL: not in the vault folder)
+  int view;   // its row in views (-1: none yet)
+} LvItem;
+
+// What sorting and filtering read for every item, kept apart from the strings (the guide's hot/cold
+// split): 16 bytes, two to a Cortex-A9 cache line, so a sort of 10,000 items stays in cache.
+typedef struct {
+  int64_t added;   // "2026-10-16T09:00:00Z" as a number (yyyymmddhhmmss), for sorting
+  int16_t cat;     // its category's place in cats
+  uint8_t kind;    // LV_IMAGE, LV_GIF, LV_VIDEO
+  uint8_t quality;
+  int32_t view;    // = items[i].view
+} LvHot;
+enum { LV_IMAGE, LV_GIF, LV_VIDEO };
+
+typedef struct {
+  char *id, *uid, *last, *last_like;
+  long long views, likes;
+  double seconds;
+} LvView;
+
+typedef struct {
+  char root[512];
+  int untraceable; // _app/key.check is there: every file is encrypted
+  int has_key;
+  uint8_t key[32];
+  int discreet; // every file in Media/ (Settings → Storage → Discreet names)
+  char theme[32];
+  LvItem *items;
+  LvHot *hot; // (one per item, the same order)
+  int n;
+  struct LvArena *arena; // (the items' strings, freed at once)
+  LvView *views;
+  int nviews, capviews;
+  int views_dirty;
+  char **cats; // the categories, most items first
+  int *cat_counts;
+  int ncats;
+} LvVault;
+
+int lv_is_vault(const char *dir);
+int lv_is_untraceable(const char *dir);
+// 1: the password is right (the key is kept), 0: wrong, -1: no check file.
+int lv_vault_unlock(LvVault *v, const char *password);
+void lv_vault_init(LvVault *v, const char *root);
+// 0 on success; *why gets a message otherwise.
+int lv_vault_load(LvVault *v, const char **why);
+void lv_vault_free(LvVault *v);
+
+const uint8_t *lv_key(const LvVault *v);
+// The thumbnail's bytes (WebP, malloc'd), or NULL.
+uint8_t *lv_thumb_bytes(LvVault *v, const LvItem *it, size_t *n);
+// The short preview clip (_app/clips) for videos and GIFs: 1 and the path, or 0.
+int lv_clip_path(LvVault *v, const LvItem *it, char *out, size_t cap);
+
+// Views, as the PC records them: "now" is an ISO time like 2026-10-20T12:00:00.000Z.
+void lv_viewed(LvVault *v, LvItem *it, const char *now);
+void lv_liked(LvVault *v, LvItem *it, const char *now);
+void lv_add_seconds(LvVault *v, LvItem *it, double secs);
+long long lv_views_of(const LvVault *v, const LvItem *it);
+long long lv_likes_of(const LvVault *v, const LvItem *it);
+int lv_vault_save_views(LvVault *v);
+
+// The CSV pieces (exposed for the tests).
+typedef struct { char ***rows; int *ncells; int nrows; } LvCsv;
+void lv_csv_parse(const char *text, LvCsv *out);
+void lv_csv_free(LvCsv *c);
+char *lv_csv_text(char ***rows, const int *ncells, int nrows); // malloc'd
+char *lv_views_csv(const LvVault *v);
+int lv_b64url_decode(const char *in, char *out, size_t cap);
+void lv_num_or_empty(double f, char *out, size_t cap);

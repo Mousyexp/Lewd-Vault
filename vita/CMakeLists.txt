@@ -1,0 +1,42 @@
+# Lewd Vault for the PS Vita (see README.md). Build with VitaSDK:
+#   cmake -S vita -B vita/build -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake && cmake --build vita/build
+# which makes vita/build/LewdVault.vpk.
+cmake_minimum_required(VERSION 3.10)
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VITASDK})
+  set(CMAKE_TOOLCHAIN_FILE "$ENV{VITASDK}/share/vita.toolchain.cmake" CACHE PATH "toolchain file")
+endif()
+project(LewdVault C)
+include("${VITASDK}/share/vita.cmake" REQUIRED)
+
+set(VITA_APP_NAME "Lewd Vault")
+# (the Title ID is where the Vita keeps the app and its data: never change it, or a new install
+# loses its settings and thumbnail cache)
+set(VITA_TITLEID "LWDV00001")
+set(VITA_VERSION "01.00")
+set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
+
+set(CMAKE_C_STANDARD 11)
+# Tuned for the Vita's Cortex-A9 (docs: vita/README.md, "Speed"): -O3 for the work, NEON, and the
+# linker drops every function and variable nothing uses (smaller code, more of it in the I-cache).
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -ffunction-sections -fdata-sections -Wall -Wno-unused-parameter -D_GNU_SOURCE")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
+
+add_executable(${PROJECT_NAME} src/main.c src/vault.c src/lvcrypt.c src/image.c src/video.c)
+target_link_libraries(${PROJECT_NAME}
+  vita2d freetype bz2 png turbojpeg webp sharpyuv
+  avformat avcodec swresample swscale avutil vpx mp3lame mpg123 opus vorbis ogg pthread z m
+  SceAvPlayer_stub SceAudio_stub SceGxm_stub SceDisplay_stub SceSysmodule_stub SceCtrl_stub
+  SceTouch_stub ScePower_stub SceAppUtil_stub SceCommonDialog_stub SceIme_stub ScePgf_stub
+  SceLibKernel_stub SceKernelThreadMgr_stub SceRtc_stub SceAppMgr_stub
+)
+
+vita_create_self(eboot.bin ${PROJECT_NAME} UNSAFE)
+vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
+  VERSION ${VITA_VERSION}
+  NAME ${VITA_APP_NAME}
+  FILE sce_sys/icon0.png sce_sys/icon0.png
+  FILE sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
+  FILE sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
+  FILE sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
+  FILE font.ttf font.ttf
+)
