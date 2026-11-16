@@ -820,7 +820,7 @@ static int ime_poll(char *out, int cap) {
 }
 
 // ---------- screens ----------
-enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS };
+enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI };
 static int screen = S_PICK, cover_return = S_LIBRARY;
 static char found[16][512];
 static int nfound, pick_sel;
@@ -1046,6 +1046,8 @@ static void draw_unlocking(int stage) {
 }
 
 static int set_sel, plan_sel;
+static int wf_return;      // (wifi.c: the screen to go back to,
+static char wf_last[160];  //  and the last file, or why it stopped)
 // ----- the library -----
 static void open_viewer(int k, int slideshow);
 static void draw_bar(void) {
@@ -1738,7 +1740,7 @@ static void draw_settings(void) {
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_PIN, ST_DECOY, ST_STATS, ST_VAULT, ST_CACHE, ST_COVER, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_STATS, ST_VAULT, ST_CACHE, ST_COVER, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change"},
@@ -1746,6 +1748,7 @@ static void draw_settings(void) {
     {"Double tap in the full view", cfg.dbltap ? "Heart" : "Zoom", "Zooms in, or gives it a heart"},
     {"Glow behind pictures", cfg.glow ? "On" : "Off", "The picture's own colours fill the screen around it"},
     {"Google Drive", drive_signed_in() ? "Signed in" : "", "Keep this vault in step with your PC's, both ways"},
+    {"Wi-Fi transfer", "", "Send pictures and videos from a phone or PC on the same Wi-Fi"},
     {"Lock with a PIN", !pin.on || decoy_session ? "Off" : pin.on_wake ? "On, and when it wakes" : "On, when it starts", pin.on ? "✕ a new PIN · ←→ when · □ turns it off" : "A PIN pad before anything shows"},
     {"Decoy PIN", vd, pin.on ? "Another PIN that opens a harmless vault (←→ which, □ off)" : "Needs the PIN lock on"},
     {"Your stats", "", "What's here and how it's been looked at"},
@@ -1812,6 +1815,7 @@ static void draw_settings(void) {
         }
         break;
       case ST_STATS: if (cross) { sfx(SFX_OPEN); screen = S_STATS; return; } break;
+      case ST_WIFI: if (cross) { sfx(SFX_OPEN); wf_return = S_SETTINGS; wf_last[0] = 0; screen = S_WIFI; return; } break;
       case ST_VAULT: if (cross) { lv_vault_save_views(&vault); resume_save(); find_vaults(); screen = S_PICK; return; } break;
       case ST_CACHE:
         if (cross) {
@@ -1872,6 +1876,7 @@ static void library_grew(int before) {
 }
 
 #include "web.c"
+#include "wifi.c"
 
 int main(void) {
   sceIoMkdir("ux0:data", 0777);
@@ -1936,10 +1941,12 @@ int main(void) {
       if (pin.on && pin.on_wake && screen != S_PIN) { slideshow = 0; pin_lock(screen == S_COVER ? cover_return : screen); }
     }
     // (a video playing, or a slideshow: the Vita doesn't dim or sleep)
-    if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow) || drive.state == DRV_SYNCING || drive.state == DRV_CODE)
+    if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow) || drive.state == DRV_SYNCING || drive.state == DRV_CODE || wf_run)
       sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
     if (loaded_vault) take_results();
     if (web_started) web_take_results();
+    if (loaded_vault) wf_take();
+    if (wf_run && screen != S_WIFI && screen != S_COVER) wf_stop(); // (the server only while its screen is open)
 
     // the keyboard's answer
     if (ime_open) {
@@ -1993,6 +2000,7 @@ int main(void) {
       case S_DRIVE: draw_drive(); break;
       case S_PIN: draw_pin(); break;
       case S_STATS: draw_stats(); break;
+      case S_WIFI: draw_wifi(); break;
       case S_WEBVIEW: draw_webview(); break;
       case S_COVER: draw_cover_screen(); if (in.tap) { screen = cover_return; } break;
     }

@@ -93,6 +93,15 @@ HTTPS is checked against Mozilla's list of authorities (`cacert.pem`, from certi
 own `inet_pton` (`src/net.c`): the Vita C library's answers -1 for a host name, which libcurl takes
 for "an IP address" and then sends no server name (SNI) in its TLS hello, which most sites refuse.
 
+## Wi-Fi transfer
+
+Settings → Wi-Fi transfer: while that screen is open, the Vita serves a small page at
+`http://<its address>:8080` (shown, with a QR code for a phone). Pick or drop pictures and videos on it
+from a phone or PC on the same Wi-Fi; each goes onto the card and into the vault (the Browser's save
+category, or "Wi-Fi"), with a card-sized thumbnail for pictures, encrypted in an Untraceable vault.
+Only that page is served: nothing in the vault can be read from outside, and the server stops when
+you leave the screen (`src/wifi.c`).
+
 ## Google Drive
 
 Settings → Google Drive keeps the vault in step with the **Lewd Vault** folder the PC syncs to Google
@@ -176,6 +185,7 @@ the compiler inlines across them); textures are only freed after the frame that 
 | `src/lib.c` | The Library's filters, tags panel, saved filters, quick actions, selecting many, editing |
 | `src/show.c` | The slideshow's sessions and plan; Continue watching |
 | `src/pin.c` | The PIN lock (and decoy PIN), and the stats page |
+| `src/wifi.c` | Wi-Fi transfer: the upload page and its server |
 | `src/drive.c`, `src/drive_ui.c` | Google Drive: the sign-in, the sync, its screen |
 | `src/third_party/qrcodegen.*` | Project Nayuki's QR code generator (MIT, its notice in the file) |
 | `src/vault.c` | `index.csv` / `views.csv`, finding files, thumbnails (packs too) |
