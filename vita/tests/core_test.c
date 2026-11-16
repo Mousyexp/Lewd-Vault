@@ -183,7 +183,8 @@ int main(int argc, char **argv) {
     int before = a.n;
     const uint8_t pic[] = {0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4};
     const uint8_t th[] = {0xFF, 0xD8, 9, 9};
-    LvNew nw = {"Danbooru 123", "Danbooru", "image", "blue_hair smile", "https://danbooru.donmai.us/posts/123", "2026-11-16T10:00:00.000Z", 9, 5, 850, 1200, 0};
+    LvNew nw = {.name = "Danbooru 123", .category = "Danbooru", .kind = "image", .tags = "blue_hair smile", .source = "https://danbooru.donmai.us/posts/123",
+                .added = "2026-11-16T10:00:00.000Z", .nsfw = 9, .quality = 5, .width = 850, .height = 1200};
     CHECK(lv_vault_add(&a, &nw, pic, sizeof pic, "jpg", th, sizeof th, 148, 209, &why) == 0, "add: %s", why);
     CHECK(a.n == before + 1 && !strcmp(a.items[before].uid, "000126"), "in the loaded vault: %d %s", a.n, a.n > before ? a.items[before].uid : "");
     CHECK(!strcmp(a.cats[a.hot[before].cat], "Danbooru") && a.hot[before].added == 20261116100000LL, "its hot record");
@@ -215,6 +216,50 @@ int main(int argc, char **argv) {
     CHECK(st && strstr(st, "\"nextUid\":127"), "state.json: %s", st ? st : "-");
     free(st);
     lv_vault_free(&a);
+    snprintf(cmd, sizeof cmd, "rm -rf %s", tmp);
+    CHECK(system(cmd) == 0, "clean up");
+  }
+
+  // ---- a write cut short, backups, a file copied in ----
+  {
+    char tmp[200], cmd[700], p2[600];
+    snprintf(tmp, sizeof tmp, "/tmp/lv-vita-safe-%d", (int)getpid());
+    snprintf(cmd, sizeof cmd, "rm -rf %s && cp -r '%s/golden-vault' %s", tmp, fx, tmp);
+    CHECK(system(cmd) == 0, "copy");
+    // stopped after the old index moved aside, before the new one moved in
+    snprintf(cmd, sizeof cmd, "mv %s/index.csv %s/index.csv.old && echo junk > %s/index.csv.part", tmp, tmp, tmp);
+    CHECK(system(cmd) == 0, "set up");
+    LvVault b;
+    lv_vault_init(&b, tmp);
+    CHECK(lv_vault_load(&b, &why) == 0 && b.n == 3, "the index came back from .old");
+    snprintf(p2, sizeof p2, "%s/index.csv.part", tmp);
+    CHECK(access(p2, F_OK) != 0, "the .part went");
+    // the first change of the day makes a backup
+    b.views_dirty = 1;
+    CHECK(lv_vault_save_views(&b) == 0, "save views");
+    snprintf(cmd, sizeof cmd, "ls %s/_app/backups/20*/index.csv %s/_app/backups/20*/views.csv %s/_app/backups/20*/settings.json >/dev/null 2>&1", tmp, tmp, tmp);
+    CHECK(system(cmd) == 0, "today's backup");
+    // a file copied in, encrypted
+    uint8_t key[32];
+    lv_derive("pw", key);
+    snprintf(p2, sizeof p2, "%s/Clips/000124_261016_v013_Clips.mp4", tmp);
+    char to[700];
+    snprintf(to, sizeof to, "%s/copy.bin", tmp);
+    CHECK(lv_copy_file(p2, to, key) == 0, "copy in");
+    size_t an = 0, bn = 0;
+    uint8_t *a1 = lv_read_all(p2, NULL, &an), *b1 = lv_read_all(to, key, &bn);
+    CHECK(a1 && b1 && an == bn && !memcmp(a1, b1, an), "the copy reads back the same");
+    free(a1); free(b1);
+    // an append is either all there or not at all
+    snprintf(p2, sizeof p2, "%s/views.csv", tmp);
+    size_t before_n = 0;
+    uint8_t *before = lv_read_all(p2, NULL, &before_n);
+    CHECK(lv_append(p2, NULL, "x,y\r\n", 5) == 0, "append");
+    size_t after_n = 0;
+    uint8_t *after = lv_read_all(p2, NULL, &after_n);
+    CHECK(after_n == before_n + 5 && !memcmp(after, before, before_n), "appended");
+    free(before); free(after);
+    lv_vault_free(&b);
     snprintf(cmd, sizeof cmd, "rm -rf %s", tmp);
     CHECK(system(cmd) == 0, "clean up");
   }

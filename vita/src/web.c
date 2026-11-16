@@ -11,9 +11,10 @@
 // prepares saves). Everything they hand back carries the search's generation: a new search makes
 // whatever is still on its way from the old one go to waste instead of into the new grid.
 #include "booru.h"
+#include <psp2/io/devctl.h>
 #include "net.h"
 
-#define WSLOTS 96
+#define WSLOTS 120 // (atlas cells 120-239: main.c)
 #define MAX_POSTS 2000
 #define BOX_LONG 1920
 #define BOX_SHORT 1088
@@ -38,8 +39,11 @@ static struct { int ready, page, count; LvPost *posts; char err[160]; } page_rea
 
 enum { WD_PREVIEW, WD_SAMPLE, WD_SAVE };
 typedef struct {
-  int kind, post, gen;
+  int kind, post, gen, vgen;
   LvPixels px;
+  LvAdded added; // (a save: what was written, for the loaded vault)
+  LvNew nw;
+  char name[96], cat[64], when[40];
   uint8_t *a, *b; // sample: its raw bytes; save: the file and its thumbnail
   size_t an, bn;
   int w, h, tw, th;
@@ -51,10 +55,15 @@ static int nwdone;
 
 // the full view's job: a sample to fetch, or a save to prepare
 static struct {
-  int post, gen, save;
-  uint8_t *raw; // (a save: the sample's bytes, handed over)
+  int post, gen, save, vgen;
+  uint8_t *raw; // (a save: the sample's bytes, handed over; a video's are in its file)
   size_t rawn;
-} big_job = {-1, 0, 0, NULL, 0};
+  char cat[64];
+} big_job = {-1, 0, 0, 0, NULL, 0, ""};
+// the search a page is for, copied when asked (the settings may change while it loads)
+static struct { int site, ratings, sort; char q[128]; } job_q;
+static int saving;
+static const char *save_category(void);
 static volatile float big_progress;
 static volatile int big_cancel;
 static int web_started;
@@ -97,11 +106,11 @@ static void *list_main(void *arg) {
   while (worker_run) {
     pthread_mutex_lock(&wmx);
     while (worker_run && !list_want) pthread_cond_wait(&wcv, &wmx);
-    int page = list_want, gen = wgen;
+    int page = list_want, gen = wgen, ratings = job_q.ratings;
     list_want = 0;
-    const LvSite *s = &LV_SITES[cfg.site];
+    const LvSite *s = &LV_SITES[job_q.site];
     char url[2048];
-    lv_booru_url(s, cfg.wquery, cfg.ratings, cfg.wsort, page, url, sizeof url);
+    lv_booru_url(s, job_q.q, ratings, job_q.sort, page, url, sizeof url);
     pthread_mutex_unlock(&wmx);
     if (!worker_run) break;
     uint8_t *b = NULL;
@@ -109,7 +118,7 @@ static void *list_main(void *arg) {
     const char *err = NULL;
     int st = lv_http_get(h, url, &b, &n, 8 * 1024 * 1024, NULL, NULL, &err);
     int count = 0;
-    LvPost *got = st == 200 ? lv_booru_parse(s, (const char *)b, n, cfg.ratings, &count) : NULL;
+    LvPost *got = st == 200 ? lv_booru_parse(s, (const char *)b, n, ratings, &count) : NULL;
     // handed over: only the drawing thread changes the list it draws (see web_take_results)
     pthread_mutex_lock(&wmx);
     if (gen == wgen && !page_ready.ready) {
@@ -162,7 +171,7 @@ static void *preview_main(void *arg) {
     free(b);
     pthread_mutex_lock(&wmx);
     if (gen == wgen && p < nposts) {
-      if (ok && nwdone < 24) { wdone[nwdone++] = (WDone){WD_PREVIEW, p, gen, px}; px.rgba = NULL; }
+      if (ok && nwdone < 24) { WDone d; memset(&d, 0, sizeof d); d.kind = WD_PREVIEW; d.post = p; d.gen = gen; d.px = px; wdone[nwdone++] = d; px.rgba = NULL; }
       else wstate[p] = ok ? 0 : 3;
     }
     pthread_mutex_unlock(&wmx);
@@ -183,7 +192,8 @@ static void prepare_save(LvHttp *h, const LvPost *p, uint8_t *raw, size_t rawn, 
   int video = lv_post_is_video(p), gif = !strcmp(p->ext, "gif");
   int w = 0, hh = 0;
   if (video || gif) {
-    // as it is (the Vita can't make these smaller); the thumbnail from the preview
+    // as it is (the Vita can't make these smaller; a video straight from its file); the thumbnail
+    // from the preview
     d->a = raw; d->an = rawn; raw = NULL;
     snprintf(d->ext, sizeof d->ext, "%s", p->ext);
     d->w = p->width; d->h = p->height;
@@ -223,13 +233,63 @@ static void prepare_save(LvHttp *h, const LvPost *p, uint8_t *raw, size_t rawn, 
 }
 
 static char video_path[256];
+
+// Free room where the vault is (its device: ux0:, uma0:...), -1 when unknown.
+static long long free_room(const char *root) {
+  char dev[16];
+  const char *c = strchr(root, ':');
+  if (!c || c - root > 10) return -1;
+  snprintf(dev, sizeof dev, "%.*s", (int)(c - root + 1), root);
+  SceIoDevInfo info;
+  memset(&info, 0, sizeof info);
+  if (sceIoDevctl(dev, 0x3001, NULL, 0, &info, sizeof info) < 0) return -1;
+  return (long long)info.free_size;
+}
+
+// The save's files, written here on the save thread: the vault is locked only while it's touched.
+static void write_save(const LvPost *post, WDone *d, int vgen_asked, const char *cat) {
+  int video = lv_post_is_video(post), gif = !strcmp(post->ext, "gif");
+  snprintf(d->name, sizeof d->name, "%s %lld.%s", LV_SITES[job_q.site].name, post->id, d->ext);
+  snprintf(d->cat, sizeof d->cat, "%s", cat);
+  now_iso(d->when, sizeof d->when);
+  int ri = post->rating == LV_R_EXPLICIT ? 3 : post->rating == LV_R_QUESTIONABLE ? 2 : post->rating == LV_R_SENSITIVE ? 1 : 0;
+  LvNew nw = {.name = d->name, .category = d->cat, .kind = video ? "video" : gif ? "gif" : "image", .tags = post->tags,
+              .source = post->page, .added = d->when, .nsfw = RATING_NSFW[ri], .quality = 5, .width = d->w, .height = d->h,
+              .from = d->a ? NULL : video_path};
+  size_t need = d->a ? d->an : 0;
+  if (!d->a) { struct stat st; if (stat(video_path, &st) == 0) need = (size_t)st.st_size; d->an = need; }
+  pthread_mutex_lock(&vmx);
+  if (vgen_asked != vgen || !loaded_vault) {
+    pthread_mutex_unlock(&vmx);
+    snprintf(d->err, sizeof d->err, "Not saved: another vault was opened");
+    return;
+  }
+  long long room = free_room(vault.root);
+  if (room >= 0 && room < (long long)need + 4 * 1024 * 1024) {
+    pthread_mutex_unlock(&vmx);
+    snprintf(d->err, sizeof d->err, "Not enough room on the memory card");
+    return;
+  }
+  const char *why = NULL;
+  int r = lv_vault_add_files(&vault, &nw, d->a, d->an, d->ext, d->b, d->bn, d->tw, d->th, &d->added, &why);
+  pthread_mutex_unlock(&vmx);
+  if (r != 0) { snprintf(d->err, sizeof d->err, "%s", why ? why : "It couldn't be saved"); return; }
+  // what the loaded vault needs, kept with the result (the post's strings go with it)
+  d->nw = nw;
+  d->nw.name = d->name; d->nw.category = d->cat; d->nw.added = d->when;
+  d->nw.tags = strdup(post->tags); d->nw.source = strdup(post->page);
+  d->vgen = vgen_asked;
+}
+
 static void *sample_main(void *arg) {
   LvHttp *h = lv_http_new();
   while (worker_run) {
     pthread_mutex_lock(&wmx);
     while (worker_run && big_job.post < 0) pthread_cond_wait(&wcv, &wmx);
     if (!worker_run) { pthread_mutex_unlock(&wmx); break; }
-    int p = big_job.post, gen = big_job.gen, save = big_job.save;
+    int p = big_job.post, gen = big_job.gen, save = big_job.save, vgen_asked = big_job.vgen;
+    char cat[64];
+    snprintf(cat, sizeof cat, "%s", big_job.cat);
     uint8_t *raw = big_job.raw;
     size_t rawn = big_job.rawn;
     big_job.post = -1;
@@ -240,7 +300,7 @@ static void *sample_main(void *arg) {
     big_cancel = 0;
     big_progress = 0;
     pthread_mutex_unlock(&wmx);
-    if (!have) { free(raw); continue; }
+    if (!have || (save && gen != wgen)) { free(raw); if (save) { pthread_mutex_lock(&wmx); saving = 0; pthread_mutex_unlock(&wmx); } if (have) { free(post.preview); free(post.sample); free(post.file); free(post.page); free(post.source); free(post.tags); } continue; }
     WDone d;
     memset(&d, 0, sizeof d);
     d.post = p;
@@ -248,22 +308,29 @@ static void *sample_main(void *arg) {
     if (save) {
       d.kind = WD_SAVE;
       prepare_save(h, &post, raw, rawn, &d);
+      if (!d.err[0]) write_save(&post, &d, vgen_asked, cat);
+      // (the file is on the card now: its bytes needn't wait in memory)
+      free(d.a); d.a = NULL;
+      free(d.b); d.b = NULL;
     } else {
       d.kind = WD_SAMPLE;
       int video = lv_post_is_video(&post);
       const char *err = NULL;
       uint8_t *b = NULL;
       size_t n = 0;
-      // (a video: the whole file, which is what plays; a picture: the sample)
-      int st = lv_http_get(h, video ? post.file : post.sample, &b, &n, video ? 96u * 1024 * 1024 : 32u * 1024 * 1024, &big_cancel, &big_progress, &err);
+      int st;
+      if (video) {
+        // a video: the whole file, straight onto the card (it never has to fit in memory), played
+        // from there and copied into the vault from there by a save
+        snprintf(video_path, sizeof video_path, DATA "/play.%s", post.ext);
+        st = lv_http_get_file(h, post.file, video_path, &n, 200u * 1024 * 1024, &big_cancel, &big_progress, &err);
+      } else {
+        st = lv_http_get(h, post.sample, &b, &n, 32u * 1024 * 1024, &big_cancel, &big_progress, &err);
+      }
       if (st != 200) {
         snprintf(d.err, sizeof d.err, "%s", err && err[0] ? err : "It didn't download");
         free(b);
       } else if (video) {
-        // played from a file in the app's folder (the player reads files); kept for a save
-        snprintf(video_path, sizeof video_path, DATA "/play.%s", post.ext);
-        if (lv_write_all(video_path, NULL, b, n) != 0) snprintf(d.err, sizeof d.err, "No room on the memory card for the video");
-        d.a = b; d.an = n;
         snprintf(d.ext, sizeof d.ext, "%s", post.ext);
       } else {
         d.a = b; d.an = n;
@@ -302,7 +369,8 @@ static void web_start(void) {
 static float wscroll, wscroll_v;
 static int wsel;
 static void web_clear_textures(void) {
-  for (int k = 0; k < WSLOTS; k++) { free_later(wslots[k].tex); wslots[k].tex = NULL; wslots[k].post = -1; wslots[k].used = 0; }
+  // (the cells stay: only who they belong to is forgotten)
+  for (int k = 0; k < WSLOTS; k++) { wslots[k].tex = NULL; wslots[k].post = -1; wslots[k].used = 0; }
 }
 static void web_search(void) {
   pthread_mutex_lock(&wmx);
@@ -320,6 +388,10 @@ static void web_search(void) {
   wloading = 1;
   list_want = 1;
   big_cancel = 1;
+  job_q.site = cfg.site;
+  job_q.ratings = cfg.ratings;
+  job_q.sort = cfg.wsort;
+  snprintf(job_q.q, sizeof job_q.q, "%s", cfg.wquery);
   pthread_cond_broadcast(&wcv);
   pthread_mutex_unlock(&wmx);
   web_clear_textures();
@@ -348,10 +420,9 @@ static float wzoom = 1, wpan_x, wpan_y, wswipe;
 static int wdetails;
 static float wdetails_y;
 static unsigned wchrome_until;
-static int saving;
 
 static void wv_drop(void) {
-  if (wv_vid) { lv_video_close(wv_vid); wv_vid = NULL; }
+  if (wv_vid) { video_close_later(wv_vid); wv_vid = NULL; }
   free_later(wv_tex);
   wv_tex = NULL;
   wv_tex_post = -1;
@@ -381,12 +452,15 @@ static void wv_save(void) {
   if (saving || wv >= nposts) return;
   if (is_saved(&posts[wv])) { say("Already in your vault"); return; }
   if (!loaded_vault) { say("Open a vault first"); return; }
-  if (wv_raw_post != wv || !wv_raw) { say("Still loading…"); return; }
+  int video = lv_post_is_video(&posts[wv]);
+  if (wv_raw_post != wv || (!wv_raw && !video)) { say("Still loading…"); return; }
   saving = 1;
   pthread_mutex_lock(&wmx);
   big_job.post = wv;
   big_job.gen = wgen;
   big_job.save = 1;
+  big_job.vgen = vgen;
+  snprintf(big_job.cat, sizeof big_job.cat, "%s", save_category());
   big_job.raw = wv_raw; // (handed over: the full view doesn't need them once shown)
   big_job.rawn = wv_rawn;
   wv_raw = NULL;
@@ -396,7 +470,7 @@ static void wv_save(void) {
   say("Saving…");
 }
 
-static void library_grew(void); // (main.c: the Library's per-item arrays follow the vault)
+static void library_grew(int before); // (main.c: the Library's per-item arrays follow the vault)
 static void draw_bar(void);
 
 static const char *save_category(void) {
@@ -442,12 +516,13 @@ static void web_take_results(void) {
   pthread_mutex_unlock(&wmx);
   for (int k = 0; k < n; k++) {
     WDone *d = &got[k];
-    if (d->gen != wgen) { free(d->px.rgba); free(d->a); free(d->b); if (d->kind == WD_SAVE) saving = 0; continue; }
+    // (a save is on the card whatever the search: only its vault matters, below)
+    if (d->gen != wgen && d->kind != WD_SAVE) { free(d->px.rgba); free(d->a); free(d->b); continue; }
     if (d->kind == WD_PREVIEW) {
       int best = 0;
       for (int s = 1; s < WSLOTS; s++) if (wslots[s].used < wslots[best].used) best = s;
-      if (wslots[best].tex) { free_later(wslots[best].tex); if (wslots[best].post >= 0 && wslots[best].post < nposts) { wstate[wslots[best].post] = 0; wslot_of[wslots[best].post] = -1; } }
-      wslots[best].tex = upload(&d->px);
+      if (wslots[best].tex && wslots[best].post >= 0 && wslots[best].post < nposts) { wstate[wslots[best].post] = 0; wslot_of[wslots[best].post] = -1; }
+      wslots[best].tex = put_cell(SLOTS + best, &d->px);
       wslots[best].post = d->post;
       wslots[best].used = frame_no;
       if (d->post < nposts) { wstate[d->post] = wslots[best].tex ? 2 : 3; wslot_of[d->post] = (short)best; }
@@ -469,26 +544,21 @@ static void web_take_results(void) {
       }
     } else if (d->kind == WD_SAVE) {
       saving = 0;
-      if (d->err[0] || !d->a) { say(d->err[0] ? d->err : "It couldn't be saved"); }
-      else if (d->post < nposts) {
-        LvPost *p = &posts[d->post];
-        char now[40], name[96];
-        now_iso(now, sizeof now);
-        snprintf(name, sizeof name, "%s %lld.%s", LV_SITES[cfg.site].name, p->id, d->ext);
-        int ri = p->rating == LV_R_EXPLICIT ? 3 : p->rating == LV_R_QUESTIONABLE ? 2 : p->rating == LV_R_SENSITIVE ? 1 : 0;
-        int video = lv_post_is_video(p), gif = !strcmp(p->ext, "gif");
-        LvNew nw = {name, save_category(), video ? "video" : gif ? "gif" : "image", p->tags, p->page, now,
-                    RATING_NSFW[ri], 5, d->w, d->h, video && wv_vid && d->post == wv ? lv_video_duration(wv_vid) / 1000.0 : 0};
-        const char *why = NULL;
-        if (lv_vault_add(&vault, &nw, d->a, d->an, d->ext, d->b, d->bn, d->tw, d->th, &why) == 0) {
-          saved_add(p->page);
-          library_grew();
-          char m[160];
-          snprintf(m, sizeof m, "Saved to %s (%zu KB)", save_category(), d->an / 1024);
-          say(m);
-        } else say(why ? why : "It couldn't be saved");
+      if (d->err[0] || !d->added.uid[0]) say(d->err[0] ? d->err : "It couldn't be saved");
+      else if (d->vgen == vgen && loaded_vault) {
+        // on the card already (the save thread wrote it): now into the loaded vault
+        int before = vault.n;
+        pthread_mutex_lock(&vmx);
+        int ok = lv_vault_add_memory(&vault, &d->nw, &d->added) == 0;
+        pthread_mutex_unlock(&vmx);
+        if (ok) library_grew(before);
+        saved_add(d->nw.source);
+        char m[160];
+        snprintf(m, sizeof m, "Saved to %s (%zu KB)%s", d->cat, d->an / 1024, ok ? "" : ": it shows when the vault is opened again");
+        say(m);
       }
-      // (the bytes stay for another try only through a new download)
+      free((char *)d->nw.tags);
+      free((char *)d->nw.source);
     }
     free(d->px.rgba);
     free(d->a);

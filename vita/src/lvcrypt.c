@@ -3,7 +3,10 @@
 #include <string.h>
 #include <time.h>
 #ifdef __vita__
+#include <psp2/io/stat.h>
 #include <psp2/kernel/rng.h>
+#else
+#include <unistd.h>
 #endif
 
 static const char MAGIC[4] = {'L', 'V', 'X', '1'};
@@ -245,6 +248,47 @@ int lv_append(const char *path, const uint8_t *key, const void *data, size_t n) 
   } else {
     ok &= fwrite(data, 1, n, f) == n;
   }
-  ok &= fclose(f) == 0;
-  return ok ? 0 : -1;
+  if (!ok) {
+    // (a row cut short would spoil the file: it goes back to how it was)
+    fflush(f);
+#ifdef __vita__
+    SceIoStat st;
+    memset(&st, 0, sizeof st);
+    st.st_size = end;
+    fclose(f);
+    sceIoChstat(path, &st, SCE_CST_SIZE);
+#else
+    if (ftruncate(fileno(f), end) != 0) { /* (nothing more to do) */ }
+    fclose(f);
+#endif
+    return -1;
+  }
+  return fclose(f) == 0 ? 0 : -1;
+}
+
+int lv_copy_file(const char *from, const char *to, const uint8_t *key) {
+  FILE *a = fopen(from, "rb");
+  if (!a) return -1;
+  char tmp[1100];
+  snprintf(tmp, sizeof tmp, "%s.part", to);
+  FILE *b = fopen(tmp, "wb");
+  if (!b) { fclose(a); return -1; }
+  int ok = 1;
+  uint8_t nonce[12], buf[65536];
+  if (key) {
+    lv_random(nonce, 12);
+    ok &= fwrite(MAGIC, 1, 4, b) == 4 && fwrite(nonce, 1, 12, b) == 12;
+  }
+  uint64_t at = 0;
+  size_t n;
+  while (ok && (n = fread(buf, 1, sizeof buf, a)) > 0) {
+    if (key) lv_chacha20_xor(key, nonce, at, buf, n);
+    ok &= fwrite(buf, 1, n, b) == n;
+    at += n;
+  }
+  fclose(a);
+  ok &= fclose(b) == 0;
+  if (!ok) { remove(tmp); return -1; }
+  remove(to);
+  return rename(tmp, to) == 0 ? 0 : -1;
 }

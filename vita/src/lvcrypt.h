@@ -30,5 +30,7 @@ uint8_t *lv_read_all(const char *path, const uint8_t *key, size_t *n);
 // Adds to the end of a file (one of ours stays encrypted: the keystream goes on from where it
 // ended). 0 on success.
 int lv_append(const char *path, const uint8_t *key, const void *data, size_t n);
+// A file copied (encrypted when key is set), in pieces, next to `to` then moved over it. 0 on success.
+int lv_copy_file(const char *from, const char *to, const uint8_t *key);
 // Written next to it, then moved over it; encrypted with a fresh nonce when key is set. 0 on success.
 int lv_write_all(const char *path, const uint8_t *key, const void *data, size_t n);

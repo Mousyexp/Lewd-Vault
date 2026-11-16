@@ -103,7 +103,7 @@ static int png(const uint8_t *d, size_t n, int max_w, int max_h, LvPixels *out) 
   im.version = PNG_IMAGE_VERSION;
   if (!png_image_begin_read_from_memory(&im, d, n)) return -1;
   // (a PNG has no cheap way to decode small: refuse the absurd rather than run out of memory)
-  if ((unsigned long long)im.width * im.height > 40ull * 1000 * 1000) { png_image_free(&im); return -1; }
+  if ((unsigned long long)im.width * im.height > 12ull * 1000 * 1000) { png_image_free(&im); return -1; }
   im.format = PNG_FORMAT_RGBA;
   uint8_t *buf = malloc(PNG_IMAGE_SIZE(im));
   if (!buf || !png_image_finish_read(&im, NULL, buf, 0, NULL)) { free(buf); png_image_free(&im); return -1; }

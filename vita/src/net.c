@@ -62,12 +62,15 @@ int lv_net_online(void) {
   return state == SCE_NETCTL_STATE_CONNECTED || proxy[0];
 }
 
-struct LvHttp { CURL *c; };
+struct LvHttp { CURL *c; int gen; };
+static volatile int net_gen;
+void lv_net_reset(void) { net_gen++; }
 static volatile int no_compress;
 LvHttp *lv_http_new(void) {
   LvHttp *h = calloc(1, sizeof *h);
   if (!h) return NULL;
   h->c = curl_easy_init();
+  h->gen = net_gen;
   if (!h->c) { free(h); return NULL; }
   return h;
 }
@@ -79,6 +82,7 @@ void lv_http_free(LvHttp *h) {
 
 typedef struct {
   uint8_t *b;
+  FILE *f; // (to a file instead of memory)
   size_t n, cap, max;
   volatile int *cancel;
   volatile float *progress;
@@ -90,6 +94,11 @@ static size_t on_data(char *p, size_t sz, size_t nm, void *u) {
   size_t n = sz * nm;
   if (s->cancel && *s->cancel) return 0;
   if (s->n + n > s->max) { s->too_big = 1; return 0; }
+  if (s->f) {
+    if (fwrite(p, 1, n, s->f) != n) return 0;
+    s->n += n;
+    return n;
+  }
   if (s->n + n + 1 > s->cap) {
     size_t cap = s->cap ? s->cap : 64 * 1024;
     while (cap < s->n + n + 1) cap *= 2;
@@ -108,15 +117,51 @@ static int on_progress(void *u, curl_off_t total, curl_off_t now, curl_off_t ut,
   return s->cancel && *s->cancel;
 }
 
+static int perform(LvHttp *h, const char *url, Sink *sp, const char **err);
 int lv_http_get(LvHttp *h, const char *url, uint8_t **out, size_t *n, size_t max, volatile int *cancel,
                 volatile float *progress, const char **err) {
-  static __thread char why[CURL_ERROR_SIZE];
+  Sink s = {NULL, NULL, 0, 0, max, cancel, progress, 0};
   *out = NULL;
   *n = 0;
+  int st = perform(h, url, &s, err);
+  if (st < 0) { free(s.b); return st; }
+  if (!s.b) { s.b = malloc(1); if (!s.b) return -1; s.cap = 1; }
+  s.b[s.n] = 0;
+  *out = s.b;
+  *n = s.n;
+  return st;
+}
+
+int lv_http_get_file(LvHttp *h, const char *url, const char *path, size_t *n, size_t max, volatile int *cancel,
+                     volatile float *progress, const char **err) {
+  char tmp[600];
+  snprintf(tmp, sizeof tmp, "%s.part", path);
+  Sink s = {NULL, fopen(tmp, "wb"), 0, 0, max, cancel, progress, 0};
+  *n = 0;
+  if (!s.f) { if (err) *err = "No room on the memory card"; return -1; }
+  int st = perform(h, url, &s, err);
+  int ok = fclose(s.f) == 0 && st == 200;
+  if (!ok) { remove(tmp); return st < 0 ? st : st == 200 ? -1 : st; }
+  remove(path);
+  if (rename(tmp, path) != 0) { remove(tmp); return -1; }
+  *n = s.n;
+  return st;
+}
+
+static int perform(LvHttp *h, const char *url, Sink *sp, const char **err) {
+  static __thread char why[CURL_ERROR_SIZE];
+  Sink s0 = *sp;
   why[0] = 0;
   if (err) *err = why;
   if (!up || !h) { snprintf(why, sizeof why, "No network"); return -1; }
-  Sink s = {NULL, 0, 0, max, cancel, progress, 0};
+  // (woken up since the last request: a fresh handle, no connections from before)
+  if (h->gen != net_gen) {
+    curl_easy_cleanup(h->c);
+    h->c = curl_easy_init();
+    h->gen = net_gen;
+    if (!h->c) { snprintf(why, sizeof why, "No network"); return -1; }
+  }
+  Sink *s = sp;
   CURL *c = h->c;
   curl_easy_reset(c); // (the connection itself stays open for the next request)
   curl_easy_setopt(c, CURLOPT_URL, url);
@@ -135,31 +180,29 @@ int lv_http_get(LvHttp *h, const char *url, uint8_t **out, size_t *n, size_t max
   curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 64L * 1024);
   curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, on_data);
-  curl_easy_setopt(c, CURLOPT_WRITEDATA, &s);
+  curl_easy_setopt(c, CURLOPT_WRITEDATA, s);
   curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, on_progress);
-  curl_easy_setopt(c, CURLOPT_XFERINFODATA, &s);
+  curl_easy_setopt(c, CURLOPT_XFERINFODATA, s);
   curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
   curl_easy_setopt(c, CURLOPT_ERRORBUFFER, why);
   if (proxy[0]) curl_easy_setopt(c, CURLOPT_PROXY, proxy);
   CURLcode r = curl_easy_perform(c);
   if (r == CURLE_BAD_CONTENT_ENCODING && !no_compress) {
     no_compress = 1;
-    free(s.b);
-    return lv_http_get(h, url, out, n, max, cancel, progress, err);
+    free(s->b);
+    if (s->f) rewind(s->f);
+    *s = s0;
+    if (s0.f) s->f = s0.f;
+    return perform(h, url, s, err);
   }
   long status = 0;
   curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &status);
   if (r != CURLE_OK) {
-    if (s.too_big) snprintf(why, sizeof why, "Too big for the Vita");
-    else if (cancel && *cancel) snprintf(why, sizeof why, "Cancelled");
+    if (s->too_big) snprintf(why, sizeof why, "Too big for the Vita");
+    else if (s->cancel && *s->cancel) snprintf(why, sizeof why, "Cancelled");
     else if (!why[0]) snprintf(why, sizeof why, "%s", curl_easy_strerror(r));
-    free(s.b);
     return -1;
   }
-  if (!s.b) { s.b = malloc(1); s.cap = 1; }
-  s.b[s.n] = 0;
-  *out = s.b;
-  *n = s.n;
   if (status >= 400) snprintf(why, sizeof why, "The site answered %ld", status);
   return (int)status;
 }

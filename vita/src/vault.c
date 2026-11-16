@@ -6,14 +6,23 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
+// Out of memory (the Vita's heap is fixed): nothing crashes on a failed allocation. Strings come back
+// as a shared empty one (never freed: sfree knows it), buffers stop growing, and lv_oom is set so a
+// load can say so instead of showing half a vault.
+int lv_oom;
+static char empty_[1];
+static void sfree(char *p) { if (p && p != empty_) free(p); }
 static char *dupn(const char *s, size_t n) {
   char *d = malloc(n + 1);
+  if (!d) { lv_oom = 1; return empty_; }
   memcpy(d, s, n);
   d[n] = 0;
   return d;
 }
-static char *dup(const char *s) { return dupn(s ? s : "", strlen(s ? s : "")); }
+static char *sdup(const char *s) { return dupn(s ? s : "", strlen(s ? s : "")); }
 
 // The items' strings: thousands of small ones, made once and dropped together, so they go into a few
 // big blocks instead of one malloc each (less time, no fragmentation of the Vita's fixed heap).
@@ -23,6 +32,7 @@ static char *arena_dup(LvArena **a, const char *s) {
   if (!*a || (*a)->used + n > (*a)->cap) {
     size_t cap = n > 256 * 1024 ? n : 256 * 1024;
     LvArena *b = malloc(sizeof *b + cap);
+    if (!b) { lv_oom = 1; return empty_; }
     b->next = *a;
     b->used = 0;
     b->cap = cap;
@@ -50,8 +60,11 @@ static int64_t time_key(const char *s) {
 typedef struct { char *s; size_t n, cap; } Buf;
 static void bput(Buf *b, const char *s, size_t n) {
   if (b->n + n + 1 > b->cap) {
-    b->cap = (b->n + n + 1) * 2;
-    b->s = realloc(b->s, b->cap);
+    size_t cap = (b->n + n + 1) * 2;
+    char *p = realloc(b->s, cap);
+    if (!p) { lv_oom = 1; return; }
+    b->s = p;
+    b->cap = cap;
   }
   memcpy(b->s + b->n, s, n);
   b->n += n;
@@ -66,12 +79,15 @@ void lv_csv_parse(const char *text, LvCsv *out) {
   char **row = NULL;
   Buf cell = {0};
   bput(&cell, "", 0);
+  if (!cell.s) return;
   int quoted = 0;
-#define PUSH_CELL() do { if (ncells == capcells) { capcells = capcells ? capcells * 2 : 16; row = realloc(row, capcells * sizeof *row); } \
-    row[ncells++] = dup(cell.s); cell.n = 0; cell.s[0] = 0; } while (0)
-#define PUSH_ROW() do { if (out->nrows == caprows) { caprows = caprows ? caprows * 2 : 64; out->rows = realloc(out->rows, caprows * sizeof *out->rows); \
-    out->ncells = realloc(out->ncells, caprows * sizeof *out->ncells); } out->rows[out->nrows] = row; out->ncells[out->nrows++] = ncells; \
-    row = NULL; ncells = 0; capcells = 0; } while (0)
+  // (out of memory: cells and rows stop being added, and lv_oom says so)
+#define PUSH_CELL() do { if (ncells == capcells) { int c_ = capcells ? capcells * 2 : 16; char **r_ = realloc(row, c_ * sizeof *row); \
+    if (r_) { row = r_; capcells = c_; } else lv_oom = 1; } if (ncells < capcells) row[ncells++] = sdup(cell.s); cell.n = 0; cell.s[0] = 0; } while (0)
+#define PUSH_ROW() do { if (out->nrows == caprows) { int c_ = caprows ? caprows * 2 : 64; char ***r_ = realloc(out->rows, c_ * sizeof *out->rows); \
+    if (r_) { out->rows = r_; } int *n_ = realloc(out->ncells, c_ * sizeof *out->ncells); if (n_) { out->ncells = n_; } \
+    if (r_ && n_) caprows = c_; else lv_oom = 1; } if (out->nrows < caprows) { out->rows[out->nrows] = row; out->ncells[out->nrows++] = ncells; } \
+    else { for (int k_ = 0; k_ < ncells; k_++) sfree(row[k_]); free(row); } row = NULL; ncells = 0; capcells = 0; } while (0)
   for (const char *p = text; *p; p++) {
     char ch = *p;
     if (quoted) {
@@ -102,7 +118,7 @@ void lv_csv_parse(const char *text, LvCsv *out) {
 }
 void lv_csv_free(LvCsv *c) {
   for (int r = 0; r < c->nrows; r++) {
-    for (int k = 0; k < c->ncells[r]; k++) free(c->rows[r][k]);
+    for (int k = 0; k < c->ncells[r]; k++) sfree(c->rows[r][k]);
     free(c->rows[r]);
   }
   free(c->rows);
@@ -229,6 +245,72 @@ void lv_vault_init(LvVault *v, const char *root) {
   size_t n = strlen(v->root);
   while (n > 1 && v->root[n - 1] == '/') v->root[--n] = 0;
   v->untraceable = lv_is_untraceable(v->root);
+  // a write cut short (the battery, a crash): lv_write_all moves the old file aside as .old, the
+  // new one in from .part, then drops .old. Whatever step it stopped at, this finishes or undoes it.
+  static const char *files[] = {"index.csv", "views.csv", "_app/state.json", "_app/settings.json"};
+  for (size_t k = 0; k < sizeof files / sizeof *files; k++) {
+    char f[700], old[720], part[720];
+    snprintf(f, sizeof f, "%s/%s", v->root, files[k]);
+    snprintf(old, sizeof old, "%s.old", f);
+    snprintf(part, sizeof part, "%s.part", f);
+    struct stat st;
+    if (stat(f, &st) != 0 && stat(old, &st) == 0) rename(old, f);
+    else if (stat(old, &st) == 0) remove(old);
+    remove(part);
+  }
+}
+
+// A copy of index.csv, views.csv and settings.json in _app/backups/<today>, before the first change
+// of the day, the 14 newest kept (backup_daily in lib.rs: the same folders, so the PC's restore finds
+// them). Copied as they are, still encrypted in an Untraceable vault.
+int lv_backup_days = 14;
+static void backup_daily(LvVault *v, const char *today) {
+  char dir[700], from[700], to[1100];
+  snprintf(dir, sizeof dir, "%s/_app/backups", v->root);
+  mkdir(dir, 0777);
+  snprintf(dir, sizeof dir, "%s/_app/backups/%.10s", v->root, today);
+  struct stat st;
+  if (stat(dir, &st) == 0 || mkdir(dir, 0777) != 0) return;
+  static const char *names[][2] = {{"index.csv", "index.csv"}, {"views.csv", "views.csv"}, {"_app/settings.json", "settings.json"}};
+  for (int k = 0; k < 3; k++) {
+    snprintf(from, sizeof from, "%s/%s", v->root, names[k][0]);
+    snprintf(to, sizeof to, "%s/%s", dir, names[k][1]);
+    if (stat(from, &st) != 0 || st.st_size == 0) continue;
+    FILE *a = fopen(from, "rb"), *b = a ? fopen(to, "wb") : NULL;
+    char buf[16384];
+    size_t n;
+    while (a && b && (n = fread(buf, 1, sizeof buf, a)) > 0) fwrite(buf, 1, n, b);
+    if (a) fclose(a);
+    if (b) fclose(b);
+  }
+  // the oldest go
+  char days[64][16];
+  int nd = 0;
+  snprintf(dir, sizeof dir, "%s/_app/backups", v->root);
+  DIR *d = opendir(dir);
+  struct dirent *e;
+  while (d && (e = readdir(d)) && nd < 64)
+    if (!strncmp(e->d_name, "20", 2) && strlen(e->d_name) == 10) snprintf(days[nd++], 16, "%s", e->d_name);
+  if (d) closedir(d);
+  while (nd > lv_backup_days) {
+    int oldest = 0;
+    for (int k = 1; k < nd; k++) if (strcmp(days[k], days[oldest]) < 0) oldest = k;
+    for (int k = 0; k < 3; k++) {
+      snprintf(to, sizeof to, "%s/%s/%s", dir, days[oldest], names[k][1]);
+      remove(to);
+    }
+    snprintf(to, sizeof to, "%s/%s", dir, days[oldest]);
+    rmdir(to);
+    memcpy(days[oldest], days[--nd], 16);
+  }
+}
+static void backup_today(LvVault *v) {
+  time_t t = time(NULL);
+  struct tm l;
+  localtime_r(&t, &l);
+  char d[16];
+  strftime(d, sizeof d, "%Y-%m-%d", &l);
+  backup_daily(v, d);
 }
 
 const uint8_t *lv_key(const LvVault *v) { return v->has_key ? v->key : NULL; }
@@ -266,8 +348,8 @@ static void map_put(Map *m, const char *k, const char *val) {
     if (!strcmp(m->keys[i], k)) return; // (the first one found wins)
     i = (i + 1) & (m->cap - 1);
   }
-  m->keys[i] = dup(k);
-  m->vals[i] = dup(val);
+  m->keys[i] = sdup(k);
+  m->vals[i] = sdup(val);
 }
 static const char *map_get(const Map *m, const char *k) {
   size_t i = hash(k) & (m->cap - 1);
@@ -333,6 +415,7 @@ static int cmp_cats(const void *a, const void *b) {
 
 int lv_vault_load(LvVault *v, const char **why) {
   static const char *msg;
+  lv_oom = 0;
   if (v->untraceable && !v->has_key) { msg = "This vault is locked"; if (why) *why = msg; return -1; }
   char *text = read_text(v, "index.csv");
   if (!text) { msg = "index.csv could not be read"; if (why) *why = msg; return -1; }
@@ -420,7 +503,7 @@ int lv_vault_load(LvVault *v, const char **why) {
     if (k == v->ncats) {
       v->cats = realloc(v->cats, (v->ncats + 1) * sizeof *v->cats);
       v->cat_counts = realloc(v->cat_counts, (v->ncats + 1) * sizeof *v->cat_counts);
-      v->cats[k] = dup(v->items[i].category);
+      v->cats[k] = sdup(v->items[i].category);
       v->cat_counts[k] = 0;
       v->ncats++;
     }
@@ -456,12 +539,12 @@ int lv_vault_load(LvVault *v, const char **why) {
         int n = c.ncells[r];
         if (n == 0 || !row[0][0]) continue;
         LvView *w = &v->views[v->nviews++];
-        w->id = dup(cell(row, n, k_id));
-        w->uid = dup(cell(row, n, k_uid));
+        w->id = sdup(cell(row, n, k_id));
+        w->uid = sdup(cell(row, n, k_uid));
         w->views = int_of(cell(row, n, k_views));
-        w->last = dup(cell(row, n, k_last));
+        w->last = sdup(cell(row, n, k_last));
         w->likes = int_of(cell(row, n, k_likes));
-        w->last_like = dup(cell(row, n, k_ll));
+        w->last_like = sdup(cell(row, n, k_ll));
         const char *s = cell(row, n, k_secs);
         char *end;
         double sec = strtod(s, &end);
@@ -492,6 +575,13 @@ int lv_vault_load(LvVault *v, const char **why) {
   }
   // the hot fields, side by side
   v->hot = malloc((v->n + 1) * sizeof *v->hot);
+  if (!v->hot || !v->items || lv_oom) {
+    lv_vault_free(v);
+    lv_oom = 0;
+    msg = "Not enough memory for this vault";
+    if (why) *why = msg;
+    return -1;
+  }
   for (int i = 0; i < v->n; i++) {
     LvItem *it = &v->items[i];
     LvHot *h = &v->hot[i];
@@ -512,10 +602,10 @@ void lv_vault_free(LvVault *v) {
   free(v->hot);
   v->hot = NULL;
   for (int k = 0; k < v->nviews; k++) {
-    free(v->views[k].id); free(v->views[k].uid); free(v->views[k].last); free(v->views[k].last_like);
+    sfree(v->views[k].id); sfree(v->views[k].uid); sfree(v->views[k].last); sfree(v->views[k].last_like);
   }
   free(v->views);
-  for (int k = 0; k < v->ncats; k++) free(v->cats[k]);
+  for (int k = 0; k < v->ncats; k++) sfree(v->cats[k]);
   free(v->cats);
   free(v->cat_counts);
   v->items = NULL; v->views = NULL; v->cats = NULL; v->cat_counts = NULL;
@@ -586,10 +676,10 @@ static LvView *row_for(LvVault *v, LvItem *it) {
   }
   LvView *w = &v->views[v->nviews];
   memset(w, 0, sizeof *w);
-  w->id = dup(it->id);
-  w->uid = dup(it->uid);
-  w->last = dup("");
-  w->last_like = dup("");
+  w->id = sdup(it->id);
+  w->uid = sdup(it->uid);
+  w->last = sdup("");
+  w->last_like = sdup("");
   it->view = v->nviews++;
   if (v->hot) v->hot[it - v->items].view = it->view;
   return w;
@@ -597,13 +687,13 @@ static LvView *row_for(LvVault *v, LvItem *it) {
 void lv_viewed(LvVault *v, LvItem *it, const char *now) {
   LvView *w = row_for(v, it);
   w->views++;
-  if (strcmp(now, w->last) > 0) { free(w->last); w->last = dup(now); }
+  if (strcmp(now, w->last) > 0) { sfree(w->last); w->last = sdup(now); }
   v->views_dirty = 1;
 }
 void lv_liked(LvVault *v, LvItem *it, const char *now) {
   LvView *w = row_for(v, it);
   w->likes++;
-  if (strcmp(now, w->last_like) > 0) { free(w->last_like); w->last_like = dup(now); }
+  if (strcmp(now, w->last_like) > 0) { sfree(w->last_like); w->last_like = sdup(now); }
   v->views_dirty = 1;
 }
 void lv_add_seconds(LvVault *v, LvItem *it, double secs) {
@@ -640,6 +730,7 @@ char *lv_views_csv(const LvVault *v) {
 
 int lv_vault_save_views(LvVault *v) {
   if (!v->views_dirty) return 0;
+  backup_today(v);
   char *text = lv_views_csv(v);
   char p[700];
   snprintf(p, sizeof p, "%s/views.csv", v->root);
@@ -698,10 +789,11 @@ static void save_next_uid(LvVault *v, long next) {
   free(st);
 }
 
-int lv_vault_add(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, const char *ext,
-                 const uint8_t *thumb, size_t tlen, int tw, int th, const char **why) {
+int lv_vault_add_files(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, const char *ext,
+                       const uint8_t *thumb, size_t tlen, int tw, int th, LvAdded *out, const char **why) {
   static const char *msg;
   if (v->untraceable && !v->has_key) { msg = "The vault is locked"; *why = msg; return -1; }
+  backup_today(v);
   long next = next_uid(v);
   char uid[16], dir[300], name[400], path[1300], tname[64], tpath[800], tid[128], tb[96];
   snprintf(uid, sizeof uid, "%06ld", next);
@@ -719,7 +811,8 @@ int lv_vault_add(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, co
   snprintf(path, sizeof path, "%s/%s", v->root, dir);
   mkdir(path, 0777);
   snprintf(path, sizeof path, "%s/%s/%s", v->root, dir, name);
-  if (lv_write_all(path, lv_key(v), data, len) != 0) { msg = "The file could not be written (is the memory card full?)"; *why = msg; return -1; }
+  // (data NULL: the file is at n->from, copied in pieces: a big video never has to fit in memory)
+  if (data ? lv_write_all(path, lv_key(v), data, len) != 0 : lv_copy_file(n->from, path, lv_key(v)) != 0) { msg = "The file could not be written (is the memory card full?)"; *why = msg; return -1; }
   // the thumbnail, made card-sized, in _app/thumbs (named the way the PC's are)
   tid[0] = 0;
   if (thumb && tlen) {
@@ -753,11 +846,22 @@ int lv_vault_add(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, co
   free(row.s);
   if (!ok) { remove(path); msg = "index.csv could not be written"; *why = msg; return -1; }
   save_next_uid(v, next + 1);
+  snprintf(out->uid, sizeof out->uid, "%s", uid);
+  snprintf(out->name, sizeof out->name, "%s", name);
+  snprintf(out->path, sizeof out->path, "%s", path);
+  snprintf(out->thumb, sizeof out->thumb, "%s", tid);
+  return 0;
+}
 
-  // and into the loaded vault, without reading it all again
+// The new item into the loaded vault, without reading it all again.
+int lv_vault_add_memory(LvVault *v, const LvNew *n, const LvAdded *a) {
+  char id[24];
+  snprintf(id, sizeof id, "item-%s", a->uid);
+  const char *uid = a->uid, *name = a->name, *path = a->path, *tid = a->thumb;
+  char kind_letter = !strcmp(n->kind, "video") ? 'v' : !strcmp(n->kind, "gif") ? 'g' : 'i';
   LvItem *items = realloc(v->items, (v->n + 1) * sizeof *items);
   LvHot *hot = realloc(v->hot, (v->n + 2) * sizeof *hot);
-  if (!items || !hot) { if (items) v->items = items; if (hot) v->hot = hot; msg = "Saved (reopen the vault to see it)"; *why = msg; return 0; }
+  if (!items || !hot) { if (items) v->items = items; if (hot) v->hot = hot; return -1; }
   v->items = items;
   v->hot = hot;
   LvItem *it = &v->items[v->n];
@@ -774,7 +878,7 @@ int lv_vault_add(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, co
   if (c == v->ncats) {
     v->cats = realloc(v->cats, (v->ncats + 1) * sizeof *v->cats);
     v->cat_counts = realloc(v->cat_counts, (v->ncats + 1) * sizeof *v->cat_counts);
-    v->cats[c] = dup(n->category);
+    v->cats[c] = sdup(n->category);
     v->cat_counts[c] = 0;
     v->ncats++;
   }
@@ -786,5 +890,12 @@ int lv_vault_add(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, co
   hh->quality = (uint8_t)n->quality;
   hh->view = -1;
   v->n++;
+  return 0;
+}
+int lv_vault_add(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, const char *ext,
+                 const uint8_t *thumb, size_t tlen, int tw, int th, const char **why) {
+  LvAdded a;
+  if (lv_vault_add_files(v, n, data, len, ext, thumb, tlen, tw, th, &a, why) != 0) return -1;
+  lv_vault_add_memory(v, n, &a); // (out of memory: it's on the card all the same, and shows next time)
   return 0;
 }

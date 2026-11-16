@@ -19,6 +19,9 @@
 #include <psp2/power.h>
 #include <psp2/sysmodule.h>
 #include <psp2/touch.h>
+#include <psp2/kernel/threadmgr/callback.h>
+#include <psp2/kernel/processmgr.h>
+#include <psp2/power.h>
 #include <pthread.h>
 #include <dirent.h>
 #include <math.h>
@@ -53,7 +56,7 @@ int _newlib_heap_size_user = 200 * 1024 * 1024;
 #define CARD_H 197
 #define GAP 8
 #define MARGIN ((W - COLS * CARD_W - (COLS - 1) * GAP) / 2)
-#define SLOTS 110
+#define SLOTS 120 // (four atlases of 30 cards; the Browser has four more)
 
 // ---------- colours (the vault's theme picks the accent, as on the phone) ----------
 #define RGBA(r, g, b, a) ((unsigned)(r) | (unsigned)(g) << 8 | (unsigned)(b) << 16 | (unsigned)(a) << 24)
@@ -284,10 +287,16 @@ typedef struct { int item; vita2d_texture *tex; unsigned used; } Slot;
 static Slot slots[SLOTS];
 static signed char *tstate; // per item: 0 nothing, 1 asked, 2 in a slot, 3 failed
 static pthread_mutex_t mx = PTHREAD_MUTEX_INITIALIZER;
+// The vault and the thumbnail thread: the thread holds vmx while it reads an item; whatever changes
+// the loaded vault (opening, closing, a save from the Browser) holds it too. vgen counts the vaults
+// opened: work for one that's gone is dropped, never used.
+static pthread_mutex_t vmx = PTHREAD_MUTEX_INITIALIZER;
+static volatile int vgen = 1;
+
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
 static int want[64], nwant;
 static struct { int item, gen, max_w, max_h; } big_ask = {-1, 0, 0, 0};
-typedef struct { int item, big, gen; LvPixels px; } Done;
+typedef struct { int item, big, gen, vgen; LvPixels px; } Done;
 static Done done[16];
 static int ndone;
 static volatile int worker_run = 1;
@@ -375,10 +384,13 @@ static void *worker(void *arg) {
       memmove(want, want + 1, --nwant * sizeof *want);
     }
     int full = ndone >= (int)(sizeof done / sizeof *done);
+    int my_vgen = vgen;
     pthread_mutex_unlock(&mx);
-    if (full) { sceKernelDelayThread(4000); if (!big) { pthread_mutex_lock(&mx); tstate[item] = 0; pthread_mutex_unlock(&mx); } continue; }
-    LvPixels px;
+    if (full) { sceKernelDelayThread(4000); pthread_mutex_lock(&mx); if (!big && my_vgen == vgen && item < vault.n) tstate[item] = 0; pthread_mutex_unlock(&mx); continue; }
+    LvPixels px = {0};
     int r = -1;
+    pthread_mutex_lock(&vmx);
+    if (my_vgen != vgen || !loaded_vault || item < 0 || item >= vault.n) { pthread_mutex_unlock(&vmx); continue; } // (that vault is gone)
     if (big) {
       LvItem *it = &vault.items[item];
       size_t n = 0;
@@ -388,10 +400,12 @@ static void *worker(void *arg) {
     } else {
       r = thumb_pixels(item, &px);
     }
+    pthread_mutex_unlock(&vmx);
     pthread_mutex_lock(&mx);
-    if (r == 0) done[ndone++] = (Done){item, big, gen, px};
+    if (my_vgen != vgen) { free(px.rgba); }
+    else if (r == 0) done[ndone++] = (Done){item, big, gen, my_vgen, px};
     else if (!big) tstate[item] = 3;
-    else done[ndone++] = (Done){item, big, gen, {NULL, 0, 0}};
+    else done[ndone++] = (Done){item, big, gen, my_vgen, {NULL, 0, 0}};
     pthread_mutex_unlock(&mx);
   }
   return NULL;
@@ -422,6 +436,57 @@ static vita2d_texture *upload(const LvPixels *px) {
   return t;
 }
 
+// The cards' thumbnails live in a few big atlas textures, 30 card-sized cells each, made once: no
+// texture is made or freed while scrolling (the GPU's memory doesn't fragment over a long session).
+// Each cell is a texture of its own as far as drawing goes: a view onto its part of the atlas
+// (sceGxmTextureInitLinearStrided).
+#define ACOLS 6
+#define AROWS 5
+#define CELLS_PER_ATLAS (ACOLS * AROWS)
+#define ATLASES 8 // (cells 0-119 the Library's, 120-239 the Browser's)
+static vita2d_texture *atlas[ATLASES];
+static vita2d_texture cells[ATLASES * CELLS_PER_ATLAS];
+static void atlas_init(void) {
+  for (int a = 0; a < ATLASES; a++) {
+    atlas[a] = vita2d_create_empty_texture(1024, 1024);
+    if (!atlas[a]) continue;
+    uint8_t *d = vita2d_texture_get_datap(atlas[a]);
+    unsigned stride = vita2d_texture_get_stride(atlas[a]);
+    for (int k = 0; k < CELLS_PER_ATLAS; k++) {
+      int x = (k % ACOLS) * (CARD_W + 2), y = (k / ACOLS) * (CARD_H + 2);
+      vita2d_texture *c = &cells[a * CELLS_PER_ATLAS + k];
+      memset(c, 0, sizeof *c);
+      sceGxmTextureInitLinearStrided(&c->gxm_tex, d + (size_t)y * stride + (size_t)x * 4, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, CARD_W, CARD_H, stride);
+      sceGxmTextureSetMinFilter(&c->gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
+      sceGxmTextureSetMagFilter(&c->gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
+    }
+  }
+}
+// A card's picture into its cell: cropped to the card's shape (from near the top for a tall one,
+// where faces tend to be) and scaled to fit, nearest pixel (cover_size made it about the right size).
+static vita2d_texture *put_cell(int cell, const LvPixels *px) {
+  vita2d_texture *at = atlas[cell / CELLS_PER_ATLAS];
+  if (!at || !px->rgba || px->w <= 0 || px->h <= 0) return NULL;
+  int k = cell % CELLS_PER_ATLAS;
+  unsigned stride = vita2d_texture_get_stride(at);
+  uint8_t *d = (uint8_t *)vita2d_texture_get_datap(at) + (size_t)((k / ACOLS) * (CARD_H + 2)) * stride + (size_t)((k % ACOLS) * (CARD_W + 2)) * 4;
+  float s = fmaxf((float)CARD_W / px->w, (float)CARD_H / px->h);
+  float sw = CARD_W / s, sh = CARD_H / s;
+  float sx = (px->w - sw) / 2, sy = (px->h - sh) * 0.3f;
+  for (int y = 0; y < CARD_H; y++) {
+    int yy = (int)(sy + (y + 0.5f) / s);
+    if (yy >= px->h) yy = px->h - 1;
+    const uint32_t *srow = (const uint32_t *)(px->rgba + (size_t)yy * px->w * 4);
+    uint32_t *drow = (uint32_t *)(d + (size_t)y * stride);
+    for (int x = 0; x < CARD_W; x++) {
+      int xx = (int)(sx + (x + 0.5f) / s);
+      if (xx >= px->w) xx = px->w - 1;
+      drow[x] = srow[xx] | 0xFF000000u;
+    }
+  }
+  return &cells[cell];
+}
+
 static vita2d_texture *big_tex;
 static int big_item = -1, big_gen, big_failed;
 
@@ -440,6 +505,7 @@ static void take_results(void) {
   pthread_mutex_unlock(&mx);
   for (int k = 0; k < n; k++) {
     Done *d = &got[k];
+    if (d->vgen != vgen || d->item >= vault.n) { free(d->px.rgba); continue; }
     if (d->big) {
       if (d->gen == big_gen) {
         free_later(big_tex);
@@ -452,8 +518,8 @@ static void take_results(void) {
       // the slot used longest ago
       int best = 0;
       for (int s = 1; s < SLOTS; s++) if (slots[s].used < slots[best].used) best = s;
-      if (slots[best].tex) { free_later(slots[best].tex); tstate[slots[best].item] = 0; slot_of[slots[best].item] = -1; }
-      slots[best].tex = upload(&d->px);
+      if (slots[best].tex && slots[best].item >= 0 && slots[best].item < vault.n) { tstate[slots[best].item] = 0; slot_of[slots[best].item] = -1; }
+      slots[best].tex = put_cell(best, &d->px);
       slots[best].item = d->item;
       slot_of[d->item] = (short)best;
       slots[best].used = frame_no;
@@ -486,7 +552,7 @@ static void ask_big(int item) {
 }
 static void drop_textures(void) {
   vita2d_wait_rendering_done();
-  for (int k = 0; k < SLOTS; k++) { if (slots[k].tex) vita2d_free_texture(slots[k].tex); if (slots[k].item >= 0 && slot_of) slot_of[slots[k].item] = -1; slots[k].tex = NULL; slots[k].item = -1; slots[k].used = 0; }
+  for (int k = 0; k < SLOTS; k++) { slots[k].tex = NULL; slots[k].item = -1; slots[k].used = 0; } // (the cells stay: the atlases are for good)
   if (big_tex) vita2d_free_texture(big_tex);
   big_tex = NULL;
   big_item = -1;
@@ -662,22 +728,78 @@ static void apply_theme(void) {
 
 static int scroll_target, sel;
 static float scroll, scroll_v;
+static void close_vault(void) {
+  if (!loaded_vault) return;
+  pthread_mutex_lock(&mx);
+  vgen++; // (the thumbnail thread's work for this vault is dropped from now on)
+  nwant = 0;
+  big_ask.item = -1;
+  pthread_mutex_unlock(&mx);
+  pthread_mutex_lock(&vmx);
+  lv_vault_save_views(&vault);
+  drop_textures();
+  loaded_vault = 0;
+  lv_vault_free(&vault);
+  pthread_mutex_unlock(&vmx);
+}
 static void open_vault(const char *path) {
-  if (loaded_vault) { lv_vault_save_views(&vault); drop_textures(); lv_vault_free(&vault); loaded_vault = 0; }
+  close_vault();
+  pthread_mutex_lock(&vmx);
   lv_vault_init(&vault, path);
+  pthread_mutex_unlock(&vmx);
   snprintf(cfg.vault, sizeof cfg.vault, "%s", path);
   cfg_save();
   screen = vault.untraceable ? S_LOCKED : S_UNLOCKING;
 }
+// Unlocking (two seconds of key making) and reading the vault (a big one takes a while) happen on a
+// thread of their own, so the screen keeps moving: the main loop looks at load_state.
+static volatile int load_state; // 0 idle, 1 working, 2 done, 3 failed, 4 wrong password, 5 no check file
+static const char *load_why;
+static char password[128];
+static void *load_main(void *arg) {
+  int unlock = (int)(intptr_t)arg;
+  pthread_mutex_lock(&vmx);
+  int st = 2;
+  if (unlock) {
+    int ok = lv_vault_unlock(&vault, password);
+    memset(password, 0, sizeof password);
+    if (ok != 1) st = ok == 0 ? 4 : 5;
+  }
+  if (st == 2 && lv_vault_load(&vault, &load_why) != 0) st = 3;
+  pthread_mutex_unlock(&vmx);
+  load_state = st;
+  return NULL;
+}
+static void start_load(int unlock) {
+  load_state = 1;
+  pthread_t t;
+  pthread_attr_t at;
+  pthread_attr_init(&at);
+  pthread_attr_setstacksize(&at, 256 * 1024);
+  if (pthread_create(&t, &at, load_main, (void *)(intptr_t)unlock) != 0) { load_main((void *)(intptr_t)unlock); return; }
+  pthread_detach(t);
+}
 static void finish_open(void) {
-  const char *why = NULL;
-  if (lv_vault_load(&vault, &why) != 0) { say(why ? why : "The vault could not be opened"); screen = S_PICK; return; }
-  loaded_vault = 1;
+  const char *why = load_why;
+  if (load_state != 2) { say(why ? why : "The vault could not be opened"); screen = S_PICK; load_state = 0; return; }
+  load_state = 0;
+  pthread_mutex_lock(&mx);
   free(tstate);
   tstate = calloc(vault.n + 1, 1);
   free(slot_of);
   slot_of = malloc((vault.n + 1) * sizeof *slot_of);
+  if (!tstate || !slot_of) {
+    pthread_mutex_unlock(&mx);
+    say("Not enough memory for this vault");
+    pthread_mutex_lock(&vmx);
+    lv_vault_free(&vault);
+    pthread_mutex_unlock(&vmx);
+    screen = S_PICK;
+    return;
+  }
   for (int i = 0; i <= vault.n; i++) slot_of[i] = -1;
+  loaded_vault = 1;
+  pthread_mutex_unlock(&mx);
   for (int k = 0; k < SLOTS; k++) slots[k].item = -1;
   snprintf(cache_dir, sizeof cache_dir, DATA "/cache/%08lx", fnv(vault.root));
   sceIoMkdir(DATA "/cache", 0777);
@@ -726,7 +848,6 @@ static void draw_pick(void) {
 }
 
 // ----- an Untraceable vault: the password -----
-static char password[128];
 static void draw_locked(void) {
   float cx = W / 2.0f;
   circle(cx, 170, 48, with_alpha(ACC, 60));
@@ -947,8 +1068,23 @@ static int vid_item = -1, vid_clip;
 static unsigned view_started;
 static float pinch_d0, zoom0;
 
+// A video is closed at the start of the next frame, not in the middle of one: the frame being put
+// together may already draw its picture, which lives in the player's own memory.
+static LvVideo *closing[8];
+static int nclosing;
+static void video_close_later(LvVideo *v) {
+  if (!v) return;
+  if (nclosing < 8) closing[nclosing++] = v;
+  // (eight in one frame can't happen; if it did, a leak is better than a crash)
+}
+static void videos_close_now(void) {
+  if (!nclosing) return;
+  vita2d_wait_rendering_done();
+  for (int k = 0; k < nclosing; k++) lv_video_close(closing[k]);
+  nclosing = 0;
+}
 static void stop_video(void) {
-  if (vid) { lv_video_close(vid); vid = NULL; }
+  if (vid) { video_close_later(vid); vid = NULL; }
   vid_item = -1;
 }
 static void account_time(void) {
@@ -1247,13 +1383,29 @@ static void draw_cover_screen(void) {
   text_center(W / 2, H / 2 + 64, RGBA(120, 128, 140, 255), 20, b);
 }
 
+// The Vita going to sleep and waking: afterwards the network's connections and the video player's
+// open file may be dead, so the videos close and the connections start afresh.
+static volatile int woke;
+static int power_cb(int notify_id, int count, int arg, void *user) {
+  if (arg & (SCE_POWER_CB_SYSTEM_RESUME | SCE_POWER_CB_APP_RESUME)) woke = 1;
+  return 0;
+}
+static int power_main(SceSize args, void *argp) {
+  SceUID cb = sceKernelCreateCallback("lv_power", 0, power_cb, NULL);
+  scePowerRegisterCallback(cb);
+  for (;;) sceKernelDelayThreadCB(1000000);
+  return 0;
+}
+
 // The vault got an item (a save from the Browser): the Library's per-item arrays grow with it.
-static void library_grew(void) {
+static void library_grew(int before) {
+  pthread_mutex_lock(&mx);
   signed char *t = realloc(tstate, vault.n + 1);
   short *so = realloc(slot_of, (vault.n + 1) * sizeof *so);
   if (t) tstate = t;
   if (so) slot_of = so;
-  if (t && so) { tstate[vault.n - 1] = 0; slot_of[vault.n - 1] = -1; tstate[vault.n] = 0; slot_of[vault.n] = -1; }
+  if (t && so) for (int i = before; i <= vault.n; i++) { tstate[i] = 0; slot_of[i] = -1; }
+  pthread_mutex_unlock(&mx);
   refilter();
 }
 
@@ -1289,17 +1441,29 @@ int main(void) {
   pthread_attr_init(&at);
   pthread_attr_setstacksize(&at, 256 * 1024);
   pthread_create(&th, &at, worker, NULL);
+  SceUID pt = sceKernelCreateThread("lv_power", power_main, 0x10000100, 0x10000, 0, 0, NULL);
+  if (pt >= 0) sceKernelStartThread(pt, 0, NULL);
+  atlas_init();
 
   find_vaults();
   if (cfg.vault[0] && lv_is_vault(cfg.vault)) open_vault(cfg.vault);
   else if (nfound == 1) open_vault(found[0]);
 
-  int unlock_stage = 0;
   unsigned idle_save = 0;
   for (;;) {
     frame_no++;
     read_input();
     if (npending) { vita2d_wait_rendering_done(); for (int k = 0; k < npending; k++) vita2d_free_texture(pending_free[k]); npending = 0; }
+    videos_close_now();
+    if (woke) {
+      woke = 0;
+      lv_net_reset();
+      if (vid) { stop_video(); say("Paused while the Vita slept"); }
+      if (wv_vid) { video_close_later(wv_vid); wv_vid = NULL; }
+    }
+    // (a video playing, or a slideshow: the Vita doesn't dim or sleep)
+    if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow))
+      sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
     if (loaded_vault) take_results();
     if (web_started) web_take_results();
 
@@ -1307,7 +1471,7 @@ int main(void) {
     if (ime_open) {
       char got[120];
       int r = ime_poll(got, sizeof got);
-      if (r == 1 && ime_for == 1) { snprintf(password, sizeof password, "%s", got); screen = S_UNLOCKING; unlock_stage = 0; }
+      if (r == 1 && ime_for == 1) { snprintf(password, sizeof password, "%s", got); load_state = 0; screen = S_UNLOCKING; }
       if (r == 1 && ime_for == 3) { char clean[128]; snprintf(cfg.wquery, sizeof cfg.wquery, "%s", lv_booru_clean(got, clean, sizeof clean)); sheet = SH_NONE; screen = S_WEB; web_search(); }
       if (r == 1 && ime_for == 2) { snprintf(query, sizeof query, "%s", got); cat = -1; refilter(); sel = 0; scroll = 0; screen = S_LIBRARY; }
       if (r != 0) memset(&in, 0, sizeof in);
@@ -1331,7 +1495,7 @@ int main(void) {
       case S_PICK: draw_pick(); break;
       case S_LOCKED: draw_locked(); break;
       case S_UNLOCKING:
-        draw_unlocking(unlock_stage >= 2 || !vault.untraceable);
+        draw_unlocking(!vault.untraceable || vault.has_key);
         break;
       case S_LIBRARY: draw_library(); break;
       case S_VIEWER: draw_viewer(); break;
@@ -1350,18 +1514,14 @@ int main(void) {
     vita2d_common_dialog_update();
     vita2d_swap_buffers();
 
-    // the slow steps run between frames, after a frame that says what's happening has been shown
+    // the vault opens on its own thread (start_load); its end is picked up here
     if (screen == S_UNLOCKING) {
-      if (++unlock_stage == 2) {
-        if (vault.untraceable) {
-          int ok = lv_vault_unlock(&vault, password);
-          memset(password, 0, sizeof password);
-          if (ok != 1) { say(ok == 0 ? "That password isn't right" : "The vault's password check is missing"); screen = S_LOCKED; continue; }
-        }
-      } else if (unlock_stage == 4) {
-        finish_open();
-        unlock_stage = 0;
-      }
+      if (load_state == 0) start_load(vault.untraceable && !vault.has_key);
+      else if (load_state == 4 || load_state == 5) {
+        say(load_state == 4 ? "That password isn't right" : "The vault's password check is missing");
+        load_state = 0;
+        screen = S_LOCKED;
+      } else if (load_state == 2 || load_state == 3) finish_open();
     }
     // views reach the card now and then while looking (and always when leaving the full view)
     if (loaded_vault && vault.views_dirty && ++idle_save > 60 * 30) { lv_vault_save_views(&vault); idle_save = 0; }

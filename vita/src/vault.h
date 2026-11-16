@@ -78,9 +78,16 @@ int lv_vault_save_views(LvVault *v);
 // to the loaded vault. 0 on success; *why says what went wrong.
 typedef struct {
   const char *name, *category, *kind, *tags, *source, *added; // kind: image, gif or video
+  const char *from; // (with no data: a file to copy in, piece by piece)
   int nsfw, quality, width, height;
   double duration;
 } LvNew;
+// The same in two steps, for a thread that does the slow part: the files and the row (reads the
+// loaded items only for the next number), then the loaded vault (on the thread that draws it).
+typedef struct { char uid[16], name[400], path[1300], thumb[128]; } LvAdded;
+int lv_vault_add_files(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, const char *ext,
+                       const uint8_t *thumb, size_t tlen, int tw, int th, LvAdded *out, const char **why);
+int lv_vault_add_memory(LvVault *v, const LvNew *n, const LvAdded *a);
 int lv_vault_add(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, const char *ext,
                  const uint8_t *thumb, size_t tlen, int tw, int th, const char **why);
 
@@ -90,6 +97,7 @@ void lv_csv_parse(const char *text, LvCsv *out);
 void lv_csv_free(LvCsv *c);
 char *lv_csv_text(char ***rows, const int *ncells, int nrows); // malloc'd
 char *lv_views_csv(const LvVault *v);
+extern int lv_oom; // set when an allocation failed (a load then fails cleanly)
 int lv_b64url_decode(const char *in, char *out, size_t cap);
 void lv_b64url_encode(const char *in, char *out, size_t cap);
 void lv_num_or_empty(double f, char *out, size_t cap);
