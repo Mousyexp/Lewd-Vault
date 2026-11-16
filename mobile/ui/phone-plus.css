@@ -466,3 +466,53 @@ html.phone .ios-tabbar button.on::before { background: linear-gradient(135deg, v
 html.phone .ph-theme[data-t="sakura"] { --t-acc2: #ffd27f; } html.phone .ph-theme[data-t="midnight"] { --t-acc2: #ff8fc7; } html.phone .ph-theme[data-t="bubblegum"] { --t-acc2: #7ee8fa; }
 html.phone .ph-theme[data-t="aurora"] { --t-acc2: #8f9bff; } html.phone .ph-theme[data-t="kitten"] { --t-acc2: #ff8fb3; } html.phone .ph-theme[data-t="neon"] { --t-acc2: #2bf5ff; }
 html.phone .ph-theme[data-t="lavender"] { --t-acc2: #7fe0c4; } html.phone .ph-theme[data-t="mono"] { --t-acc2: #9a9aa2; } html.phone .ph-theme[data-t="app"] { --t-acc2: var(--accent-2, var(--accent)); }
+
+/* ---------- touch lock: nothing responds; a small lock at the top counts down (hold it to unlock) ---------- */
+html.phone .ph-tlock { position: fixed; inset: 0; z-index: 2147483000; touch-action: none; -webkit-user-select: none; user-select: none; }
+html.phone .ph-tlock-pill { --p: 0; position: absolute; top: calc(var(--safe-t) + 10px); left: 50%; display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px 0 10px;
+  border-radius: 99px; color: #fff; background: rgba(12, 10, 16, .62); -webkit-backdrop-filter: blur(16px) saturate(1.4); backdrop-filter: blur(16px) saturate(1.4);
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, .6), inset 0 0 0 1px rgba(255, 255, 255, .12); transform: translate(-50%, -70px); transition: transform .45s cubic-bezier(.2, 1.4, .4, 1), opacity .6s;
+  touch-action: none; }
+html.phone .ph-tlock.in .ph-tlock-pill { transform: translate(-50%, 0); }
+/* after a moment it steps back, so the picture is all there is; poking the screen brings it forward */
+html.phone .ph-tlock.in .ph-tlock-pill { animation: ph-tl-dim .6s ease 2.4s forwards; }
+html.phone .ph-tlock.poked .ph-tlock-pill { animation: ph-tl-shake .45s ease, ph-tl-dim .6s ease 2.4s forwards; }
+@keyframes ph-tl-dim { to { opacity: .32; } }
+@keyframes ph-tl-shake { 0% { opacity: 1; } 20% { transform: translate(calc(-50% - 7px), 0) rotate(-3deg); } 45% { transform: translate(calc(-50% + 6px), 0) rotate(3deg); } 70% { transform: translate(calc(-50% - 3px), 0); } 100% { opacity: 1; transform: translate(-50%, 0); } }
+html.phone .ph-tlock-pill i { width: 18px; height: 18px; flex: none; background: currentColor; -webkit-mask: var(--m) center / contain no-repeat; mask: var(--m) center / contain no-repeat;
+  --m: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><rect x='4.5' y='10.5' width='15' height='10.5' rx='3'/><path d='M8 10.5V7.5a4 4 0 0 1 8 0v3'/></svg>"); }
+html.phone .ph-tlock-pill b { font: 700 14px/1 system-ui, -apple-system, sans-serif; font-variant-numeric: tabular-nums; min-width: 34px; }
+/* the time left, as a ring round the pill; holding fills it the other way, in the accent */
+html.phone .ph-tlock-ring { position: absolute; inset: -3px; border-radius: inherit; padding: 2px; pointer-events: none;
+  background: conic-gradient(var(--accent) calc((1 - var(--p)) * 360deg), transparent 0); -webkit-mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; }
+html.phone .ph-tlock-pill.holding { opacity: 1 !important; animation: none !important; transform: translate(-50%, 0) scale(1.12); }
+html.phone .ph-tlock-pill.holding .ph-tlock-ring { background: conic-gradient(#fff 0deg, #fff 0deg); animation: ph-tl-hold 2s linear forwards; }
+@property --hold { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+@keyframes ph-tl-hold { from { --hold: 0deg; } to { --hold: 360deg; } }
+html.phone .ph-tlock-pill.holding .ph-tlock-ring { background: conic-gradient(var(--accent-2, #fff) var(--hold), rgba(255, 255, 255, .15) 0); }
+html.phone .ph-tlock-hint { position: absolute; left: 0; right: 0; top: calc(var(--safe-t) + 60px); text-align: center; font-size: 12.5px; font-weight: 600; color: #fff; text-shadow: 0 1px 6px rgba(0, 0, 0, .8);
+  opacity: 0; transition: opacity .3s; pointer-events: none; }
+html.phone .ph-tlock.in .ph-tlock-hint { animation: ph-tl-hint 2.6s ease .2s both; }
+html.phone .ph-tlock.poked .ph-tlock-hint { animation: ph-tl-hint 2.2s ease both; }
+@keyframes ph-tl-hint { 0% { opacity: 0; } 12%, 70% { opacity: 1; } 100% { opacity: 0; } }
+html.phone .ph-tlock.out { pointer-events: none; }
+html.phone .ph-tlock.out .ph-tlock-pill { opacity: 0; transform: translate(-50%, -70px) scale(.8); animation: none; }
+/* the choice */
+html.phone .ph-tl-back { position: fixed; inset: 0; z-index: 330; background: rgba(8, 4, 8, 0); transition: background .2s; }
+html.phone .ph-tl-back.in { background: rgba(8, 4, 8, .3); }
+html.phone .ph-tl-card { position: absolute; left: 50%; display: flex; flex-direction: column; gap: 10px; width: min(330px, calc(100vw - 32px)); padding: 14px; border-radius: 22px;
+  background: color-mix(in srgb, var(--panel) 90%, transparent); -webkit-backdrop-filter: blur(30px) saturate(1.6); backdrop-filter: blur(30px) saturate(1.6); box-shadow: 0 20px 50px -14px rgba(0, 0, 0, .7);
+  transform: translateX(-50%) scale(.85); opacity: 0; transition: transform .26s cubic-bezier(.2, 1.4, .4, 1), opacity .16s; }
+html.phone .ph-tl-back.in .ph-tl-card { transform: translateX(-50%); opacity: 1; }
+html.phone .ph-tl-card > b { font-size: 15px; }
+html.phone .ph-tl-card small { color: var(--dim); font-size: 12px; }
+html.phone .ph-tl-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+html.phone .ph-tl-opt { height: 44px; border: 0; border-radius: 14px; background: var(--ios-fill, rgba(127, 127, 127, .15)); color: var(--text); font: 700 14px/1 system-ui, -apple-system, sans-serif; }
+html.phone .ph-tl-opt:last-child { grid-column: 1 / -1; }
+html.phone .ph-tl-opt.on { background: linear-gradient(135deg, var(--accent), var(--accent-2, var(--accent))); color: var(--on-accent, #fff); }
+html.phone .ph-tl-opt:active { transform: scale(.95); }
+html.phone .ph-show-lock { width: 42px; height: 44px; padding: 0; display: grid; place-items: center; }
+html.phone .ph-show-lock::before { content: ''; width: 20px; height: 20px; background: currentColor; -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
+/* while locked, the buttons that would do nothing step aside: the picture (or the slideshow) has the screen */
+html.phone.ph-tlocked #detail :is(.ios-viewtop, .ios-viewbar, .ph-strip), html.phone.ph-tlocked #show .show-hud { opacity: 0 !important; transition: opacity .4s; }

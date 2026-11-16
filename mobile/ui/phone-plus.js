@@ -1014,5 +1014,113 @@
     back.onclick = e => { if (e.target === back) close(); };
   };
 
+  // ---------- touch lock: the screen ignores every touch for a while ----------
+  // For when the phone has to be held, propped up or handed over and nothing may change: the picture,
+  // the video or the slideshow carries on, but taps, swipes and pinches do nothing for 30 s, a minute,
+  // two, or until you unlock it (hold the little lock at the top for 2 s). The screen stays awake.
+  // Hide now (three fingers) still works: its listener comes first.
+  P.ICON.tlock = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><rect x='4.5' y='10.5' width='15' height='10.5' rx='3'/><path d='M8 10.5V7.5a4 4 0 0 1 8 0v3'/><path d='M12 14.5v2.5'/></svg>";
+  const TL_TIMES = [[30, '30 s'], [60, '1 min'], [120, '2 min'], [0, 'Until I unlock']];
+  let tlock = null;
+  const fmtLeft = s => s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : `${s}s`;
+  function touchLock(secs) {
+    if (tlock) return;
+    const until = secs ? Date.now() + secs * 1000 : 0;
+    const layer = make('div', 'ph-tlock');
+    const pill = make('div', 'ph-tlock-pill');
+    const ring = make('span', 'ph-tlock-ring');
+    const left = make('b', '', secs ? fmtLeft(secs) : 'Locked');
+    pill.append(ring, make('i'), left);
+    layer.append(pill, make('div', 'ph-tlock-hint', 'Touch is locked · hold the lock to unlock'));
+    document.body.append(layer);
+    html.classList.add('ph-tlocked'); // (the viewer's and slideshow's buttons step aside meanwhile)
+    requestAnimationFrame(() => layer.classList.add('in'));
+    // every touch, swipe, pinch and click goes nowhere (but the lock's own)
+    const KINDS = ['touchstart', 'touchmove', 'touchend', 'touchcancel', 'pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick', 'contextmenu', 'wheel', 'gesturestart', 'gesturechange', 'keydown'];
+    let poked = 0;
+    const swallow = e => {
+      if (e.target && e.target.closest && e.target.closest('.ph-tlock-pill')) return;
+      // three fingers: Hide now has just happened (its listener came first); the lock goes with it,
+      // so the way back from the cover isn't blocked
+      if (e.type === 'touchstart' && e.touches && e.touches.length >= 3) { end(true, true); return; }
+      if (e.cancelable) e.preventDefault();
+      e.stopImmediatePropagation();
+      if (e.type === 'touchstart' && Date.now() - poked > 600) { poked = Date.now(); layer.classList.remove('poked'); void layer.offsetWidth; layer.classList.add('poked'); buzz('warning'); }
+    };
+    for (const k of KINDS) addEventListener(k, swallow, { capture: true, passive: false });
+    // the screen stays on meanwhile (where the system allows it)
+    let wake = null;
+    try { if (navigator.wakeLock) navigator.wakeLock.request('screen').then(w => { wake = w; }).catch(() => {}); } catch (e) {}
+    // hold the lock for 2 s to unlock early
+    let holdT = null;
+    const holdStart = e => { e.preventDefault(); pill.classList.add('holding'); buzz('light'); holdT = setTimeout(() => end(true), 2000); };
+    const holdEnd = () => { clearTimeout(holdT); pill.classList.remove('holding'); };
+    pill.addEventListener('touchstart', holdStart, { passive: false });
+    pill.addEventListener('touchend', holdEnd);
+    pill.addEventListener('touchcancel', holdEnd);
+    pill.addEventListener('mousedown', holdStart);
+    pill.addEventListener('mouseup', holdEnd);
+    const tick = setInterval(() => {
+      if (!until) return;
+      const s = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+      left.textContent = fmtLeft(s);
+      pill.style.setProperty('--p', String(1 - (until - Date.now()) / (secs * 1000)));
+      if (s <= 0) end(false);
+    }, 250);
+    function end(early, quiet) {
+      if (!tlock) return;
+      tlock = null;
+      clearInterval(tick);
+      clearTimeout(holdT);
+      for (const k of KINDS) removeEventListener(k, swallow, { capture: true });
+      try { if (wake) wake.release(); } catch (e) {}
+      layer.classList.add('out');
+      html.classList.remove('ph-tlocked');
+      setTimeout(() => layer.remove(), 400);
+      if (quiet) return;
+      buzz('success');
+      if (typeof toast === 'function') toast(early ? 'Unlocked' : 'Touch is back', 'ok');
+    }
+    tlock = { end };
+    buzz('medium');
+  }
+  // the choice: how long
+  function askTouchLock(anchor) {
+    if (tlock) return;
+    const back = make('div', 'ph-tl-back');
+    const card = make('div', 'ph-tl-card');
+    card.append(make('b', '', 'Lock touch for'));
+    const row = make('div', 'ph-tl-row');
+    for (const [s, label] of TL_TIMES) {
+      const b = make('button', 'ph-tl-opt' + ((opt.tlock ?? 30) === s ? ' on' : ''), label); b.type = 'button';
+      b.onclick = e => { e.stopPropagation(); opt.tlock = s; saveOpt(); close(); setTimeout(() => touchLock(s), 180); };
+      row.append(b);
+    }
+    card.append(row, make('small', '', 'Hold the lock at the top for 2 seconds to unlock early.'));
+    back.append(card);
+    document.body.append(back);
+    const r = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
+    if (r && r.top > innerHeight / 2) card.style.bottom = (innerHeight - r.top + 10) + 'px'; else card.style.top = ((r ? r.bottom : 80) + 10) + 'px';
+    requestAnimationFrame(() => back.classList.add('in'));
+    function close() { back.classList.remove('in'); setTimeout(() => back.remove(), 200); }
+    back.onclick = e => { if (e.target === back) close(); };
+  }
+  // where it is: the viewer's toolbar, the slideshow's bar, and More
+  const vbar = document.querySelector('#detail .ios-viewbar');
+  if (vbar) {
+    const b = make('button', 'ios-tool'); b.type = 'button'; b.title = 'Lock touch'; b.setAttribute('aria-label', 'Lock touch');
+    b.style.setProperty('--icon', icon('tlock'));
+    b.onclick = e => { e.stopPropagation(); askTouchLock(b); };
+    vbar.append(b);
+  }
+  const sbar = document.querySelector('#show .show-bar'), sClose = $('sClose');
+  if (sbar && sClose) {
+    const b = make('button', 'ph-show-lock'); b.type = 'button'; b.title = 'Lock touch'; b.setAttribute('aria-label', 'Lock touch');
+    b.style.setProperty('--icon', icon('tlock'));
+    b.onclick = e => { e.stopPropagation(); askTouchLock(b); };
+    sbar.insertBefore(b, sClose);
+  }
+  window.vaultTouchLock = { ask: askTouchLock, lock: touchLock, end: () => tlock && tlock.end(true) };
+
   window.vaultPhonePlus = { openSettings, cheer, confetti, hello };
 })();

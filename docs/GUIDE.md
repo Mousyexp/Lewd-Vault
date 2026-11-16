@@ -205,6 +205,10 @@ On a phone the app is laid out like Photos:
 - **The viewer**: the picture full screen with a glass toolbar (appreciate, details, edit, delete).
   Tap to hide the controls, double-tap to appreciate, swipe sideways for the next one, up for the
   details, down to close. The slideshow takes the same swipes and double-tap.
+- **Touch lock** (the lock in the viewer's toolbar or the slideshow's bar, or More → Touch lock): the
+  screen ignores every touch for 30 seconds, a minute, two, or until you unlock it, while the picture,
+  video or slideshow carries on and the screen stays awake. Hold the little lock at the top for two
+  seconds to unlock early; a three-finger tap (Hide now) still works.
 - **Hide now** (in More, or tap anywhere with three fingers) is the emergency key. It shows a lock
   screen, a cat video, or a working calculator (Settings → Privacy). To come back: swipe up on the
   lock screen and enter your PIN, or type your PIN into the calculator and press `=`. With no PIN

@@ -161,6 +161,7 @@
     if (window.vaultProfile) tile('You', icon('you'), () => window.vaultProfile.open());
     if (window.vaultCoach) tile('Coach', icon('coach'), () => window.vaultCoach.open());
     if (window.vaultPhone && !html.classList.contains('no-fun')) tile('Sort', icon('cards'), () => window.vaultPhone.openSort()); // (sorting is star ratings)
+    if (window.vaultTouchLock) tile('Touch lock', icon('tlock'), () => window.vaultTouchLock.ask()); // (phone-plus.js)
     tile('Hide now', icon('hide'), hideNow, 'wide danger').append(make('small', '', 'or tap anywhere with three fingers'));
     s.body.append(tiles);
   }
