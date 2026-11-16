@@ -1005,7 +1005,7 @@ static void draw_web(void) {
   if (!sheet_open) {
     if (in.touching && in.ty > TOP && in.ty < H - BAR) { wscroll -= in.drag_dy; wscroll_v = 0; }
     if (in.flicked && in.down_y > TOP) wscroll_v = -in.fvy * 1.6f;
-    wscroll += wscroll_v + in.ly * 14;
+    wscroll += wscroll_v + in.ly * 14 - in.bdy * 1.5f;
     wscroll_v *= 0.94f;
     if (fabsf(wscroll_v) < 0.2f) wscroll_v = 0;
     int before = wsel;

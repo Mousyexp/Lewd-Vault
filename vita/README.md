@@ -53,6 +53,13 @@ is locked in the Library until the session gets there. Only time with the app op
 left for six hours ends. Simple is the old one (a few seconds each, shuffled or not). Both have motion
 (slow pan, slow zoom, breathing), a fade from one to the next and a sleep timer.
 
+**PIN lock** (Settings, `src/pin.c`): a PIN pad when the app starts, and, if chosen, when the Vita
+wakes. A decoy PIN opens another vault on the card instead, and changes nothing about the lock or which
+vault opens next time. Wrong tries are told after the next right one; after five it waits 30 s between
+tries. It locks the app; an Untraceable vault is what keeps the files themselves safe. **Your stats**
+shows what's in the vault and how it's been looked at. The **rear touchpad** scrolls the Library and
+the Browser, and a swipe across it moves through the full view.
+
 **Continue watching**: a video left part-way starts where it stopped. The places are kept in the
 vault's `_app/kv/resume.json`, the same file the PC's Videos tab keeps, so it carries on across the two.
 
@@ -168,6 +175,7 @@ the compiler inlines across them); textures are only freed after the frame that 
 | `src/main.c` | The screens: picker, password, library, full view, settings, cover |
 | `src/lib.c` | The Library's filters, tags panel, saved filters, quick actions, selecting many, editing |
 | `src/show.c` | The slideshow's sessions and plan; Continue watching |
+| `src/pin.c` | The PIN lock (and decoy PIN), and the stats page |
 | `src/drive.c`, `src/drive_ui.c` | Google Drive: the sign-in, the sync, its screen |
 | `src/third_party/qrcodegen.*` | Project Nayuki's QR code generator (MIT, its notice in the file) |
 | `src/vault.c` | `index.csv` / `views.csv`, finding files, thumbnails (packs too) |

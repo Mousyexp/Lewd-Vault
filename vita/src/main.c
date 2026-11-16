@@ -690,6 +690,8 @@ typedef struct {
   float fvx, fvy;
   unsigned down_frame, last_tap_frame;
   int last_tap_x, last_tap_y;
+  float bdx, bdy; // the rear touchpad: how far a finger on it moved since the last frame
+  int back_on, back_x0;
 } Input;
 static Input in;
 static unsigned prev_buttons;
@@ -715,6 +717,18 @@ static void read_input(void) {
   if (fabsf(in.ly) < 0.25f) in.ly = 0;
 
   SceTouchData t;
+  // the rear touchpad: drags only (it's easily touched by the hands holding the Vita: no taps)
+  {
+    static int bprev, bpx, bpy;
+    SceTouchData b;
+    in.bdx = in.bdy = 0;
+    if (sceTouchPeek(SCE_TOUCH_PORT_BACK, &b, 1) >= 0 && b.reportNum > 0) {
+      int x = b.report[0].x / 2, y = b.report[0].y / 2;
+      if (bprev) { in.bdx = x - bpx; in.bdy = y - bpy; } else in.back_x0 = x;
+      bpx = x; bpy = y; bprev = 1;
+      in.back_on = 1;
+    } else { bprev = 0; in.back_on = 0; }
+  }
   sceTouchPeek(SCE_TOUCH_PORT_FRONT, &t, 1);
   in.tap = in.dbl = in.flicked = 0;
   in.drag_dx = in.drag_dy = 0;
@@ -751,6 +765,7 @@ static int hit(int x, int y, int w, int h) { return in.tap && in.tap_x >= x && i
 // ---------- the system keyboard ----------
 static uint16_t ime_title[64], ime_text[SCE_IME_DIALOG_MAX_TEXT_LENGTH + 1], ime_init[SCE_IME_DIALOG_MAX_TEXT_LENGTH + 1];
 static int ime_open, ime_for; // 1 password, 2 search
+static int ime_number; // (the next one: digits only)
 static void to16(const char *s, uint16_t *out, int cap) {
   int k = 0;
   for (const unsigned char *p = (const unsigned char *)s; *p && k < cap - 1;) {
@@ -779,7 +794,8 @@ static void ime_start(int what, const char *title, const char *initial, int pass
   memset(ime_text, 0, sizeof ime_text);
   p.supportedLanguages = 0;
   p.languagesForced = SCE_FALSE;
-  p.type = SCE_IME_TYPE_DEFAULT;
+  p.type = ime_number ? SCE_IME_TYPE_NUMBER : SCE_IME_TYPE_DEFAULT;
+  ime_number = 0;
   p.option = password ? SCE_IME_OPTION_NO_AUTO_CAPITALIZATION | SCE_IME_OPTION_NO_ASSISTANCE : 0;
   p.textBoxMode = password ? SCE_IME_DIALOG_TEXTBOX_MODE_PASSWORD : SCE_IME_DIALOG_TEXTBOX_MODE_DEFAULT;
   p.title = ime_title;
@@ -804,7 +820,7 @@ static int ime_poll(char *out, int cap) {
 }
 
 // ---------- screens ----------
-enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE };
+enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS };
 static int screen = S_PICK, cover_return = S_LIBRARY;
 static char found[16][512];
 static int nfound, pick_sel;
@@ -852,13 +868,15 @@ static void close_vault(void) {
   lv_vault_free(&vault);
   pthread_mutex_unlock(&vmx);
 }
-static void open_vault(const char *path) {
+static int decoy_session; // (opened with the decoy PIN: nothing about the lock, or which vault, changes)
+static void open_vault(const char *path_in) {
+  char path[512];
+  snprintf(path, sizeof path, "%s", path_in);
   close_vault();
   pthread_mutex_lock(&vmx);
   lv_vault_init(&vault, path);
   pthread_mutex_unlock(&vmx);
-  snprintf(cfg.vault, sizeof cfg.vault, "%s", path);
-  cfg_save();
+  if (!decoy_session) { snprintf(cfg.vault, sizeof cfg.vault, "%s", path); cfg_save(); }
   screen = vault.untraceable ? S_LOCKED : S_UNLOCKING;
 }
 // Unlocking (two seconds of key making) and reading the vault (a big one takes a while) happen on a
@@ -1075,6 +1093,7 @@ static float chips_scroll;
 #include "lib.c"
 #include "show.c"
 #include "drive_ui.c"
+#include "pin.c"
 
 static int last_top_row = -1;
 static void draw_library(void) {
@@ -1095,7 +1114,7 @@ static void draw_library(void) {
   scroll += scroll_v;
   scroll_v *= 0.94f;
   if (fabsf(scroll_v) < 0.2f) scroll_v = 0;
-  scroll += in.ly * 14;
+  scroll += in.ly * 14 - in.bdy * 1.5f;
   int before = sel;
   if (in.pressed & SCE_CTRL_RIGHT) sel++;
   if (in.pressed & SCE_CTRL_LEFT) sel--;
@@ -1477,6 +1496,12 @@ static void draw_viewer(void) {
     else chrome_until = frame_no < chrome_until ? frame_no : frame_no + 240;
   }
 
+  // (a swipe across the rear touchpad: the next or the one before)
+  {
+    static float back_sw;
+    if (in.back_on) back_sw += in.bdx; else back_sw = 0;
+    if (back_sw < -160 || back_sw > 160) { int dir = back_sw < 0 ? 1 : -1; back_sw = 0; sfx(SFX_TICK); show_item(dir > 0 && ss.on && slideshow ? session_pick(vk) : vk + dir); return; }
+  }
   // --- buttons ---
   int playing_real = vid && !vid_clip;
   unsigned next_b = details || playing_real ? SCE_CTRL_RTRIGGER : (SCE_CTRL_RIGHT | SCE_CTRL_RTRIGGER);
@@ -1705,50 +1730,91 @@ static void draw_viewer(void) {
 }
 
 // ----- settings -----
+static float set_scroll;
 static void draw_settings(void) {
-  text(30, 44, TEXT, 26, "Settings");
   char v3[64];
   snprintf(v3, sizeof v3, "%d%%", cfg.volume);
   char v4[16];
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
-  struct { const char *name, *value, *hint; } rows[] = {
+  char vd[96] = "Off";
+  if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_PIN, ST_DECOY, ST_STATS, ST_VAULT, ST_CACHE, ST_COVER, ST_N };
+  struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change"},
     {"Interface sounds", v4, "The Vita's own clicks and chimes"},
     {"Double tap in the full view", cfg.dbltap ? "Heart" : "Zoom", "Zooms in, or gives it a heart"},
     {"Glow behind pictures", cfg.glow ? "On" : "Off", "The picture's own colours fill the screen around it"},
     {"Google Drive", drive_signed_in() ? "Signed in" : "", "Keep this vault in step with your PC's, both ways"},
+    {"Lock with a PIN", !pin.on || decoy_session ? "Off" : pin.on_wake ? "On, and when it wakes" : "On, when it starts", pin.on ? "✕ a new PIN · ←→ when · □ turns it off" : "A PIN pad before anything shows"},
+    {"Decoy PIN", vd, pin.on ? "Another PIN that opens a harmless vault (←→ which, □ off)" : "Needs the PIN lock on"},
+    {"Your stats", "", "What's here and how it's been looked at"},
     {"Open another vault", "", "The vaults on the memory card"},
     {"Clear the thumbnail cache", "", "They're made again as you scroll"},
     {"Cover the screen", "SELECT", "A plain screen, at a press, anywhere"},
   };
-  int n = sizeof rows / sizeof *rows;
+  int n = ST_N, rh = 47, top = 58, room = H - BAR - top - 4;
+  // (the chosen row kept in sight)
+  float want = set_sel * rh;
+  if (want + rh - set_scroll > room) set_scroll = want + rh - room;
+  if (want < set_scroll) set_scroll = want;
   for (int k = 0; k < n; k++) {
-    int y = 58 + k * 47;
+    int y = top + k * rh - (int)set_scroll;
+    if (y + rh < top - 10 || y > H - BAR) continue;
     rrect(30, y, W - 60, 43, 12, k == set_sel ? SURF2 : SURF);
     if (k == set_sel) rrect(30, y, 5, 43, 3, ACC);
     text(52, y + 19, TEXT, 17, rows[k].name);
     text(52, y + 37, FAINT, 13, rows[k].hint);
     if (rows[k].value[0]) text(W - 52 - text_w(17, rows[k].value), y + 28, ACC, 17, rows[k].value);
-    if (hit(30, y, W - 60, 43)) { set_sel = k; in.pressed |= SCE_CTRL_CROSS; }
+    if (hit(30, y, W - 60, 43) && in.tap_y > top && in.tap_y < H - BAR) { set_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
+  vita2d_draw_rectangle(0, 0, W, top - 4, BG);
+  text(30, 44, TEXT, 26, "Settings");
   textf(30 + text_w(26, "Settings") + 16, 44, FAINT, 13, "%s  ·  %d items%s", vault.root, vault.n, vault.untraceable ? "  ·  Untraceable" : "");
+  if (in.touching && in.down_y > top) set_scroll -= in.drag_dy;
+  if (set_scroll < 0) set_scroll = 0;
+  if (set_scroll > n * rh - room) set_scroll = n * rh - room > 0 ? n * rh - room : 0;
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
   if (in.pressed & SCE_CTRL_DOWN) set_sel = (set_sel + 1) % n;
   if (in.pressed & SCE_CTRL_UP) set_sel = (set_sel + n - 1) % n;
   int d = (in.pressed & SCE_CTRL_RIGHT) ? 1 : (in.pressed & SCE_CTRL_LEFT) ? -1 : 0;
-  if (in.pressed & SCE_CTRL_CROSS) d = d ? d : 1;
+  int cross = (in.pressed & SCE_CTRL_CROSS) != 0, square = (in.pressed & SCE_CTRL_SQUARE) != 0;
+  if (cross) d = d ? d : 1;
+  if (decoy_session && (set_sel == ST_PIN || set_sel == ST_DECOY) && (d || square || cross)) { sfx(SFX_ERROR); say("Not available"); d = square = cross = 0; }
+  if (square && set_sel == ST_PIN && pin.on) { sfx(SFX_CLOSE); pin.on = 0; pin.decoy_hash[0] = 0; pin_save(); say("PIN lock off"); }
+  if (square && set_sel == ST_DECOY && pin.decoy_hash[0]) { sfx(SFX_CLOSE); pin.decoy_hash[0] = 0; pin_save(); say("Decoy PIN off"); }
   if (d) {
-    switch (set_sel - 1) {
-      case -1: if (in.pressed & SCE_CTRL_CROSS && !ime_open) ime_start(2, "Search tags, names, categories", query, 0); break;
-      case 0: cfg.volume += d * 10; if (cfg.volume > 100) cfg.volume = 0; if (cfg.volume < 0) cfg.volume = 100; break;
-      case 2: cfg.dbltap = !cfg.dbltap; sfx(SFX_TOGGLE); break;
-      case 3: cfg.glow = !cfg.glow; sfx(SFX_TOGGLE); break;
-      case 1: cfg.sounds += d * 10; if (cfg.sounds > 100) cfg.sounds = 0; if (cfg.sounds < 0) cfg.sounds = 100; sfx_volume(cfg.sounds); sfx(SFX_TOGGLE); break;
-      case 4: if (in.pressed & SCE_CTRL_CROSS) { sfx(SFX_OPEN); open_drive(S_SETTINGS); return; } break;
-      case 5: if (in.pressed & SCE_CTRL_CROSS) { lv_vault_save_views(&vault); resume_save(); find_vaults(); screen = S_PICK; return; } break;
-      case 6:
-        if (in.pressed & SCE_CTRL_CROSS) {
+    switch (set_sel) {
+      case ST_SEARCH: if (cross && !ime_open) ime_start(2, "Search tags, names, categories", query, 0); break;
+      case ST_VOL: cfg.volume += d * 10; if (cfg.volume > 100) cfg.volume = 0; if (cfg.volume < 0) cfg.volume = 100; break;
+      case ST_DBL: cfg.dbltap = !cfg.dbltap; sfx(SFX_TOGGLE); break;
+      case ST_GLOW: cfg.glow = !cfg.glow; sfx(SFX_TOGGLE); break;
+      case ST_SOUNDS: cfg.sounds += d * 10; if (cfg.sounds > 100) cfg.sounds = 0; if (cfg.sounds < 0) cfg.sounds = 100; sfx_volume(cfg.sounds); sfx(SFX_TOGGLE); break;
+      case ST_DRIVE: if (cross) { sfx(SFX_OPEN); open_drive(S_SETTINGS); return; } break;
+      case ST_PIN:
+        if (cross && !ime_open) { ime_number = 1; ime_start(12, "A new PIN (4 to 6 digits)", "", 1); }
+        else if (!cross && pin.on) { sfx(SFX_TOGGLE); pin.on_wake = !pin.on_wake; pin_save(); }
+        break;
+      case ST_DECOY:
+        if (!pin.on) { sfx(SFX_ERROR); say("Turn the PIN lock on first"); break; }
+        if (cross && !ime_open) { ime_number = 1; ime_start(13, "The decoy PIN (not the real one)", "", 1); }
+        else if (!cross) {
+          // which vault it opens: the others on the card, in turn
+          find_vaults();
+          int cur = -1;
+          for (int k = 0; k < nfound; k++) if (!strcmp(found[k], pin.decoy_vault)) cur = k;
+          for (int t = 0; t < nfound; t++) {
+            cur = (cur + d + nfound) % nfound;
+            if (strcmp(found[cur], vault.root)) break;
+          }
+          if (nfound && strcmp(found[cur], vault.root)) { snprintf(pin.decoy_vault, sizeof pin.decoy_vault, "%s", found[cur]); pin_save(); sfx(SFX_TOGGLE); }
+          else say("Put a second vault on the card for the decoy to open");
+        }
+        break;
+      case ST_STATS: if (cross) { sfx(SFX_OPEN); screen = S_STATS; return; } break;
+      case ST_VAULT: if (cross) { lv_vault_save_views(&vault); resume_save(); find_vaults(); screen = S_PICK; return; } break;
+      case ST_CACHE:
+        if (cross) {
           DIR *dd = opendir(cache_dir);
           struct dirent *e;
           char p[900];
@@ -1757,7 +1823,7 @@ static void draw_settings(void) {
           say("Thumbnail cache cleared");
         }
         break;
-      case 7: if (in.pressed & SCE_CTRL_CROSS) { cover_return = S_SETTINGS; screen = S_COVER; } break;
+      case ST_COVER: if (cross) { cover_return = S_SETTINGS; screen = S_COVER; } break;
     }
     cfg_save();
   }
@@ -1818,6 +1884,7 @@ int main(void) {
   sceAppUtilInit(&ip, &bp);
   sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
   sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT, SCE_TOUCH_SAMPLING_STATE_START);
+  sceTouchSetSamplingState(SCE_TOUCH_PORT_BACK, SCE_TOUCH_SAMPLING_STATE_START);
   scePowerSetArmClockFrequency(444);
   scePowerSetBusClockFrequency(222);
   scePowerSetGpuClockFrequency(222);
@@ -1849,7 +1916,9 @@ int main(void) {
   atlas_init();
 
   find_vaults();
-  if (cfg.vault[0] && lv_is_vault(cfg.vault)) open_vault(cfg.vault);
+  pin_load();
+  if (pin.on) pin_lock(-1);
+  else if (cfg.vault[0] && lv_is_vault(cfg.vault)) open_vault(cfg.vault);
   else if (nfound == 1) open_vault(found[0]);
 
   unsigned idle_save = 0;
@@ -1864,6 +1933,7 @@ int main(void) {
       lv_net_reset();
       if (vid) { stop_video(); say("Paused while the Vita slept"); }
       if (wv_vid) { video_close_later(wv_vid); wv_vid = NULL; }
+      if (pin.on && pin.on_wake && screen != S_PIN) { slideshow = 0; pin_lock(screen == S_COVER ? cover_return : screen); }
     }
     // (a video playing, or a slideshow: the Vita doesn't dim or sleep)
     if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow) || drive.state == DRV_SYNCING || drive.state == DRV_CODE)
@@ -1884,6 +1954,12 @@ int main(void) {
       if (r == 1 && ime_for == 9) { snprintf(whidden, sizeof whidden, "%s", got); hidden_save(); web_search(); }
       if (r == 1 && ime_for == 10 && got[0]) { snprintf(wkey_user, sizeof wkey_user, "%s", got); wkey_ask = 1; }
       if (r == 1 && ime_for == 11 && got[0]) { snprintf(wkeys[cfg.site], sizeof wkeys[cfg.site], "%s %s", wkey_user, got); wkeys_save(); sfx(SFX_DONE); web_search(); }
+      if (r == 1 && (ime_for == 12 || ime_for == 13)) {
+        int ok = strlen(got) >= 4 && strlen(got) <= 6 && strspn(got, "0123456789") == strlen(got);
+        if (!ok) { sfx(SFX_ERROR); say("A PIN is 4 to 6 digits"); }
+        else { pin_set(got, ime_for == 13); sfx(SFX_DONE); say(ime_for == 12 ? "PIN lock on" : "Decoy PIN set: \u2190\u2192 on its row picks the vault it opens"); }
+        memset(got, 0, sizeof got);
+      }
       if (r == 1 && ime_for == 8 && got[0]) { drive_set_key(drive_new_id, got); sfx(SFX_DONE); say("Key saved: now sign in"); }
       if (r == 1 && ime_for == 2) { lsheet = LS_NONE; snprintf(query, sizeof query, "%s", got); cat = -1; refilter(); sel = 0; scroll = 0; screen = S_LIBRARY; }
       if (r != 0) memset(&in, 0, sizeof in);
@@ -1915,6 +1991,8 @@ int main(void) {
       case S_WEB: draw_web(); break;
       case S_SHOW: draw_show_plan(); break;
       case S_DRIVE: draw_drive(); break;
+      case S_PIN: draw_pin(); break;
+      case S_STATS: draw_stats(); break;
       case S_WEBVIEW: draw_webview(); break;
       case S_COVER: draw_cover_screen(); if (in.tap) { screen = cover_return; } break;
     }
