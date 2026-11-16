@@ -667,7 +667,8 @@
       if (g && lib && !lib.classList.contains('hidden')) { const shown = [...g.querySelectorAll('.card')].map(c => c._item).filter(Boolean); if (shown.length > 1) return shown; }
       return null;
     };
-    const thumbFor = it => (typeof thumbSrc === 'function' ? thumbSrc(it, 160) : '');
+    // (the grid's own small pictures, from the vault's thumbnail route; desktop.js keeps its helper to itself)
+    const thumbFor = (it, w = 160) => (it && it.thumb && typeof vaultOrigin === 'function' ? `${vaultOrigin()}/t/${encodeURIComponent(it.thumb)}?w=${w}` : '');
     const W0 = 22, H0 = 44;
     const centerOn = (k, smooth) => {
       const el = track.children[k];
@@ -734,7 +735,7 @@
       if (k >= 0 && k !== stripAt) {
         stripAt = k;
         markOn(k);
-        peekImg.src = thumbFor(stripList[k]);
+        peekImg.src = thumbFor(stripList[k], 720);
         peekImg.classList.add('on');
         buzz('select');
       }
