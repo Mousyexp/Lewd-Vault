@@ -305,6 +305,38 @@ int main(int argc, char **argv) {
     lv_vault_free(&e);
     lv_vault_init(&e, tmp);
     CHECK(lv_vault_load(&e, &why) == 0 && e.n == 3 && strcmp(e.items[1].uid, "000124"), "gone from the index");
+    // a sync's copies folded in: a row only Drive has, bigger counts, a later time; the copy moved away
+    {
+      lv_vault_init(&e, tmp);
+      CHECK(lv_vault_load(&e, &why) == 0, "load before the merge");
+      int n0 = e.n;
+      char *idx = lv_index_csv(&e);
+      // Drive's index: ours plus one more row (its columns in another order: matched by name)
+      char drive[4096];
+      snprintf(drive, sizeof drive, "\xEF\xBB\xBFuid,id,original_name,category,kind,nsfw,quality,added\r\n"
+               "000999,ZZnew,from-pc.jpg,Faves,image,3,2,2026-11-17T10:00:00.000Z\r\n%s,%s,dup,Faves,image,1,1,2026-01-01\r\n",
+               e.items[0].uid, e.items[0].id);
+      snprintf(p, sizeof p, "%s/index (from Drive).csv", tmp);
+      FILE *f = fopen(p, "wb"); fputs(drive, f); fclose(f);
+      char vw[1024];
+      snprintf(vw, sizeof vw, "id,uid,views,last_viewed,appreciations,last_appreciated,seconds_viewed\r\n%s,%s,50,2030-01-01T00:00:00.000Z,4,,12.5\r\nOnlyThere,,2,2026-01-01T00:00:00.000Z,0,,\r\n",
+               e.items[0].id, e.items[0].uid);
+      snprintf(p, sizeof p, "%s/views (from Drive).csv", tmp);
+      f = fopen(p, "wb"); fputs(vw, f); fclose(f);
+      free(idx);
+      lv_vault_free(&e);
+      lv_vault_init(&e, tmp);
+      int added = 0, counts = 0;
+      CHECK(lv_vault_merge_conflicts(&e, &added, &counts) == 2, "two copies handled");
+      CHECK(added == 1 && counts == 2, "1 row added (%d), 2 counts (%d)", added, counts);
+      CHECK(access(p, F_OK) != 0, "the copy moved to _app/backups/conflicts");
+      CHECK(lv_vault_load(&e, &why) == 0 && e.n == n0 + 1, "the row is in: %d", e.n);
+      CHECK(!strcmp(e.items[e.n - 1].id, "ZZnew") && !strcmp(e.items[e.n - 1].name, "from-pc.jpg") && e.items[e.n - 1].nsfw == 3, "its cells by column name");
+      CHECK(lv_views_of(&e, &e.items[0]) == 50 && lv_likes_of(&e, &e.items[0]) == 4, "the larger counts: %lld", lv_views_of(&e, &e.items[0]));
+      CHECK(!strcmp(e.views[e.items[0].view].last, "2030-01-01T00:00:00.000Z"), "the later time");
+      CHECK(lv_vault_merge_conflicts(&e, NULL, NULL) == 0, "nothing more to do");
+      lv_vault_free(&e);
+    }
     // searching
     LvSearch sr;
     LvItem t1 = {.tags = "artist:someone blue_hair smile", .name = "Cover", .category = "Beach", .collection = ""};

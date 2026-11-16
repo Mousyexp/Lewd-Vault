@@ -20,3 +20,20 @@ int lv_http_get_file(LvHttp *h, const char *url, const char *path, size_t *n, si
 void lv_net_reset(void);
 int lv_http_get(LvHttp *h, const char *url, uint8_t **out, size_t *n, size_t max, volatile int *cancel,
                 volatile float *progress, const char **err);
+
+// A request with a method, headers and a body (Google Drive's API). The body is in memory, or a piece
+// of a file (uploads in parts); the answer's Location header can be kept (resumable uploads).
+typedef struct {
+  const char *method;         // NULL: GET, or POST with a body
+  const char *const *headers; // "Name: value" ..., NULL-terminated (or NULL)
+  const void *body;
+  size_t body_len;
+  const char *body_path;      // (or the body from this file: body_n bytes from body_off)
+  uint64_t body_off, body_n;
+  char *location;             // (the Location header goes here, if any)
+  size_t location_cap;
+} LvReq;
+int lv_http_req(LvHttp *h, const char *url, const LvReq *rq, uint8_t **out, size_t *n, size_t max, volatile int *cancel, const char **err);
+// The answer into a file (removed unless it's a 2xx).
+int lv_http_req_file(LvHttp *h, const char *url, const LvReq *rq, const char *path, size_t *n, volatile int *cancel,
+                     volatile float *progress, const char **err);

@@ -278,7 +278,10 @@ slideshow, videos (MP4 in hardware, WebM/MKV in software), a SELECT cover screen
 ten boorus (site tabs, ratings filter, sort, search) that saves into the vault at Vita size (JPEG,
 card-sized thumbnails, the row appended). Copy the vault folder into `ux0:data/LewdVault/`; an
 Untraceable vault stays encrypted and opens with its password. Views, hearts and time go into the
-vault's `views.csv` as on the PC. It doesn't edit or delete items.
+vault's `views.csv` as on the PC. It also edits (stars, levels, categories, tags, delete), has the
+phone's filters and smart albums, the PC's level slideshow, Continue watching (the PC's
+`_app/kv/resume.json`), and syncs with Google Drive like the PC, signed in with a QR code; that needs
+a second key in the same Google Cloud project, of the "TVs and Limited Input devices" type.
 `vita/README.md` has the details; the VPK comes from Actions → Build PS Vita.
 
 ## The vault folder

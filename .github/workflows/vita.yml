@@ -44,8 +44,12 @@ jobs:
       - name: Vault core tests
         run: sh vita/tests/run.sh
       - name: Build the VPK
+        # (Google Drive: the "TVs and Limited Input devices" key, when the repository has one as secrets)
+        env:
+          LEWD_VAULT_GOOGLE_TV_CLIENT_ID: ${{ secrets.LEWD_VAULT_GOOGLE_TV_CLIENT_ID }}
+          LEWD_VAULT_GOOGLE_TV_CLIENT_SECRET: ${{ secrets.LEWD_VAULT_GOOGLE_TV_CLIENT_SECRET }}
         run: |
-          docker run --rm -v "$PWD":/w -w /w -u "$(id -u):$(id -g)" vitasdk/vitasdk:latest \
+          docker run --rm -v "$PWD":/w -w /w -u "$(id -u):$(id -g)" -e LEWD_VAULT_GOOGLE_TV_CLIENT_ID -e LEWD_VAULT_GOOGLE_TV_CLIENT_SECRET vitasdk/vitasdk:latest \
             sh -c 'cmake -S vita -B vita/build -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake && cmake --build vita/build -j4'
           cp vita/build/LewdVault.vpk Lewd.Vault.Vita.vpk
           ls -la Lewd.Vault.Vita.vpk

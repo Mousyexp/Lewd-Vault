@@ -29,14 +29,32 @@ Untraceable vault's cached thumbnails are encrypted with its key, like everythin
 
 | | Touch | Buttons |
 |---|---|---|
-| Library | tap a card; drag to scroll; tap a category chip | D-pad/stick; ✕ open; L/R category; △ sort; □ pictures/videos; START slideshow; ○ settings |
-| Full view | swipe for the next; pinch to zoom; double-tap zoom; pull up for details; tap a tag to search it | ←/→ or L/R next; ✕ play/pause (videos) or zoom; ↑/↓ ±10 s; △ details; □ heart; START slideshow; ○ back |
+| Library | tap a card; drag to scroll; hold a card for its quick actions; drag the right edge to fly through the months; tap a category chip | D-pad/stick; ✕ open (hold: quick actions); L/R category; △ sort; □ filters; START slideshow; ○ next tab |
+| Full view | swipe for the next; pinch to zoom; double-tap zoom (or heart: Settings); the filmstrip at the bottom; pull up for details | ←/→ or L/R next; ✕ zoom; △ details (↑↓ choose, ←→ change: stars, level, category, tags, delete); □ heart; START slideshow; ○ back |
+| A video | tap the bar to jump | ✕ play/pause; ←/→ 10 s; the stick scrubs; ↑ 2× / 4× (no sound); ↓ A-B loop (A, B, off); L/R next |
 | Browser | tap the site button (the tabs), Filter, the sort, the search box; tap a card | L/R previous/next site; △ sort; □ filter; START the site list; ✕ open; ○ next tab |
 | Browser's full view | swipe; pinch; tap Save; pull up for details, tap a tag to search it | ←/→ next; □ save; △ details; ✕ zoom or play/pause; ○ back |
 | Anywhere | | SELECT covers the screen with a plain clock (again to come back); ○ in the Library, Browser and Settings goes round those three |
 
-Settings (the bottom bar, or ○ from the Browser): search the Library, the slideshow's time per picture
-and shuffle, video volume, another vault, clearing the thumbnail cache.
+Settings: search the Library, video volume, interface sounds, what a double tap does, the glow behind
+pictures, Google Drive, another vault, clearing the thumbnail cache.
+
+**The Library's tools** (`src/lib.c`), as on the phone: Filters (□) for the kind, NSFW up to, stars,
+smart albums (Never opened, Forgotten, Long videos, Most loved, 1 star, Continue watching), a
+collection, the card size, the tags panel (✕ adds a tag, □ excludes it) and saved filters. Hold a card
+for its quick actions: stars, the level dial, category, select (then △ for many at once) and delete
+(into the vault's `_trash`, as the PC does for an Untraceable vault). Edits go into `index.csv` a
+moment after the last one, after the day's backup in `_app/backups`.
+
+**The slideshow** (the Slideshow tab, `src/show.c`) is the PC's: a session climbs the NSFW levels, the
+first stage up to a level, then one level at a time, each for some minutes, with slides from slow to
+faster and faster (Gentle, Standard and Fast are the PC's presets), and what's above the level reached
+is locked in the Library until the session gets there. Only time with the app open counts; a session
+left for six hours ends. Simple is the old one (a few seconds each, shuffled or not). Both have motion
+(slow pan, slow zoom, breathing), a fade from one to the next and a sleep timer.
+
+**Continue watching**: a video left part-way starts where it stopped. The places are kept in the
+vault's `_app/kv/resume.json`, the same file the PC's Videos tab keeps, so it carries on across the two.
 
 ## The Browser
 
@@ -60,6 +78,33 @@ twice. The items are ordinary vault items (the PC opens them too), just Vita-siz
 HTTPS is checked against Mozilla's list of authorities (`cacert.pem`, from certifi). The app has its
 own `inet_pton` (`src/net.c`): the Vita C library's answers -1 for a host name, which libcurl takes
 for "an IP address" and then sends no server name (SNI) in its TLS hello, which most sites refuse.
+
+## Google Drive
+
+Settings → Google Drive keeps the vault in step with the **Lewd Vault** folder the PC syncs to Google
+Drive (Settings → Storage → Google Drive over the web): both ways, with `src-tauri/src/gdrive.rs`'s
+rules (`src/drive.c`). Changes go to the other side; a file is only deleted on one side when the other
+deleted it and it hadn't changed since, never on a first sync, and a sync that would delete more than
+half of a side stops. When both sides changed a file, the Vita's copy wins and Drive's is kept beside
+it; for `index.csv` and `views.csv` that copy is folded in straight after (new rows, the larger counts),
+as the PC does. An Untraceable vault syncs with **Lewd Vault (encrypted)** and must have the same
+password. On a Vita with no vault yet, △ in the picker gets one from Drive.
+
+**Signing in** is Google's sign-in for TVs: the Vita shows a QR code and a short code; scan it with a
+phone, type the code, allow it. **The key**: the `drive.file` scope only shows a key the files made by
+its own Google Cloud project, so the Vita needs a client in the PC key's project, and Google's device
+sign-in only takes the "TVs and Limited Input devices" type:
+
+1. [console.cloud.google.com](https://console.cloud.google.com/apis/credentials), the same project as
+   the PC's key: **Clients → Create client → TVs and Limited Input devices**.
+2. Type its Client ID and secret on the Vita once, or put them in `ux0:data/LWDV00001/google.txt`
+   (the ID on the first line, the secret on the second). A build can carry one instead
+   (`LEWD_VAULT_GOOGLE_TV_CLIENT_ID` / `_SECRET` when it's built; never in the repository).
+
+The key and the sign-in stay in `ux0:data/LWDV00001/drive/`, with each vault's manifest (what each file
+was at the last sync); files a sync deletes on the Vita go to `ux0:data/LWDV00001/drive/trash/`. It
+can be tried without Google: `tests/drive_mock.py` is a stand-in for the parts of Google it uses, and a
+debug build talks to it when `ux0:data/LWDV00001/debug_drive.txt` holds its address.
 
 ## What plays
 
@@ -113,7 +158,11 @@ the compiler inlines across them); textures are only freed after the frame that 
 
 | File | What it is |
 |---|---|
-| `src/main.c` | The screens: picker, password, library, full view, slideshow, settings, cover |
+| `src/main.c` | The screens: picker, password, library, full view, settings, cover |
+| `src/lib.c` | The Library's filters, tags panel, saved filters, quick actions, selecting many, editing |
+| `src/show.c` | The slideshow's sessions and plan; Continue watching |
+| `src/drive.c`, `src/drive_ui.c` | Google Drive: the sign-in, the sync, its screen |
+| `src/third_party/qrcodegen.*` | Project Nayuki's QR code generator (MIT, its notice in the file) |
 | `src/vault.c` | `index.csv` / `views.csv`, finding files, thumbnails (packs too) |
 | `src/lvcrypt.c` | The Untraceable format: SHA-256, PBKDF2, ChaCha20, "LVX1" files |
 | `src/image.c` | WebP/JPEG/PNG to pixels at the size they're shown |
@@ -121,6 +170,7 @@ the compiler inlines across them); textures are only freed after the frame that 
 | `src/web.c` | The Browser's screens and threads (compiled inside `main.c`) |
 | `src/booru.c`, `src/json.c` | The sites' searches and answers; a small JSON reader |
 | `src/net.c` | libcurl over the Vita's network |
+| `tests/drive_mock.py` | A stand-in for Google's sign-in and Drive, for trying the sync in Vita3K |
 | `tests/` | The core against the golden vaults and the site readers against saved answers (`tests/booru/`, from the sites' all-ages halves), on a PC |
 | `tools/make-livearea.py` | The home-screen icon and LiveArea pictures, from the app's icon |
 | `font.ttf` | DejaVu Sans (see `FONT-LICENSE.txt`); the Vita's own font is used for Japanese |

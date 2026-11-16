@@ -43,6 +43,8 @@
 #include "vault.h"
 #include "video.h"
 #include "json.h"
+#include "drive.h"
+#include "net.h"
 #include <psp2/kernel/clib.h>
 #ifdef LV_DEBUG
 #define LOG(...) do { char lb_[256]; int ln_ = snprintf(lb_, sizeof lb_, __VA_ARGS__); SceUID lf_ = sceIoOpen("ux0:data/LWDV00001/log.txt", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666); if (lf_ >= 0) { sceIoWrite(lf_, lb_, ln_ > 255 ? 255 : ln_); sceIoClose(lf_); } } while (0)
@@ -797,7 +799,7 @@ static int ime_poll(char *out, int cap) {
 }
 
 // ---------- screens ----------
-enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW };
+enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE };
 static int screen = S_PICK, cover_return = S_LIBRARY;
 static char found[16][512];
 static int nfound, pick_sel;
@@ -919,6 +921,7 @@ static void finish_open(void) {
 }
 
 // ----- the picker: which vault, or how to put one on the Vita -----
+static void open_drive(int from); // (drive_ui.c)
 static void draw_pick(void) {
   text(40, 70, TEXT, 34, "Lewd Vault");
   text(40, 100, DIM, 18, "for PS Vita");
@@ -932,6 +935,9 @@ static void draw_pick(void) {
       "3. Come back here and press ✕ to look again.",
       "An Untraceable vault stays encrypted on the card and opens with its password."};
     for (int k = 0; k < 5; k++) text(70, 232 + k * 34, k == 4 ? FAINT : DIM, 17, lines[k]);
+    rrect(40, H - 80, 320, 46, 23, SURF2);
+    text_center(200, H - 50, TEXT, 18, "\u25b3  Or from Google Drive");
+    if ((in.pressed & SCE_CTRL_TRIANGLE) || hit(40, H - 80, 320, 46)) { sfx(SFX_OPEN); open_drive(S_PICK); return; }
     if (in.pressed & SCE_CTRL_CROSS || hit(40, 140, W - 80, 300)) find_vaults();
     return;
   }
@@ -950,6 +956,8 @@ static void draw_pick(void) {
   if (in.pressed & SCE_CTRL_DOWN) pick_sel = (pick_sel + 1) % nfound;
   if (in.pressed & SCE_CTRL_UP) pick_sel = (pick_sel + nfound - 1) % nfound;
   if (in.pressed & SCE_CTRL_CROSS) open_vault(found[pick_sel]);
+  text(40, H - 24, FAINT, 15, "\u25b3 Google Drive");
+  if ((in.pressed & SCE_CTRL_TRIANGLE) || hit(40, H - 48, 200, 40)) { sfx(SFX_OPEN); open_drive(S_PICK); }
 }
 
 // ----- an Untraceable vault: the password -----
@@ -1061,6 +1069,7 @@ static int chip(int x, int y, const char *label, int on) {
 static float chips_scroll;
 #include "lib.c"
 #include "show.c"
+#include "drive_ui.c"
 
 static int last_top_row = -1;
 static void draw_library(void) {
@@ -1703,21 +1712,22 @@ static void draw_settings(void) {
     {"Interface sounds", v4, "The Vita's own clicks and chimes"},
     {"Double tap in the full view", cfg.dbltap ? "Heart" : "Zoom", "Zooms in, or gives it a heart"},
     {"Glow behind pictures", cfg.glow ? "On" : "Off", "The picture's own colours fill the screen around it"},
+    {"Google Drive", drive_signed_in() ? "Signed in" : "", "Keep this vault in step with your PC's, both ways"},
     {"Open another vault", "", "The vaults on the memory card"},
     {"Clear the thumbnail cache", "", "They're made again as you scroll"},
     {"Cover the screen", "SELECT", "A plain screen, at a press, anywhere"},
   };
   int n = sizeof rows / sizeof *rows;
   for (int k = 0; k < n; k++) {
-    int y = 58 + k * 55;
-    rrect(30, y, W - 60, 50, 14, k == set_sel ? SURF2 : SURF);
-    if (k == set_sel) rrect(30, y, 5, 50, 3, ACC);
-    text(52, y + 22, TEXT, 18, rows[k].name);
-    text(52, y + 42, FAINT, 13, rows[k].hint);
-    if (rows[k].value[0]) text(W - 52 - text_w(18, rows[k].value), y + 32, ACC, 18, rows[k].value);
-    if (hit(30, y, W - 60, 50)) { set_sel = k; in.pressed |= SCE_CTRL_CROSS; }
+    int y = 58 + k * 47;
+    rrect(30, y, W - 60, 43, 12, k == set_sel ? SURF2 : SURF);
+    if (k == set_sel) rrect(30, y, 5, 43, 3, ACC);
+    text(52, y + 19, TEXT, 17, rows[k].name);
+    text(52, y + 37, FAINT, 13, rows[k].hint);
+    if (rows[k].value[0]) text(W - 52 - text_w(17, rows[k].value), y + 28, ACC, 17, rows[k].value);
+    if (hit(30, y, W - 60, 43)) { set_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
-  textf(30, H - BAR - 8, FAINT, 13, "%s  ·  %d items%s", vault.root, vault.n, vault.untraceable ? "  ·  Untraceable" : "");
+  textf(30 + text_w(26, "Settings") + 16, 44, FAINT, 13, "%s  ·  %d items%s", vault.root, vault.n, vault.untraceable ? "  ·  Untraceable" : "");
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
   if (in.pressed & SCE_CTRL_DOWN) set_sel = (set_sel + 1) % n;
   if (in.pressed & SCE_CTRL_UP) set_sel = (set_sel + n - 1) % n;
@@ -1730,8 +1740,9 @@ static void draw_settings(void) {
       case 2: cfg.dbltap = !cfg.dbltap; sfx(SFX_TOGGLE); break;
       case 3: cfg.glow = !cfg.glow; sfx(SFX_TOGGLE); break;
       case 1: cfg.sounds += d * 10; if (cfg.sounds > 100) cfg.sounds = 0; if (cfg.sounds < 0) cfg.sounds = 100; sfx_volume(cfg.sounds); sfx(SFX_TOGGLE); break;
-      case 4: if (in.pressed & SCE_CTRL_CROSS) { lv_vault_save_views(&vault); resume_save(); find_vaults(); screen = S_PICK; return; } break;
-      case 5:
+      case 4: if (in.pressed & SCE_CTRL_CROSS) { sfx(SFX_OPEN); open_drive(S_SETTINGS); return; } break;
+      case 5: if (in.pressed & SCE_CTRL_CROSS) { lv_vault_save_views(&vault); resume_save(); find_vaults(); screen = S_PICK; return; } break;
+      case 6:
         if (in.pressed & SCE_CTRL_CROSS) {
           DIR *dd = opendir(cache_dir);
           struct dirent *e;
@@ -1741,7 +1752,7 @@ static void draw_settings(void) {
           say("Thumbnail cache cleared");
         }
         break;
-      case 6: if (in.pressed & SCE_CTRL_CROSS) { cover_return = S_SETTINGS; screen = S_COVER; } break;
+      case 7: if (in.pressed & SCE_CTRL_CROSS) { cover_return = S_SETTINGS; screen = S_COVER; } break;
     }
     cfg_save();
   }
@@ -1754,7 +1765,7 @@ static void draw_cover_screen(void) {
   vita2d_draw_rectangle(0, 0, W, H, RGBA(10, 12, 16, 255));
   time_t t = time(NULL);
   struct tm l;
-  localtime_r(&t, &l);
+  lv_local_tm(t, &l);
   char b[16];
   strftime(b, sizeof b, "%H:%M", &l);
   text_center(W / 2, H / 2 + 20, RGBA(220, 225, 235, 255), 72, b);
@@ -1819,6 +1830,7 @@ int main(void) {
   rnd_state ^= (unsigned)time(NULL);
   cfg_load();
   show_load();
+  drive_load();
   sfx_volume(cfg.sounds);
   sfx(SFX_START);
 
@@ -1849,7 +1861,7 @@ int main(void) {
       if (wv_vid) { video_close_later(wv_vid); wv_vid = NULL; }
     }
     // (a video playing, or a slideshow: the Vita doesn't dim or sleep)
-    if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow))
+    if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow) || drive.state == DRV_SYNCING || drive.state == DRV_CODE)
       sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
     if (loaded_vault) take_results();
     if (web_started) web_take_results();
@@ -1863,6 +1875,8 @@ int main(void) {
       if (r == 1 && ime_for == 4 && screen == S_VIEWER && vk < nshown) { if (lv_item_set(&vault, shown[vk], "tags", got) == 0) { edited(); sfx(SFX_DONE); } }
       if (r == 1 && ime_for == 5 && got[0]) saved_add_current(got);
       if (r == 1 && ime_for == 6) batch_add_tag(got);
+      if (r == 1 && ime_for == 7 && got[0]) { snprintf(drive_new_id, sizeof drive_new_id, "%s", got); drive_ask_secret = 1; }
+      if (r == 1 && ime_for == 8 && got[0]) { drive_set_key(drive_new_id, got); sfx(SFX_DONE); say("Key saved: now sign in"); }
       if (r == 1 && ime_for == 2) { lsheet = LS_NONE; snprintf(query, sizeof query, "%s", got); cat = -1; refilter(); sel = 0; scroll = 0; screen = S_LIBRARY; }
       if (r != 0) memset(&in, 0, sizeof in);
       else in.pressed = 0, in.tap = 0;
@@ -1892,6 +1906,7 @@ int main(void) {
       case S_SETTINGS: draw_settings(); break;
       case S_WEB: draw_web(); break;
       case S_SHOW: draw_show_plan(); break;
+      case S_DRIVE: draw_drive(); break;
       case S_WEBVIEW: draw_webview(); break;
       case S_COVER: draw_cover_screen(); if (in.tap) { screen = cover_return; } break;
     }

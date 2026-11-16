@@ -21,8 +21,15 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -ffunction-sections -fdata-sections -Wall -Wno-unused-parameter -D_GNU_SOURCE")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
 
-# (src/web.c is compiled as part of main.c)
-add_executable(${PROJECT_NAME} src/main.c src/vault.c src/lvcrypt.c src/image.c src/video.c src/booru.c src/json.c src/net.c src/sfx.c)
+# (src/web.c, lib.c, show.c and drive_ui.c are compiled as part of main.c)
+add_executable(${PROJECT_NAME} src/main.c src/vault.c src/lvcrypt.c src/image.c src/video.c src/booru.c src/json.c src/net.c src/sfx.c
+  src/drive.c src/third_party/qrcodegen.c)
+# Google Drive: a build can carry a "TVs and Limited Input devices" key of the PC's Google Cloud project
+# (CI secrets; never in the repository). Without one, it's typed in once on the Vita.
+if(NOT "$ENV{LEWD_VAULT_GOOGLE_TV_CLIENT_ID}" STREQUAL "" AND NOT "$ENV{LEWD_VAULT_GOOGLE_TV_CLIENT_SECRET}" STREQUAL "")
+  target_compile_definitions(${PROJECT_NAME} PRIVATE
+    LV_GOOGLE_TV_ID="$ENV{LEWD_VAULT_GOOGLE_TV_CLIENT_ID}" LV_GOOGLE_TV_SECRET="$ENV{LEWD_VAULT_GOOGLE_TV_CLIENT_SECRET}")
+endif()
 target_link_libraries(${PROJECT_NAME}
   vita2d freetype bz2 png turbojpeg webp sharpyuv
   avformat avcodec swresample swscale avutil vpx mp3lame mpg123 opus vorbis ogg

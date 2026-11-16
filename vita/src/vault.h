@@ -106,6 +106,11 @@ int lv_vault_save_index(LvVault *v);
 int lv_vault_delete(LvVault *v, int i, int save); // (save 0: several in a row, then lv_vault_save_index)
 char *lv_index_csv(const LvVault *v); // (malloc'd)
 
+// After a sync with Google Drive: "index (from Drive).csv" and "views (from Drive).csv" folded in, as
+// the PC's merge_conflicts does (their rows we haven't; the larger counts and later times), then kept
+// in _app/backups/conflicts. Before the vault is loaded. Returns the copies handled (-1: no folder).
+int lv_vault_merge_conflicts(LvVault *v, int *added, int *counts);
+
 // Searching, as the PC does: blue_hair (has it), -sketch (hasn't), ~cat ~dog (any of them),
 // artist:* or blue* (a wildcard at the end). A word matches a tag exactly, or (with no * and no
 // prefix) is found in the name, category or collection.
@@ -119,6 +124,8 @@ void lv_csv_parse(const char *text, LvCsv *out);
 void lv_csv_free(LvCsv *c);
 char *lv_csv_text(char ***rows, const int *ncells, int nrows); // malloc'd
 char *lv_views_csv(const LvVault *v);
+#include <time.h>
+void lv_local_tm(time_t t, struct tm *out); // (localtime_r, or UTC where the library can't tell)
 extern int lv_oom; // set when an allocation failed (a load then fails cleanly)
 int lv_b64url_decode(const char *in, char *out, size_t cap);
 void lv_b64url_encode(const char *in, char *out, size_t cap);

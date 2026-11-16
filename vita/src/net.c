@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <sys/types.h>
 
 #define UA "LewdVault/1.0 (PS Vita)"
 
@@ -117,13 +119,13 @@ static int on_progress(void *u, curl_off_t total, curl_off_t now, curl_off_t ut,
   return s->cancel && *s->cancel;
 }
 
-static int perform(LvHttp *h, const char *url, Sink *sp, const char **err);
+static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const LvReq *rq);
 int lv_http_get(LvHttp *h, const char *url, uint8_t **out, size_t *n, size_t max, volatile int *cancel,
                 volatile float *progress, const char **err) {
   Sink s = {NULL, NULL, 0, 0, max, cancel, progress, 0};
   *out = NULL;
   *n = 0;
-  int st = perform(h, url, &s, err);
+  int st = perform(h, url, &s, err, NULL);
   if (st < 0) { free(s.b); return st; }
   if (!s.b) { s.b = malloc(1); if (!s.b) return -1; s.cap = 1; }
   s.b[s.n] = 0;
@@ -139,7 +141,7 @@ int lv_http_get_file(LvHttp *h, const char *url, const char *path, size_t *n, si
   Sink s = {NULL, fopen(tmp, "wb"), 0, 0, max, cancel, progress, 0};
   *n = 0;
   if (!s.f) { if (err) *err = "No room on the memory card"; return -1; }
-  int st = perform(h, url, &s, err);
+  int st = perform(h, url, &s, err, NULL);
   int ok = fclose(s.f) == 0 && st == 200;
   if (!ok) { remove(tmp); return st < 0 ? st : st == 200 ? -1 : st; }
   remove(path);
@@ -148,7 +150,57 @@ int lv_http_get_file(LvHttp *h, const char *url, const char *path, size_t *n, si
   return st;
 }
 
-static int perform(LvHttp *h, const char *url, Sink *sp, const char **err) {
+// ---- requests with a method, headers and a body (Google Drive's API) ----
+typedef struct { FILE *f; uint64_t left; volatile int *cancel; } Piece;
+static size_t on_read(char *p, size_t sz, size_t nm, void *u) {
+  Piece *pc = u;
+  if (pc->cancel && *pc->cancel) return CURL_READFUNC_ABORT;
+  size_t n = sz * nm;
+  if (n > pc->left) n = (size_t)pc->left;
+  n = n ? fread(p, 1, n, pc->f) : 0;
+  pc->left -= n;
+  return n;
+}
+typedef struct { char *out; size_t cap; } Hdr;
+static size_t on_header(char *p, size_t sz, size_t nm, void *u) {
+  Hdr *hd = u;
+  size_t n = sz * nm;
+  if (n > 9 && !strncasecmp(p, "location:", 9) && hd->out && hd->cap) {
+    const char *v = p + 9;
+    size_t m = n - 9;
+    while (m && (*v == ' ' || *v == '\t')) { v++; m--; }
+    while (m && (v[m - 1] == '\r' || v[m - 1] == '\n' || v[m - 1] == ' ')) m--;
+    if (m >= hd->cap) m = hd->cap - 1;
+    memcpy(hd->out, v, m);
+    hd->out[m] = 0;
+  }
+  return n;
+}
+int lv_http_req(LvHttp *h, const char *url, const LvReq *rq, uint8_t **out, size_t *n, size_t max, volatile int *cancel, const char **err) {
+  Sink s = {NULL, NULL, 0, 0, max, cancel, NULL, 0};
+  *out = NULL;
+  *n = 0;
+  int st = perform(h, url, &s, err, rq);
+  if (st < 0) { free(s.b); return st; }
+  if (!s.b) { s.b = malloc(1); if (!s.b) return -1; s.cap = 1; }
+  s.b[s.n] = 0;
+  *out = s.b;
+  *n = s.n;
+  return st;
+}
+int lv_http_req_file(LvHttp *h, const char *url, const LvReq *rq, const char *path, size_t *n, volatile int *cancel,
+                     volatile float *progress, const char **err) {
+  Sink s = {NULL, fopen(path, "wb"), 0, 0, (size_t)-1, cancel, progress, 0};
+  *n = 0;
+  if (!s.f) { if (err) *err = "No room on the memory card"; return -1; }
+  int st = perform(h, url, &s, err, rq);
+  if (fclose(s.f) != 0 && st >= 200 && st < 300) st = -1;
+  if (st < 200 || st >= 300) remove(path);
+  *n = s.n;
+  return st;
+}
+
+static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const LvReq *rq) {
   static __thread char why[CURL_ERROR_SIZE];
   Sink s0 = *sp;
   why[0] = 0;
@@ -185,15 +237,55 @@ static int perform(LvHttp *h, const char *url, Sink *sp, const char **err) {
   curl_easy_setopt(c, CURLOPT_XFERINFODATA, s);
   curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
   curl_easy_setopt(c, CURLOPT_ERRORBUFFER, why);
-  if (proxy[0]) curl_easy_setopt(c, CURLOPT_PROXY, proxy);
+  if (proxy[0]) { curl_easy_setopt(c, CURLOPT_PROXY, proxy); curl_easy_setopt(c, CURLOPT_NOPROXY, "127.0.0.1,localhost"); }
+  struct curl_slist *hl = NULL;
+  Piece piece = {NULL, 0, s->cancel};
+  Hdr hd = {NULL, 0};
+  if (rq) {
+    for (const char *const *x = rq->headers; x && *x; x++) hl = curl_slist_append(hl, *x);
+    hl = curl_slist_append(hl, "Expect:"); // (no waiting for "100 Continue")
+    if (rq->body_path) {
+      piece.f = fopen(rq->body_path, "rb");
+      if (!piece.f || fseeko(piece.f, (off_t)rq->body_off, SEEK_SET) != 0) {
+        if (piece.f) fclose(piece.f);
+        curl_slist_free_all(hl);
+        snprintf(why, sizeof why, "The file couldn't be read");
+        return -1;
+      }
+      piece.left = rq->body_n;
+      curl_easy_setopt(c, CURLOPT_UPLOAD, 1L);
+      curl_easy_setopt(c, CURLOPT_READFUNCTION, on_read);
+      curl_easy_setopt(c, CURLOPT_READDATA, &piece);
+      curl_easy_setopt(c, CURLOPT_INFILESIZE_LARGE, (curl_off_t)rq->body_n);
+      if (rq->method) curl_easy_setopt(c, CURLOPT_CUSTOMREQUEST, rq->method);
+    } else if (rq->body) {
+      curl_easy_setopt(c, CURLOPT_POSTFIELDS, rq->body);
+      curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)rq->body_len);
+      if (rq->method && strcmp(rq->method, "POST")) curl_easy_setopt(c, CURLOPT_CUSTOMREQUEST, rq->method);
+    } else if (rq->method) {
+      curl_easy_setopt(c, CURLOPT_CUSTOMREQUEST, rq->method);
+      if (!strcmp(rq->method, "PUT")) { curl_easy_setopt(c, CURLOPT_UPLOAD, 1L); curl_easy_setopt(c, CURLOPT_INFILESIZE_LARGE, (curl_off_t)0); }
+    }
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, hl);
+    if (rq->location && rq->location_cap) {
+      rq->location[0] = 0;
+      hd.out = rq->location;
+      hd.cap = rq->location_cap;
+      curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, on_header);
+      curl_easy_setopt(c, CURLOPT_HEADERDATA, &hd);
+      curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 0L);
+    }
+  }
   CURLcode r = curl_easy_perform(c);
+  if (piece.f) fclose(piece.f);
+  curl_slist_free_all(hl);
   if (r == CURLE_BAD_CONTENT_ENCODING && !no_compress) {
     no_compress = 1;
     free(s->b);
     if (s->f) rewind(s->f);
     *s = s0;
     if (s0.f) s->f = s0.f;
-    return perform(h, url, s, err);
+    return perform(h, url, s, err, rq);
   }
   long status = 0;
   curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &status);

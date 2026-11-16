@@ -1,6 +1,8 @@
 #include "vault.h"
 #include "lvcrypt.h"
+#include <ctype.h>
 #include <dirent.h>
+#include <strings.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -279,6 +281,7 @@ void lv_vault_init(LvVault *v, const char *root) {
 // of the day, the 14 newest kept (backup_daily in lib.rs: the same folders, so the PC's restore finds
 // them). Copied as they are, still encrypted in an Untraceable vault.
 int lv_backup_days = 14;
+void lv_local_tm(time_t t, struct tm *out);
 static void backup_daily(LvVault *v, const char *today) {
   char dir[700], from[700], to[1800];
   snprintf(dir, sizeof dir, "%s/_app/backups", v->root);
@@ -322,13 +325,18 @@ static void backup_daily(LvVault *v, const char *today) {
 static void backup_today(LvVault *v) {
   time_t t = time(NULL);
   struct tm l;
-  localtime_r(&t, &l);
+  lv_local_tm(t, &l);
   char d[16];
   strftime(d, sizeof d, "%Y-%m-%d", &l);
   backup_daily(v, d);
 }
 
 const uint8_t *lv_key(const LvVault *v) { return v->has_key ? v->key : NULL; }
+
+// The local time; where the C library can't tell it (Vita3K's gives 1970), the UTC one instead.
+void lv_local_tm(time_t t, struct tm *out) {
+  if (!localtime_r(&t, out) || (out->tm_year < 100 && t > 946684800)) gmtime_r(&t, out);
+}
 
 int lv_vault_unlock(LvVault *v, const char *password) {
   char p[600];
@@ -375,7 +383,7 @@ static const char *map_get(const Map *m, const char *k) {
   return NULL;
 }
 static void map_free(Map *m) {
-  for (size_t i = 0; i < m->cap; i++) { free(m->keys[i]); free(m->vals[i]); }
+  for (size_t i = 0; m->keys && i < m->cap; i++) { sfree(m->keys[i]); sfree(m->vals[i]); }
   free(m->keys);
   free(m->vals);
 }
@@ -1102,4 +1110,205 @@ int lv_search_match(const LvSearch *s, const LvItem *it) {
     if (s->mode[k] == '~') { any = 1; any_ok |= m; }
   }
   return !any || any_ok;
+}
+
+// ---------- copies from a Drive sync ----------
+
+// "index (from Drive).csv" is a copy of index.csv (is_conflict_copy in lib.rs): the name starts with
+// the base, then something that isn't a letter, digit or dot, and ends in .csv.
+static int is_conflict_copy(const char *name, const char *base) {
+  size_t n = strlen(name), b = strlen(base);
+  if (n <= b + 4 || strncasecmp(name, base, b) || strcasecmp(name + n - 4, ".csv")) return 0;
+  unsigned char c = (unsigned char)name[b];
+  return !(isalnum(c) || c == '.' || c >= 0x80);
+}
+static Map map_new(int n) {
+  size_t cap = 64;
+  while (cap < (size_t)n * 2 + 2) cap *= 2;
+  Map m = {calloc(cap, sizeof(char *)), calloc(cap, sizeof(char *)), cap};
+  if (!m.keys || !m.vals) { free(m.keys); free(m.vals); m.keys = m.vals = NULL; m.cap = 0; lv_oom = 1; }
+  return m;
+}
+static double num_of(const char *s) { return s && *s ? atof(s) : 0; }
+
+// Our rows plus theirs that we haven't (by id, and by uid), in our columns. 1: changed.
+static int merge_index(char **ours_text, const char *theirs_text, int *added) {
+  LvCsv a, b;
+  lv_csv_parse(*ours_text, &a);
+  lv_csv_parse(theirs_text, &b);
+  int changed = 0;
+  if (a.nrows && b.nrows) {
+    char **ha = a.rows[0], **hb = b.rows[0];
+    int na = a.ncells[0], nb = b.ncells[0];
+    int ida = col(ha, na, "id"), uida = col(ha, na, "uid"), idb = col(hb, nb, "id"), uidb = col(hb, nb, "uid");
+    Map ids = map_new(a.nrows * 2);
+    if (ida >= 0 && idb >= 0 && ids.cap) {
+      for (int r = 1; r < a.nrows; r++) {
+        const char *id = cell(a.rows[r], a.ncells[r], ida), *u = cell(a.rows[r], a.ncells[r], uida);
+        if (*id) map_put(&ids, id, "");
+        if (*u) { char k[80]; snprintf(k, sizeof k, "\x01%s", u); map_put(&ids, k, ""); }
+      }
+      int cap = a.nrows + b.nrows;
+      char ***rows = malloc(cap * sizeof *rows);
+      int *nc = malloc(cap * sizeof *nc);
+      int *map = malloc((na + 1) * sizeof *map);
+      int n = 0;
+      if (rows && nc && map) {
+        for (int k = 0; k < na; k++) map[k] = col(hb, nb, ha[k]);
+        for (int r = 0; r < a.nrows; r++) { rows[n] = a.rows[r]; nc[n++] = a.ncells[r]; }
+        int first_new = n;
+        for (int r = 1; r < b.nrows; r++) {
+          const char *id = cell(b.rows[r], b.ncells[r], idb), *u = cell(b.rows[r], b.ncells[r], uidb);
+          char k[80];
+          snprintf(k, sizeof k, "\x01%s", u);
+          if (!*id || map_get(&ids, id) || (*u && map_get(&ids, k))) continue;
+          char **row = malloc((na + 1) * sizeof *row);
+          if (!row) { lv_oom = 1; break; }
+          for (int c = 0; c < na; c++) row[c] = (char *)cell(b.rows[r], b.ncells[r], map[c]);
+          rows[n] = row;
+          nc[n++] = na;
+          map_put(&ids, id, "");
+          if (*u) map_put(&ids, k, "");
+        }
+        if (n > first_new) {
+          char *t = lv_csv_text(rows, nc, n);
+          if (t) { sfree(*ours_text); *ours_text = t; changed = 1; *added += n - first_new; }
+        }
+        for (int r = first_new; r < n; r++) free(rows[r]);
+      }
+      free(rows); free(nc); free(map);
+    }
+    if (ids.cap) map_free(&ids);
+  }
+  lv_csv_free(&a);
+  lv_csv_free(&b);
+  return changed;
+}
+
+// The counts: the larger of the two, the later times; their rows we haven't, added. 1: changed.
+static int merge_views(char **ours_text, const char *theirs_text, int *counts) {
+  LvCsv a, b;
+  lv_csv_parse(*ours_text, &a);
+  lv_csv_parse(theirs_text, &b);
+  int changed = 0;
+  if (a.nrows && b.nrows && a.ncells[0] >= 7 && b.ncells[0] >= 7) {
+    Map at = map_new(a.nrows + b.nrows);
+    int cap = a.nrows + b.nrows;
+    char ***rows = malloc(cap * sizeof *rows);
+    int *nc = malloc(cap * sizeof *nc);
+    char **mine = malloc((size_t)cap * 7 * sizeof *mine); // (rows rewritten: row k at mine + 7k)
+    char (*nums)[3][32] = malloc((size_t)cap * sizeof *nums);
+    if (at.cap && rows && nc && mine && nums) {
+      int n = 0;
+      for (int r = 0; r < a.nrows; r++) {
+        rows[n] = a.rows[r];
+        nc[n] = a.ncells[r];
+        if (r && a.ncells[r] >= 7 && *a.rows[r][0]) { char ix[16]; snprintf(ix, sizeof ix, "%d", n); map_put(&at, a.rows[r][0], ix); }
+        n++;
+      }
+      for (int r = 1; r < b.nrows; r++) {
+        if (b.ncells[r] < 7 || !*b.rows[r][0]) continue;
+        char **t = b.rows[r];
+        const char *ix = map_get(&at, t[0]);
+        if (!ix) { // (a row only they have)
+          char nx[16];
+          snprintf(nx, sizeof nx, "%d", n);
+          map_put(&at, t[0], nx);
+          rows[n] = t;
+          nc[n++] = 7;
+          changed++;
+          (*counts)++;
+          continue;
+        }
+        int k = atoi(ix);
+        if (nc[k] < 7) continue;
+        char **o = rows[k];
+        long long v0 = (long long)num_of(o[2]), l0 = (long long)num_of(o[4]), v1 = (long long)num_of(t[2]), l1 = (long long)num_of(t[4]);
+        double s0 = num_of(o[6]), s1 = num_of(t[6]);
+        int more = v1 > v0 || l1 > l0 || s1 > s0, later = strcmp(t[3], o[3]) > 0 || strcmp(t[5], o[5]) > 0;
+        if (!more && !later) continue;
+        char **row = mine + (size_t)k * 7;
+        if (row != o) for (int c = 0; c < 7; c++) row[c] = o[c];
+        if (more) {
+          snprintf(nums[k][0], 32, "%lld", v1 > v0 ? v1 : v0);
+          snprintf(nums[k][1], 32, "%lld", l1 > l0 ? l1 : l0);
+          lv_num_or_empty(round((s1 > s0 ? s1 : s0) * 10.0) / 10.0, nums[k][2], 32);
+          row[2] = nums[k][0];
+          row[4] = nums[k][1];
+          row[6] = nums[k][2];
+          (*counts)++;
+        }
+        if (strcmp(t[3], row[3]) > 0) row[3] = t[3];
+        if (strcmp(t[5], row[5]) > 0) row[5] = t[5];
+        rows[k] = row;
+        nc[k] = 7;
+        changed++;
+      }
+      if (changed) {
+        char *text = lv_csv_text(rows, nc, n);
+        if (text) { sfree(*ours_text); *ours_text = text; }
+        else changed = 0;
+      }
+    }
+    free(rows); free(nc); free(mine); free(nums);
+    if (at.cap) map_free(&at);
+  }
+  lv_csv_free(&a);
+  lv_csv_free(&b);
+  return changed != 0;
+}
+
+int lv_vault_merge_conflicts(LvVault *v, int *added, int *counts) {
+  int a0 = 0, c0 = 0;
+  if (!added) added = &a0;
+  if (!counts) counts = &c0;
+  DIR *d = opendir(v->root);
+  if (!d) return -1;
+  char names[16][256];
+  int kinds[16], n = 0;
+  struct dirent *e;
+  while ((e = readdir(d)) && n < 16) {
+    int k = is_conflict_copy(e->d_name, "index") ? 1 : is_conflict_copy(e->d_name, "views") ? 2 : 0;
+    if (!k || strlen(e->d_name) >= sizeof names[0]) continue;
+    snprintf(names[n], sizeof names[n], "%s", e->d_name);
+    kinds[n++] = k;
+  }
+  closedir(d);
+  if (!n) return 0;
+  int done = 0;
+  for (int k = 0; k < n; k++) {
+    char p[900];
+    snprintf(p, sizeof p, "%s/%s", v->root, names[k]);
+    char *theirs = (char *)lv_read_all(p, lv_key(v), NULL);
+    if (!theirs) continue; // (unreadable: tried again next time)
+    const char *base = kinds[k] == 1 ? "index.csv" : "views.csv";
+    char *ours = read_text(v, base);
+    if (!ours) ours = sdup("");
+    int changed = kinds[k] == 1 ? merge_index(&ours, theirs, added) : merge_views(&ours, theirs, counts);
+    int ok = 1;
+    if (changed) {
+      backup_today(v);
+      char to[700];
+      snprintf(to, sizeof to, "%s/%s", v->root, base);
+      ok = lv_write_all(to, lv_key(v), ours, strlen(ours)) == 0;
+    }
+    sfree(ours);
+    free(theirs);
+    if (!ok) continue;
+    // the copy is kept, out of the way, as the PC keeps it
+    char dir[700], to[1300];
+    snprintf(dir, sizeof dir, "%s/_app/backups", v->root);
+    mkdir(dir, 0777);
+    snprintf(dir, sizeof dir, "%s/_app/backups/conflicts", v->root);
+    mkdir(dir, 0777);
+    time_t t = time(NULL);
+    struct tm l;
+    lv_local_tm(t, &l);
+    char stamp[32];
+    strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &l);
+    snprintf(to, sizeof to, "%s/%s_%s", dir, stamp, names[k]);
+    if (rename(p, to) != 0) remove(p);
+    done++;
+  }
+  return done;
 }
