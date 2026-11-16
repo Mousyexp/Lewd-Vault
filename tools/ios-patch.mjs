@@ -5,6 +5,8 @@
 //      AppIcon-<id> set each in the asset catalog, all of them compiled in;
 //   2. the share extension (mobile/ios/ShareExtension): "Lewd Vault" in the share sheet, handing
 //      what was shared to the app through the app group's share-inbox (src-tauri/src/phone.rs).
+//   3. Chat's Nearby (mobile/ios/Nearby: LvNearby.swift, Bluetooth LE, and LvNearbyLoad.m, which starts
+//      it): compiled into the app; it finds the web view itself and adds the "lvBle" message handler.
 // Then the Xcode project is generated again from the edited project.yml.
 //   node tools/ios-patch.mjs
 import fs from 'node:fs';
@@ -91,6 +93,26 @@ if (!lines.some(l => /^ {2}ShareExtension:\s*$/.test(l))) {
     else lines.splice(appAt + set + 1, 0, '      base:', ...keys);
   }
 }
+// ---------- 3. Nearby: its files in the app's sources ----------
+fs.cpSync(path.join(root, 'mobile/ios/Nearby'), path.join(apple, 'Nearby'), { recursive: true });
+{
+  const tEnd = (() => { let e = lines.findIndex(l => /^targets:\s*$/.test(l)); e = lines.findIndex((l, k) => k > e && l.trim() && indent(l) === 0); return e < 0 ? lines.length : e; })();
+  const app2 = lines.findIndex(l => l === `  ${appName}:`);
+  must(app2 >= 0, 'the app target went missing');
+  let aEnd = lines.findIndex((l, k) => k > app2 && /^ {2}[^ #][^:]*:\s*$/.test(l));
+  if (aEnd < 0 || aEnd > tEnd) aEnd = tEnd;
+  const block = lines.slice(app2, aEnd);
+  if (!block.some(l => /^\s+- path: Nearby\s*$/.test(l))) {
+    const src = block.findIndex(l => /^ {4}sources:\s*$/.test(l));
+    must(src >= 0, 'the app target has no sources: list');
+    lines.splice(app2 + src + 1, 0, '      - path: Nearby');
+  }
+  const block3 = lines.slice(app2, aEnd + 1);
+  if (!block3.some(l => /SWIFT_VERSION/.test(l))) {
+    const base = block3.findIndex(l => /^ {6}base:\s*$/.test(l));
+    if (base >= 0) lines.splice(app2 + base + 1, 0, '        SWIFT_VERSION: "5.0"');
+  }
+}
 fs.writeFileSync(ymlPath, lines.join('\n'));
-console.log(`ios-patch: ${PRESETS.length} alternate icons in ${path.relative(apple, catalog)}, the share extension, for target ${appName}`);
+console.log(`ios-patch: ${PRESETS.length} alternate icons in ${path.relative(apple, catalog)}, the share extension, Nearby, for target ${appName}`);
 execSync('xcodegen generate', { cwd: apple, stdio: 'inherit' });

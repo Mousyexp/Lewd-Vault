@@ -19,7 +19,7 @@
 //                 put back together on arrival. "View once" pictures are erased after being looked at.
 //
 // Nearby (Bluetooth) carries the very same sealed events phone to phone; the radio part is native
-// (see phone.rs and the CI patch scripts), this file only wraps and unwraps.
+// (mobile/android/LvNearby.kt, mobile/ios/Nearby), this file only wraps and unwraps.
 //
 // What is stored, in the vault's _app/chat folder (encrypted in Untraceable mode, like everything):
 //   state.json   the key, your nickname, contacts, rooms, relays, the outbox
@@ -241,9 +241,11 @@ fn room_event(me: &SigningKey, tag: &str, key: &[u8; 32], payload: &str) -> Even
 }
 
 /// Pictures: no bigger than 1280 px (then 1024, 800) and MAX_PICTURE bytes, as JPEG. (w, h, bytes)
-pub fn prepare_picture(bytes: &[u8]) -> Res<(u32, u32, Vec<u8>)> {
+/// (`small`: for Nearby, where Bluetooth is slow, 800 px at most)
+pub fn prepare_picture(bytes: &[u8], small: bool) -> Res<(u32, u32, Vec<u8>)> {
     let img = image::load_from_memory(bytes).map_err(|_| "Only pictures can be sent for now.")?;
-    for (side, quality) in [(1280u32, 80u8), (1024, 72), (800, 65), (640, 55)] {
+    let ladder: &[(u32, u8)] = if small { &[(800, 68), (640, 58), (480, 50)] } else { &[(1280, 80), (1024, 72), (800, 65), (640, 55)] };
+    for &(side, quality) in ladder {
         let small = if img.width().max(img.height()) > side { img.thumbnail(side, side) } else { img.clone() };
         let rgb = small.to_rgb8();
         let mut out = Vec::new();
@@ -429,11 +431,8 @@ impl Chat {
     }
 
     fn relay_list(&self) -> Vec<String> {
-        // (tests and the screenshot harness point it at a relay of their own)
-        if let Ok(list) = std::env::var("LV_CHAT_RELAYS") {
-            return list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-        }
-        self.st.lock().unwrap().saved.relays.clone()
+        let saved = self.st.lock().unwrap().saved.relays.clone();
+        relays_or_override(saved)
     }
 
     fn connect(self: &Arc<Self>) {
@@ -761,7 +760,11 @@ impl Chat {
     }
 
     pub fn send_picture(&self, cid: &str, bytes: &[u8], once: bool, text: &str) -> Res<Value> {
-        let (w, h, jpeg) = prepare_picture(bytes)?;
+        self.send_picture_sized(cid, bytes, once, text, false)
+    }
+
+    fn send_picture_sized(&self, cid: &str, bytes: &[u8], once: bool, text: &str, small: bool) -> Res<Value> {
+        let (w, h, jpeg) = prepare_picture(bytes, small)?;
         let id = new_id();
         let mid = new_id();
         crate::write_atomic(&self.media_path(&mid), &jpeg)?;
@@ -808,7 +811,8 @@ impl Chat {
     fn summary(&self) -> Value {
         let st = self.st.lock().unwrap();
         let ups = self.up.lock().unwrap().clone();
-        let relays: Vec<Value> = self.relay_list().iter().map(|u| json!({ "url": u, "up": ups.get(u).copied().unwrap_or(false) })).collect();
+        // (not relay_list(): that locks the state, which is held here)
+        let relays: Vec<Value> = relays_or_override(st.saved.relays.clone()).iter().map(|u| json!({ "url": u, "up": ups.get(u).copied().unwrap_or(false) })).collect();
         let mut convs = Vec::new();
         let cids: Vec<String> = st.saved.contacts.iter().filter(|(_, c)| !c.blocked).map(|(k, _)| k.clone())
             .chain(st.saved.rooms.keys().map(|t| format!("r:{t}"))).collect();
@@ -1012,6 +1016,14 @@ impl Chat {
 
     fn resubscribe(&self) {
         self.sub_gen.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The relays to use (tests and the screenshot harness point it at a relay of their own).
+fn relays_or_override(saved: Vec<String>) -> Vec<String> {
+    match std::env::var("LV_CHAT_RELAYS") {
+        Ok(list) => list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        Err(_) => saved,
     }
 }
 
@@ -1298,7 +1310,7 @@ pub fn api(dir: &Path, name: &str, args: &[Value], read_item: &dyn Fn(&str) -> R
                 st.saved.contacts.entry(to.clone()).or_insert_with(|| Contact { added: now(), nick: clean_nick(&s(3)), ..Default::default() });
                 load_conv(&chat, &mut st, &to);
             }
-            let id = if s(2) == "item" { chat.send_picture(&to, &read_item(&s(1))?, false, "")? } else { chat.send_text(&to, &s(1), "")? };
+            let id = if s(2) == "item" { chat.send_picture_sized(&to, &read_item(&s(1))?, false, "", true)? } else { chat.send_text(&to, &s(1), "")? };
             // the same sealed events that went to the relays, for the radio too
             let st = chat.st.lock().unwrap();
             let evs: Vec<String> = st.saved.outbox.iter().filter(|o| o.cid == to && o.mid == id.as_str().unwrap_or("")).map(|o| o.ev.json()).collect();
@@ -1306,14 +1318,6 @@ pub fn api(dir: &Path, name: &str, args: &[Value], read_item: &dyn Fn(&str) -> R
         }
         "chatNearbyTake" => {
             let ev: Event = serde_json::from_str(&s(0)).map_err(|_| "Bad event")?;
-            let from_dm = ev.kind == KIND_WRAP;
-            if from_dm {
-                // (load the conversation it belongs to before taking it)
-                if let Ok((from, _, _)) = unwrap(&chat.st.lock().unwrap().key, &ev) {
-                    let mut st = chat.st.lock().unwrap();
-                    load_conv(&chat, &mut st, &from);
-                }
-            }
             Ok(json!(chat.take(ev, "nearby")))
         }
         _ => Err(format!("Unknown call: {name}")),
@@ -1364,7 +1368,7 @@ mod tests {
         assert_eq!(ev.kind, KIND_WRAP);
         assert!(ev.verify());
         assert_ne!(ev.pubkey, pub_of(&alice)); // (the relay can't see who sent it)
-        assert!(!ev.content.contains("hi"));
+        assert!(!ev.content.contains("\"hi\"")); // (a quote can't be in base64: the words aren't there)
         let (from, _, payload) = unwrap(&bob, &ev).unwrap();
         assert_eq!(from, pub_of(&alice));
         assert!(payload.contains("\"hi\""));
@@ -1392,21 +1396,24 @@ mod tests {
         let img = image::RgbImage::from_fn(3000, 2000, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x * y) % 256) as u8]));
         let mut png = Vec::new();
         image::DynamicImage::ImageRgb8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-        let (w, h, jpeg) = prepare_picture(&png).unwrap();
+        let (w, h, jpeg) = prepare_picture(&png, false).unwrap();
         assert!(w <= 1280 && h <= 1280 && jpeg.len() <= MAX_PICTURE);
+        let (w, h, _) = prepare_picture(&png, true).unwrap();
+        assert!(w <= 800 && h <= 800);
     }
 
     /// Two people, a little relay of our own: a message, a picture in pieces, a reaction, a room.
     #[test]
     fn two_people_through_a_relay() {
         let port = test_relay();
-        std::env::set_var("LV_CHAT_RELAYS", format!("ws://127.0.0.1:{port}"));
         let base = std::env::temp_dir().join(format!("lv-chat-test-{}", new_id()));
         let (da, db) = (base.join("a"), base.join("b"));
         let a = Chat::open(da.clone());
-        a.connect();
         let b = Chat::open(db.clone());
-        b.connect();
+        for c in [&a, &b] {
+            c.st.lock().unwrap().saved.relays = vec![format!("ws://127.0.0.1:{port}")];
+            c.connect();
+        }
         let none = |_: &str| -> Res<Vec<u8>> { Err("none".into()) };
         let call = |c: &Arc<Chat>, d: &Path, n: &str, args: Value| -> Value {
             // (the module's own entry point would start a second chat for the folder: call the methods)
@@ -1456,6 +1463,49 @@ mod tests {
         a.shutdown();
         b.shutdown();
         let _ = fs::remove_dir_all(&base);
+    }
+
+    /// The page's calls, through the real entry point (each under a timeout: a lock taken twice would hang).
+    #[test]
+    fn page_calls_never_hang() {
+        let dir = std::env::temp_dir().join(format!("lv-chat-api-{}", new_id()));
+        fs::create_dir_all(&dir).unwrap();
+        // (a relay nobody listens on: no network in tests)
+        fs::write(dir.join("state.json"), json!({ "relays": ["ws://127.0.0.1:9"] }).to_string()).unwrap();
+        let other = new_key();
+        let none = |_: &str| -> Res<Vec<u8>> { Err("no items".into()) };
+        let call = |name: &str, args: Value| -> Value {
+            let (tx, rx) = mpsc::channel();
+            let (d, n, a) = (dir.clone(), name.to_string(), args.as_array().cloned().unwrap_or_default());
+            std::thread::spawn(move || { let _ = tx.send(api(&d, &n, &a, &none)); });
+            rx.recv_timeout(Duration::from_secs(10)).unwrap_or_else(|_| panic!("{name} hung")).unwrap_or_else(|e| json!({ "error": e }))
+        };
+        assert_eq!(call("chatReady", json!([])), json!(false));
+        call("chatNick", json!(["Tester"]));
+        let st = call("chatState", json!([0]));
+        assert_eq!(st["me"]["nick"], "Tester");
+        assert_eq!(st["relays"][0]["url"], "ws://127.0.0.1:9");
+        // (unchanged: just the number; a relay thread may have bumped it in between, then it's the whole)
+        let again = call("chatState", json!([st["rev"]]));
+        assert!(again["rev"].is_u64() && (again["convs"].is_null() || again["rev"] != st["rev"]));
+        let me = st["me"]["id"].as_str().unwrap().to_string();
+        let cid = call("chatAdd", json!([format!("lvchat:{}", pub_of(&other)), "Other"])).as_str().unwrap().to_string();
+        call("chatSend", json!([cid, "hello"]));
+        assert_eq!(call("chatMessages", json!([cid]))[0]["text"], "hello");
+        // something arriving from a nearby phone
+        let ev = wrap(&other, &me, &json!({ "v": 1, "t": "msg", "id": "n1", "text": "from nearby", "nick": "Other" }).to_string()).unwrap();
+        assert_eq!(call("chatNearbyTake", json!([ev.json()])), json!(true));
+        assert_eq!(call("chatNearbyTake", json!([ev.json()])), json!(false)); // (once)
+        let msgs = call("chatMessages", json!([cid]));
+        assert!(msgs.as_array().unwrap().iter().any(|m| m["text"] == "from nearby" && m["via"] == "nearby"));
+        let evs = call("chatNearbyWrap", json!([cid, "back at you", "text", "Other"]));
+        let evs: Vec<Event> = evs.as_array().unwrap().iter().map(|e| serde_json::from_str(e.as_str().unwrap()).unwrap()).collect();
+        assert!(evs.iter().any(|e| unwrap(&other, e).map(|(_, _, p)| p.contains("back at you")).unwrap_or(false)));
+        call("chatJoin", json!(["lounge", ""]));
+        call("chatQr", json!([]));
+        assert!(call("chatState", json!([0]))["convs"].as_array().unwrap().len() == 2);
+        call("chatWipe", json!([]));
+        assert!(!dir.exists());
     }
 
     /// A minimal Nostr relay (NIP-01: EVENT, REQ with kinds/#p/#r/since, OK, EOSE), for the tests.

@@ -474,7 +474,7 @@
     if (c.kind === 'room') {
       const people = new Set(msgs.filter(m => !m.mine && Date.now() - m.at < 7 * 86400000).map(m => m.from));
       C.sub.textContent = `Room · ${people.size + 1} ${people.size ? 'people' : 'person'} this week${c.extra.locked ? ' · password' : ''}`;
-    } else C.sub.textContent = msgs.some(m => m.via === 'nearby') ? 'End-to-end encrypted · nearby and internet' : 'End-to-end encrypted';
+    } else C.sub.textContent = msgs.some(m => m.via === 'nearby') ? 'Encrypted · also nearby' : 'End-to-end encrypted';
     const req = c.extra && c.extra.request;
     C.req.classList.toggle('hidden', !req);
     if (req) C.req.querySelector('span').textContent = `${c.name} isn't in your chats yet.`;
@@ -722,15 +722,16 @@
   }
 
   // ---------- Nearby: phones close by, over Bluetooth (like AirDrop) ----------
-  // The native side (phone.rs and the CI patch scripts) puts a bridge on the page: on Android an object,
+  // The native side (mobile/android/LvNearby.kt, mobile/ios/Nearby) puts a bridge on the page: on Android an object,
   // window.LvBle (start(helloJson), stop(), send(peer, text)); on iOS a message handler, lvBle. It calls
   // back window.__lvNearby({ type: 'found'|'lost'|'data'|'state', peer, hello, data, on, error }).
-  const bridge = (() => {
+  // (looked up when needed: the native side may add it after this file ran)
+  const getBridge = () => {
     if (window.LvBle && window.LvBle.start) return { start: h => window.LvBle.start(h), stop: () => window.LvBle.stop(), send: (p, d) => window.LvBle.send(p, d) };
     const wk = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lvBle;
     if (wk) return { start: h => wk.postMessage({ op: 'start', hello: h }), stop: () => wk.postMessage({ op: 'stop' }), send: (p, d) => wk.postMessage({ op: 'send', peer: p, data: d }) };
     return null;
-  })();
+  };
   const peers = new Map();
   let nearbyUi = null;
   window.__lvNearby = ev => {
@@ -754,6 +755,7 @@
       <p class="ch-nearby-msg"></p>
       <p class="ch-help">While this is open, phones close by with Lewd Vault Chat open on Nearby can see your nickname. Tap someone to send them a message or a picture straight over Bluetooth, sealed for them alone. It works without internet.</p>`;
     const msg = body.querySelector('.ch-nearby-msg'), field = body.querySelector('.ch-radar-peers');
+    const bridge = getBridge();
     if (!bridge) {
       msg.textContent = isPhone() ? 'Nearby needs the newest version of the app.' : 'Nearby is on the iPhone and Android apps (it uses Bluetooth). On a PC, chat over the internet.';
       body.querySelector('.ch-radar').classList.add('off');
@@ -789,6 +791,8 @@
     const text = body.querySelector('textarea');
     const go = async (what, kind) => {
       try {
+        const bridge = getBridge();
+        if (!bridge) throw new Error('Nearby is not available');
         const events = await api('chatNearbyWrap', p.id, what, kind, p.nick);
         bridge.send(p.peer, events.join('\n'));
         haptic('success');

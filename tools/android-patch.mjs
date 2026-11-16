@@ -8,6 +8,8 @@
 //   3. No screenshots or screen recording while "Hide from screenshots" is on (FLAG_SECURE).
 //   4. Plain http to the app's own media server on 127.0.0.1 (cleartext), and the camera for the
 //      break-in photo.
+//   5. Chat's Nearby (Bluetooth LE, like AirDrop): mobile/android/LvNearby.kt goes in beside the
+//      activity, which hands it the web view as window.LvBle; the Bluetooth permissions.
 //   node tools/android-patch.mjs
 import fs from 'node:fs';
 import path from 'node:path';
@@ -76,6 +78,15 @@ const aliases = ICONS.map(([id, label]) => `
         </activity-alias>`).join('');
 m = m.replace(act[0], block + aliases);
 if (!/android\.permission\.CAMERA/.test(m)) m = m.replace(/<application\b/, '<uses-permission android:name="android.permission.CAMERA" />\n    <uses-feature android:name="android.hardware.camera.front" android:required="false" />\n    <application');
+if (!/BLUETOOTH_ADVERTISE/.test(m)) m = m.replace(/<application\b/, [
+  '<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />',
+  '<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />',
+  '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />',
+  '<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />',
+  '<uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />',
+  '<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />',
+  '<uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />',
+  '<application'].join('\n    '));
 if (!/usesCleartextTraffic/.test(m)) m = m.replace(/<application\b/, '<application android:usesCleartextTraffic="true"');
 fs.writeFileSync(manifestPath, m);
 // (the template sets the cleartext flag from a placeholder in build.gradle.kts)
@@ -101,7 +112,16 @@ const body = `
   }
   override fun onStop() {
     super.onStop()
+    lvNearby?.end()
     lvApplyIcon()
+  }
+  // Chat's Nearby (LvNearby.kt): the page reaches it as window.LvBle
+  private var lvNearby: LvNearby? = null
+  override fun onWebViewCreate(webView: android.webkit.WebView) {
+    super.onWebViewCreate(webView)
+    val n = LvNearby(this, webView)
+    lvNearby = n
+    webView.addJavascriptInterface(n.bridge, "LvBle")
   }
   private fun lvNative(): org.json.JSONObject =
     try { org.json.JSONObject(java.io.File(filesDir, "phone-native.json").readText()) } catch (e: Exception) { org.json.JSONObject() }
@@ -155,7 +175,11 @@ const body = `
 if (!kt.includes('lvTakeShared')) {
   if (/class MainActivity\s*:\s*TauriActivity\(\)\s*\{/.test(kt)) kt = kt.replace(/\}\s*$/, body + '}\n');
   else { must(/class MainActivity\s*:\s*TauriActivity\(\)\s*$/m.test(kt), 'unexpected MainActivity.kt'); kt = kt.replace(/class MainActivity\s*:\s*TauriActivity\(\)\s*$/m, 'class MainActivity : TauriActivity() {' + body + '}'); }
-  must(!/override fun onResume|override fun onStop|override fun onNewIntent/.test(kt.replace(body, '')), 'MainActivity.kt already overrides onResume/onStop/onNewIntent');
+  must(!/override fun onResume|override fun onStop|override fun onNewIntent|override fun onWebViewCreate/.test(kt.replace(body, '')), 'MainActivity.kt already overrides onResume/onStop/onNewIntent/onWebViewCreate');
   fs.writeFileSync(ktPath, kt);
 }
-console.log('android-patch: share target, ' + ICONS.length + ' icon presets, screenshot guard');
+const pkg = (kt.match(/^package\s+([\w.]+)/m) || [])[1];
+must(pkg, 'MainActivity.kt has no package line');
+fs.writeFileSync(path.join(path.dirname(ktPath), 'LvNearby.kt'),
+  fs.readFileSync(path.join(root, 'mobile/android/LvNearby.kt'), 'utf8').replace('package __PACKAGE__', 'package ' + pkg));
+console.log('android-patch: share target, ' + ICONS.length + ' icon presets, screenshot guard, Nearby (Bluetooth)');

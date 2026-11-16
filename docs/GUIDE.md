@@ -134,6 +134,30 @@ is recommended. Without them the app is plainer: no hearts, stars or levels anyw
 that simply plays, and new things saved with neutral values (level 5, two stars) so the vault is
 the same either way. **Settings → Look → Fun features** turns them on or off at any time.
 
+## Chat
+
+**Chat** (in the sidebar, and in More on a phone) is private messages, pictures from your vault and
+rooms with other Lewd Vault users, with no account. The first time, it asks for a nickname and
+for you to confirm you're 18 or over; nothing connects before that.
+
+- **Your code** (`lvchat:` and 64 letters, also as a QR) is how someone adds you: they paste it into
+  **New chat → Add someone**. Someone who writes to you first shows up with Accept and Block.
+- **Rooms** are `#name` (and a password if you like): everyone who knows both is in it. Messages
+  in a room last a week.
+- **Pictures** come from the vault (the **+** in a chat) or from the device, are made smaller
+  (1280 px) before they leave, and can be **View once**. A picture you receive is saved into your
+  vault only when you choose **Save to my vault**. Long-press (right-click) a message for
+  reactions, reply, copy and delete; a double tap hearts it.
+- **Nearby** (phones): the AirDrop-like sheet behind the radar button. While it is open, phones
+  close by with Nearby open see each other's nickname, and a tap sends a message or a picture
+  straight over Bluetooth, with no internet.
+- **How it travels**: over the internet, through public Nostr relays (Chat settings lists them;
+  you can use your own). Everything is end-to-end encrypted on the device first. The design comes
+  from [bitchat](https://github.com/permissionlesstech/bitchat) (public domain), but Lewd Vault
+  Chat is a network of its own and doesn't talk to bitchat.
+- **Erase Chat** (Chat settings) deletes your identity, contacts, rooms and every message on this
+  device.
+
 ## iPhone, iPad and Android
 
 The same app runs on iOS 26 as a sideloaded IPA; see the [README](../README.md#-on-iphone--ipad-sideloaded)
@@ -219,6 +243,7 @@ Image Vault data/
   _app/
     thumbs/ clips/ streams/ audio/     thumbnails (packed), preview clips, seek tables, audio
     settings.json, state.json, kv/     settings, the next item number, small documents
+    chat/                              Chat: your key, contacts, rooms, messages, pictures
     backups/                           daily copies of the two lists and the settings
 ```
 
@@ -261,6 +286,7 @@ real page and the real backend (an opt-in test, `screenshot_server`, serves the 
   | `player.js`, `videos.js`, `audio.js`, `slideshow.js` | playing things |
   | `profile.js`, `lust.js`, `coach.js`, `share.js` | You, levels, the coach, share packs |
   | `privacy.js`, `drivesync.js`, `look.js` | discreet names, the emergency key, Drive sync, themes |
+  | `chat.js`, `fun.js` | Chat's screens; the fun features |
 - **`mobile/ui/`** is the phone layer for iOS and Android (`phone.js`, `phone.css`), applied only
   under `html.phone`.
 - **`sync-ui.mjs`** builds `src/` from those: it patches `Index.html` for the app (every patch must
@@ -279,6 +305,7 @@ real page and the real backend (an opt-in test, `screenshot_server`, serves the 
   | `web.rs` | the Browser's requests and cache |
   | `fastlane.rs`, `media.rs` | fast local uploads; the phones' media server |
   | `discreet.rs`, `dupes.rs`, `excel.rs`, `pack.rs`, `maint.rs` | discreet names, duplicates, Excel, share packs, backup/health/updates |
+  | `chat.rs` | Chat: keys, encryption, the relays, rooms, pictures (Nearby's radio is `mobile/android/LvNearby.kt` and `mobile/ios/Nearby/`) |
 
 ## Credits
 
