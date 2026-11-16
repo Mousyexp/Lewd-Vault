@@ -45,7 +45,7 @@
 
   // ---------- state ----------
   let S = null, rev = 0, started = false, openId = '', msgs = [], msgSig = '', filter = 'all', query = '', replyTo = null;
-  let timer = null, typingSig = '';
+  let timer = null, typingSig = '', settingsDraw = null;
   const conv = id => S && S.convs.find(c => c.id === id);
   const isTyping = c => !!(c && c.typing && Date.now() - c.typing < 6000);
 
@@ -173,6 +173,8 @@
     let list = convs.filter(c => filter === 'all' ? true : filter === 'unread' ? c.unread > 0 : filter === 'fav' ? c.kind === 'dm' && c.extra.fav : filter === 'rooms' ? c.kind === 'room' : c.extra && c.extra.request);
     if (query) list = list.filter(c => (c.name + ' ' + c.last).toLowerCase().includes(query));
     f.rows.innerHTML = '';
+    f.rows.classList.toggle('settled', !!f.drawn);
+    f.drawn = true;
     const section = (title, items) => {
       if (!items.length) return;
       f.rows.append(make('h3', 'ch-sec', title));
@@ -190,9 +192,10 @@
       f.rows.append(empty);
     }
     // the connection
-    const up = S.relays.filter(r => r.up).length;
-    f.net.className = 'ch-net' + (up ? ' up' : '');
-    f.net.textContent = up ? `Connected · ${up} of ${S.relays.length} relays` + (S.outbox ? ` · ${S.outbox} waiting to send` : '') : 'Connecting…' + (S.outbox ? ` · ${S.outbox} waiting to send` : '');
+    const ups = S.relays.filter(r => r.up), fastest = Math.min(...ups.map(r => r.rtt || 9e9));
+    const waiting = S.outbox ? ` · ${S.outbox} waiting to send` : '';
+    f.net.className = 'ch-net' + (ups.length ? ' up' : '');
+    f.net.textContent = ups.length ? `Connected · ${ups.length} ${ups.length === 1 ? 'relay' : 'relays'}${fastest < 9e9 ? ` · ${fastest} ms` : ''}${waiting}` : 'Connecting…' + waiting;
   }
 
   function row(c) {
@@ -364,7 +367,11 @@
     body.innerHTML = `
       <label class="ch-field"><span>Your nickname</span><input class="ch-input ch-set-nick" maxlength="24" autocomplete="off"></label>
       <div class="ch-field"><span>Your code</span><code class="ch-mycode"></code></div>
-      <label class="ch-field"><span>Relays <small>(one per line; the defaults come back if you empty it)</small></span><textarea class="ch-input ch-set-relays" rows="4" spellcheck="false"></textarea></label>
+      <div class="ch-field ch-relays"><span>Relays</span>
+        <div class="ch-seg ch-relay-mode"><button type="button" data-m="auto">Automatic</button><button type="button" data-m="manual">My own list</button></div>
+        <div class="ch-relay-auto"><small class="ch-help">Recommended. The fastest relays that work right now, from hundreds of free public ones, switched by themselves when one is slow or down.</small><div class="ch-relay-list"></div><small class="ch-relay-pool"></small></div>
+        <div class="ch-relay-manual hidden"><small class="ch-help">Exactly these, one per line (wss://…). Both of you need one in common.</small><textarea class="ch-input ch-set-relays" rows="4" spellcheck="false" placeholder="wss://"></textarea><button class="btn small" type="button">Use these</button></div>
+      </div>
       <label class="ch-toggle"><span><b>Send read receipts</b><small>They see when you've read their messages. You see theirs either way, if they send them.</small></span><input type="checkbox" class="ch-set-receipts"></label>
       <label class="ch-toggle"><span><b>Show when I'm typing</b><small>In private chats.</small></span><input type="checkbox" class="ch-set-typing"></label>
       <div class="ch-field ch-blocked"><span>Blocked</span></div>
@@ -379,10 +386,45 @@
       box.checked = !!(S && S.prefs && S.prefs[k]);
       box.onchange = () => api('chatPrefs', { [k]: box.checked }).then(refresh).catch(e => toast(errMsg(e), 'error'));
     }
-    const relays = body.querySelector('.ch-set-relays');
-    relays.value = S ? S.relays.map(r => r.url).join('\n') : '';
+    // the relays: automatic (a live view of the links), or your own list
+    const relays = body.querySelector('.ch-set-relays'), modeBtns = body.querySelectorAll('.ch-relay-mode button');
+    const showMode = m => {
+      modeBtns.forEach(b => b.classList.toggle('on', b.dataset.m === m));
+      body.querySelector('.ch-relay-auto').classList.toggle('hidden', m !== 'auto');
+      body.querySelector('.ch-relay-manual').classList.toggle('hidden', m !== 'manual');
+    };
+    const pool = (S && S.pool) || {};
+    showMode(pool.mode === 'manual' ? 'manual' : 'auto');
+    relays.value = (pool.yours || []).join('\n');
     relays.disabled = !!(S && S.custom);
-    relays.onchange = () => api('chatRelays', relays.value.split(/\s+/).filter(Boolean)).then(refresh).catch(e => toast(errMsg(e), 'error'));
+    modeBtns.forEach(b => b.onclick = () => {
+      showMode(b.dataset.m);
+      if (b.dataset.m === 'auto' && pool.mode === 'manual') api('chatRelays', []).then(refresh);
+    });
+    body.querySelector('.ch-relay-manual .btn').onclick = () => {
+      const list = relays.value.split(/\s+/).filter(Boolean);
+      if (!list.length) { toast('Add at least one relay, or choose Automatic', 'error'); return; }
+      api('chatRelays', list).then(() => { toast('Using your relays', 'ok'); refresh(); }).catch(e => toast(errMsg(e), 'error'));
+    };
+    const drawRelays = () => {
+      const list = body.querySelector('.ch-relay-list');
+      if (!list || !S) return;
+      list.innerHTML = '';
+      for (const r of S.relays) {
+        const row = make('div', 'ch-relay' + (r.up ? ' up' : ''));
+        row.append(make('i'), make('span', 'ch-relay-host', r.url.replace(/^wss?:\/\//, '')));
+        if (r.core) row.append(make('em', '', 'core'));
+        if (r.pinned) row.append(make('em', '', 'room'));
+        row.append(make('small', '', r.up ? (r.rtt ? r.rtt + ' ms' : 'up') : 'connecting…'));
+        list.append(row);
+      }
+      const p = S.pool || {};
+      const ago = p.listAt ? Math.max(1, Math.round((Date.now() / 1000 - p.listAt) / 3600)) : 0;
+      body.querySelector('.ch-relay-pool').textContent = `Knows ${p.known || 0} relays · ${p.working || 0} seen working` + (p.listAt ? ` · list updated ${ago < 24 ? ago + ' h' : Math.round(ago / 24) + ' d'} ago` : '');
+    };
+    drawRelays();
+    settingsDraw = drawRelays;
+    body.closest('.ch-sheet').onclose = () => { settingsDraw = null; };
     const bl = body.querySelector('.ch-blocked');
     if (!S || !S.blocked.length) bl.append(make('small', '', 'Nobody'));
     else for (const b of S.blocked) {
@@ -413,6 +455,7 @@
     openId = id;
     msgSig = '';
     replyTo = null;
+    shown = PAGE; hasMore = false; rendered = [];
     const f = frame();
     f.app.classList.add('in-chat');
     html.classList.add('ch-chat-open');
@@ -464,6 +507,7 @@
     C.req.querySelector('[data-a="block"]').onclick = () => block(conv(openId));
     const grow = () => { C.text.style.height = 'auto'; C.text.style.height = Math.min(C.text.scrollHeight, 140) + 'px'; C.form.classList.toggle('typed', !!C.text.value.trim()); };
     let lastTyping = 0;
+    C.scroll.addEventListener('scroll', () => { if (C.scroll.scrollTop < 80) moreMsgs(); }, { passive: true });
     C.text.oninput = () => {
       grow();
       // (they see "typing…" if you allow it: Chat settings; the backend decides)
@@ -509,40 +553,79 @@
     if (req) C.req.querySelector('span').textContent = `${c.name} isn't in your chats yet.`;
   }
 
-  async function loadMsgs(toEnd) {
+  // The newest PAGE messages are drawn; scrolling to the top asks for more. A redraw keeps every bubble
+  // that didn't change (a new message is one bubble added, not the whole chat drawn again).
+  const PAGE = 120;
+  let shown = PAGE, hasMore = false, loadingMore = false, rendered = [];
+  const msgKey = m => m.id + '|' + m.state + (m.deleted ? 'd' : '') + JSON.stringify(m.reacts) + (m.pic ? m.pic.opened : '') + (m.file ? m.file.done : '');
+
+  async function loadMsgs(toEnd, older) {
     if (!openId) return;
     const id = openId;
     let list;
-    try { list = await api('chatMessages', id, !document.hidden); } catch (e) { return; }
+    try { list = await api('chatMessages', id, !document.hidden, shown + 1); } catch (e) { return; }
     if (id !== openId || !C) return;
-    const sig = list.map(m => m.id + m.state + (m.deleted ? 'd' : '') + JSON.stringify(m.reacts) + (m.pic ? m.pic.opened : '') + (m.file ? m.file.done : '')).join('|');
+    hasMore = list.length > shown;
+    if (hasMore) list = list.slice(1);
+    const sig = list.map(msgKey).join(',') + hasMore;
     msgs = list;
     drawChatHead();
     if (sig === msgSig) return;
     msgSig = sig;
     const near = C.scroll.scrollHeight - C.scroll.scrollTop - C.scroll.clientHeight < 120;
+    const fromBottom = C.scroll.scrollHeight - C.scroll.scrollTop;
     drawMsgs();
-    if (toEnd || near) requestAnimationFrame(() => { C.scroll.scrollTop = C.scroll.scrollHeight; });
+    if (older) C.scroll.scrollTop = C.scroll.scrollHeight - fromBottom; // (the older ones appear above, where you were stays put)
+    else if (toEnd || near) requestAnimationFrame(() => { C.scroll.scrollTop = C.scroll.scrollHeight; });
+  }
+
+  function moreMsgs() {
+    if (!hasMore || loadingMore) return;
+    loadingMore = true;
+    shown += PAGE;
+    loadMsgs(false, true).finally(() => { loadingMore = false; });
   }
 
   function drawMsgs() {
     const c = conv(openId);
     const room = c && c.kind === 'room';
-    C.list.innerHTML = '';
+    const typing = C.list.querySelector('.ch-typing');
     if (!msgs.length) {
+      rendered = [];
+      C.list.innerHTML = '';
       const e = make('div', 'ch-hello');
       e.innerHTML = room ? `<b>${esc(c.name)}</b><span>Messages here last a week. Be nice.</span>` : `<b>Say hi to ${esc(c ? c.name : '')}</b><span>Only you two can read this chat.</span>`;
       C.list.append(e);
       return;
     }
+    // what should be there, each with a key that changes when its look does
+    const want = [];
+    if (hasMore) want.push({ key: 'more', make: () => { const b = make('button', 'ch-more-msgs', 'Earlier messages'); b.type = 'button'; b.onclick = moreMsgs; return b; } });
     let lastDay = '', prev = null;
     for (const m of msgs) {
       const d = dayLabel(m.at);
-      if (d !== lastDay) { C.list.append(make('div', 'ch-day', d)); lastDay = d; prev = null; }
-      const same = prev && prev.from === m.from && m.at - prev.at < 5 * 60000;
-      C.list.append(bubble(m, room, same));
+      if (d !== lastDay) { const dd = d; want.push({ key: 'day:' + d, make: () => make('div', 'ch-day', dd) }); lastDay = d; prev = null; }
+      const same = !!(prev && prev.from === m.from && m.at - prev.at < 5 * 60000);
+      const mm = m;
+      want.push({ key: 'm:' + msgKey(m) + (same ? ':s' : '') + (room ? ':r' : ''), make: () => bubble(mm, room, same) });
       prev = m;
     }
+    // the bubbles already drawn are kept (and don't animate in again)
+    const old = new Map(rendered.map(x => [x.key, x.el]));
+    const next = want.map(w => {
+      const el = old.get(w.key);
+      if (el) { el.classList.add('settled'); old.delete(w.key); return { key: w.key, el }; }
+      return { key: w.key, el: w.make() };
+    });
+    // (only new ones at the end, the usual case: just those go in)
+    const appended = rendered.length > 0 && rendered.every((x, i) => next[i] && next[i].el === x.el) && C.list.firstElementChild === rendered[0].el;
+    if (appended) {
+      for (const x of next.slice(rendered.length)) C.list.insertBefore(x.el, typing);
+    } else {
+      C.list.replaceChildren(...next.map(x => x.el));
+      if (typing) C.list.append(typing);
+    }
+    rendered = next;
   }
 
   function bubble(m, room, same) {
@@ -1170,12 +1253,12 @@
     if (!started) return;
     let r;
     try { r = await api('chatState', rev); } catch (e) { return; }
-    takeSignals();
+    if (r && r.signals) takeSignals(); // (only when the summary says some are waiting)
     // ("typing…" fades on its own: redraw when who is typing changes, even if nothing else did)
     const typingNow = S ? S.convs.filter(isTyping).map(c => c.id).join() : '';
     if (r && !r.convs && typingNow !== typingSig) { typingSig = typingNow; if (openId) drawChatHead(); if (!tab.classList.contains('hidden') && F) drawList(); }
     if (!r || r.rev === rev && !r.convs) return;
-    if (r.convs) { S = r; rev = r.rev; }
+    if (r.convs) { S = r; rev = r.rev; if (settingsDraw) settingsDraw(); }
     const total = S.convs.filter(c => !c.muted).reduce((n, c) => n + (c.unread || 0), 0);
     badge.textContent = total > 99 ? '99+' : String(total);
     badge.classList.toggle('hidden', !total);

@@ -1962,6 +1962,8 @@ dependencies = [
  "percent-encoding",
  "qrcode",
  "rust_xlsxwriter",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "sha2",
@@ -1976,6 +1978,7 @@ dependencies = [
  "trash",
  "tungstenite",
  "ureq",
+ "webpki-roots 0.26.11",
  "zip 2.6.1",
 ]
 

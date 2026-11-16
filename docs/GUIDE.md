@@ -158,8 +158,12 @@ for you to confirm you're 18 or over; nothing connects before that.
 - **Nearby** (phones): the AirDrop-like sheet behind the radar button. While it is open, phones
   close by with Nearby open see each other's nickname, and a tap sends a message or a picture
   straight over Bluetooth, with no internet.
-- **How it travels**: over the internet, through public Nostr relays (Chat settings lists them;
-  you can use your own). Everything is end-to-end encrypted on the device first. The design comes
+- **How it travels**: over the internet, through free public Nostr relays. Chat keeps the five
+  fastest that work linked and switches by itself when one is slow, down or refuses messages: it
+  knows a built-in set plus the public lists of working relays it fetches daily, and measures each
+  relay itself (a background test tries the ones it hasn't used). Two of the five are always big
+  "core" relays, and each user announces where they read, so two people never lose each other when
+  their choices differ. Chat settings → Relays shows the live links, or takes your own list instead. Everything is end-to-end encrypted on the device first. The design comes
   from [bitchat](https://github.com/permissionlesstech/bitchat) (public domain), but Lewd Vault
   Chat is a network of its own and doesn't talk to bitchat.
 - **Erase Chat** (Chat settings) deletes your identity, contacts, rooms and every message on this

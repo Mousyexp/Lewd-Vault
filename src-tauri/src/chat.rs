@@ -40,6 +40,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+// the relays: chosen, measured and switched by themselves (src/chat/pool.rs)
+mod pool;
+
 type Res<T> = Result<T, String>;
 
 const KIND_SEAL: u32 = 13;
@@ -50,8 +53,8 @@ const KIND_WRAP: u32 = 1059;
 const KIND_WRAP_NOW: u32 = 21059;
 const KIND_ROOM: u32 = 4573;
 const KIND_AUTH: u32 = 22242;
-/// (the same public relays bitchat starts with; editable in the chat's settings)
-const DEFAULT_RELAYS: &[&str] = &["wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net", "wss://offchain.pub"];
+/// the relays someone reads private messages on (NIP-17)
+const KIND_INBOX: u32 = 10050;
 const MAX_ENVELOPE: usize = 96 * 1024;
 const PIECE_DM: usize = 14 * 1024;
 const PIECE_ROOM: usize = 24 * 1024;
@@ -256,9 +259,13 @@ fn room_event(me: &SigningKey, tag: &str, key: &[u8; 32], payload: &str) -> Even
 pub fn prepare_picture(bytes: &[u8], small: bool) -> Res<(u32, u32, Vec<u8>)> {
     let img = image::load_from_memory(bytes).map_err(|_| "Only pictures can be sent for now.")?;
     let ladder: &[(u32, u8)] = if small { &[(800, 68), (640, 58), (480, 50)] } else { &[(1280, 80), (1024, 72), (800, 65), (640, 55)] };
+    // (each step shrinks the last one, not the original: a big photo is decoded and scaled once)
+    let mut cur = img;
     for &(side, quality) in ladder {
-        let small = if img.width().max(img.height()) > side { img.thumbnail(side, side) } else { img.clone() };
-        let rgb = small.to_rgb8();
+        if cur.width().max(cur.height()) > side {
+            cur = cur.thumbnail(side, side);
+        }
+        let rgb = cur.to_rgb8();
         let mut out = Vec::new();
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality).encode_image(&rgb).map_err(|e| e.to_string())?;
         if out.len() <= MAX_PICTURE {
@@ -325,6 +332,16 @@ struct Saved {
     /// send read receipts / show that you are typing (both off unless you say so)
     receipts: bool,
     typing: bool,
+    /// the relays: what we know of each, whether you use your own list (`relays`) instead, when the
+    /// public lists were last fetched, other people's inbox relays, and our own last announcement
+    pool: BTreeMap<String, pool::Stat>,
+    manual: bool,
+    list_at: i64,
+    /// (the last time a list actually arrived)
+    list_ok: i64,
+    inboxes: BTreeMap<String, pool::Inbox>,
+    inbox_sig: String,
+    inbox_at: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -403,21 +420,23 @@ struct St {
     typing: HashMap<String, i64>,
     /// the direct link's handshakes, for the page
     signals: Vec<Value>,
-}
-
-struct RelayLink {
-    tx: mpsc::Sender<String>,
-    stop: Arc<AtomicBool>,
+    /// (saved.seen as a set, for a quick "had it already")
+    seen: HashSet<String>,
+    /// when we last asked for someone's inbox relays (at most every 30 s)
+    asked_inbox: HashMap<String, i64>,
 }
 
 pub struct Chat {
     dir: PathBuf,
     st: Mutex<St>,
-    links: Mutex<Vec<RelayLink>>,
-    up: Mutex<HashMap<String, bool>>,
+    links: Mutex<Vec<pool::Link>>,
     rev: AtomicU64,
     sub_gen: AtomicU64,
     stopped: AtomicBool,
+    pool_on: AtomicBool,
+    probing: AtomicBool,
+    /// (itself, for the threads it starts from a plain &self)
+    me_ref: std::sync::Weak<Chat>,
 }
 
 static CHAT: Mutex<Option<Arc<Chat>>> = Mutex::new(None);
@@ -451,46 +470,32 @@ impl Chat {
             saved.secret = hex(&k.to_bytes());
             k
         });
-        if saved.relays.is_empty() {
-            saved.relays = DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect();
-        }
+        pool::seed(&mut saved.pool);
+        let seen: HashSet<String> = saved.seen.iter().cloned().collect();
         if saved.since_dm == 0 {
             saved.since_dm = now() - 86400;
             saved.since_room = now() - ROOM_DAYS * 86400;
         }
         let me = pub_of(&key);
-        Arc::new(Chat {
+        Arc::new_cyclic(|me_ref| Chat {
             dir,
-            st: Mutex::new(St { saved, key, me, msgs: HashMap::new(), dirty: HashSet::new(), dirty_state: true, parts: HashMap::new(), rate: HashMap::new(), open: String::new(), typing: HashMap::new(), signals: Vec::new() }),
+            st: Mutex::new(St { saved, key, me, msgs: HashMap::new(), dirty: HashSet::new(), dirty_state: true, parts: HashMap::new(), rate: HashMap::new(), open: String::new(), typing: HashMap::new(), signals: Vec::new(), seen, asked_inbox: HashMap::new() }),
             links: Mutex::new(Vec::new()),
-            up: Mutex::new(HashMap::new()),
             rev: AtomicU64::new(1),
             sub_gen: AtomicU64::new(1),
             stopped: AtomicBool::new(false),
+            pool_on: AtomicBool::new(false),
+            probing: AtomicBool::new(false),
+            me_ref: me_ref.clone(),
         })
+    }
+
+    fn arc(&self) -> Option<Arc<Chat>> {
+        self.me_ref.upgrade()
     }
 
     fn bump(&self) {
         self.rev.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn relay_list(&self) -> Vec<String> {
-        let saved = self.st.lock().unwrap().saved.relays.clone();
-        relays_or_override(saved)
-    }
-
-    fn connect(self: &Arc<Self>) {
-        let mut links = self.links.lock().unwrap();
-        for l in links.drain(..) {
-            l.stop.store(true, Ordering::Relaxed);
-        }
-        for url in self.relay_list() {
-            let (tx, rx) = mpsc::channel();
-            let stop = Arc::new(AtomicBool::new(false));
-            let (me, u, s) = (self.clone(), url, stop.clone());
-            std::thread::spawn(move || relay_loop(me, u, rx, s));
-            links.push(RelayLink { tx, stop });
-        }
     }
 
     fn shutdown(&self) {
@@ -578,10 +583,17 @@ impl Chat {
             }
             st.dirty_state = true;
         }
-        for l in self.links.lock().unwrap().iter() {
-            for f in &frames {
-                let _ = l.tx.send(f.clone());
+        for f in &frames {
+            self.broadcast(f);
+        }
+        // a private message also goes where they said they read (and we look that up now and then)
+        if is_pubkey(cid) {
+            if let Some(me) = self.arc() {
+                for u in self.inbox_of(cid) {
+                    me.deliver(&u, frames.clone());
+                }
             }
+            self.look_up_inbox(cid);
         }
     }
 
@@ -605,7 +617,7 @@ impl Chat {
             return false;
         }
         let mut st = self.st.lock().unwrap();
-        if st.saved.seen.contains(&ev.id) {
+        if st.seen.contains(&ev.id) {
             return false;
         }
         let got = match ev.kind {
@@ -628,8 +640,11 @@ impl Chat {
             }
         };
         st.saved.seen.push_back(ev.id.clone());
+        st.seen.insert(ev.id.clone());
         while st.saved.seen.len() > 6000 {
-            st.saved.seen.pop_front();
+            if let Some(old) = st.saved.seen.pop_front() {
+                st.seen.remove(&old);
+            }
         }
         st.dirty_state = true;
         let Some((room, from, at, payload)) = got else { return false };
@@ -951,9 +966,7 @@ impl Chat {
             let p = self.payload(&st, t, extra);
             json!(["EVENT", wrap_kind(&st.key, cid, &p.to_string(), KIND_WRAP_NOW)?]).to_string()
         };
-        for l in self.links.lock().unwrap().iter() {
-            let _ = l.tx.send(frame.clone());
-        }
+        self.broadcast(&frame);
         Ok(())
     }
 
@@ -1055,10 +1068,17 @@ impl Chat {
     // ---------- for the page ----------
 
     fn summary(&self) -> Value {
+        // (the links before the state: the two locks are never held together)
+        let relays = self.links_view();
         let st = self.st.lock().unwrap();
-        let ups = self.up.lock().unwrap().clone();
-        // (not relay_list(): that locks the state, which is held here)
-        let relays: Vec<Value> = relays_or_override(st.saved.relays.clone()).iter().map(|u| json!({ "url": u, "up": ups.get(u).copied().unwrap_or(false) })).collect();
+        let t = now();
+        let pool = json!({
+            "mode": if Chat::manual_relays(&st.saved).is_some() { "manual" } else { "auto" },
+            "yours": if st.saved.manual { st.saved.relays.clone() } else { Vec::new() },
+            "known": st.saved.pool.len(),
+            "working": st.saved.pool.values().filter(|s| s.working(t)).count(),
+            "listAt": st.saved.list_ok,
+        });
         let mut convs = Vec::new();
         let cids: Vec<String> = st.saved.contacts.iter().filter(|(_, c)| !c.blocked).map(|(k, _)| k.clone())
             .chain(st.saved.rooms.keys().map(|t| format!("r:{t}"))).collect();
@@ -1087,15 +1107,18 @@ impl Chat {
             "me": { "id": st.me, "nick": st.saved.nick, "code": format!("{CODE_PREFIX}{}", st.me) },
             "relays": relays,
             "custom": std::env::var("LV_CHAT_RELAYS").is_ok(),
+            "pool": pool,
             "convs": convs,
             "blocked": blocked,
             "outbox": st.saved.outbox.len(),
             "prefs": { "receipts": st.saved.receipts, "typing": st.saved.typing },
+            "signals": st.signals.len(),
             "now": now_ms(),
         })
     }
 
-    fn messages(&self, cid: &str) -> Value {
+    /// A chat's newest `limit` messages (the page asks for more as you scroll up).
+    fn messages(&self, cid: &str, limit: usize) -> Value {
         let mut st = self.st.lock().unwrap();
         load_conv(self, &mut st, cid);
         st.open = cid.to_string();
@@ -1105,8 +1128,7 @@ impl Chat {
                 st.dirty_state = true;
             }
         }
-        let list: Vec<Msg> = st.msgs.get(cid).cloned().unwrap_or_default();
-        // (the sender's own vault item stays on this device)
+        let list = st.msgs.get(cid).map(|l| &l[l.len().saturating_sub(limit)..]).unwrap_or(&[]);
         json!(list)
     }
 
@@ -1270,14 +1292,6 @@ impl Chat {
     }
 }
 
-/// The relays to use (tests and the screenshot harness point it at a relay of their own).
-fn relays_or_override(saved: Vec<String>) -> Vec<String> {
-    match std::env::var("LV_CHAT_RELAYS") {
-        Ok(list) => list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-        Err(_) => saved,
-    }
-}
-
 /// A file extension for a type (the file server serves by extension).
 fn ext_for(mime: &str) -> &'static str {
     let m = mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
@@ -1370,118 +1384,6 @@ fn set_state(st: &mut St, cid: &str, mid: &str, state: &str) {
     }
 }
 
-// ---------- one relay ----------
-
-fn relay_loop(chat: Arc<Chat>, url: String, rx: mpsc::Receiver<String>, stop: Arc<AtomicBool>) {
-    let mut wait = 2u64;
-    while !stop.load(Ordering::Relaxed) {
-        let started = std::time::Instant::now();
-        let r = relay_session(&chat, &url, &rx, &stop);
-        chat.up.lock().unwrap().insert(url.clone(), false);
-        chat.bump();
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
-        if let Err(e) = r {
-            eprintln!("chat relay {url}: {e}");
-        }
-        // (a session that lasted a while starts the backoff over)
-        if started.elapsed() > Duration::from_secs(60) {
-            wait = 2;
-        }
-        let until = std::time::Instant::now() + Duration::from_secs(wait);
-        while std::time::Instant::now() < until && !stop.load(Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(250));
-        }
-        wait = (wait * 2).min(120);
-    }
-}
-
-fn relay_session(chat: &Arc<Chat>, url: &str, rx: &mpsc::Receiver<String>, stop: &AtomicBool) -> Res<()> {
-    use std::net::{TcpStream, ToSocketAddrs};
-    use tungstenite::Message;
-    let uri: tungstenite::http::Uri = url.parse().map_err(|_| "bad address")?;
-    let host = uri.host().ok_or("bad address")?.to_string();
-    let port = uri.port_u16().unwrap_or(if uri.scheme_str() == Some("ws") { 80 } else { 443 });
-    let addr = (host.as_str(), port).to_socket_addrs().map_err(|e| e.to_string())?.next().ok_or("no address")?;
-    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|e| e.to_string())?;
-    tcp.set_read_timeout(Some(Duration::from_secs(15))).ok();
-    tcp.set_write_timeout(Some(Duration::from_secs(15))).ok();
-    let (mut ws, _) = tungstenite::client_tls_with_config(url, tcp.try_clone().map_err(|e| e.to_string())?, None, None).map_err(|e| e.to_string())?;
-    tcp.set_read_timeout(Some(Duration::from_millis(200))).ok();
-    chat.up.lock().unwrap().insert(url.to_string(), true);
-    chat.bump();
-    let send = |ws: &mut tungstenite::WebSocket<_>, s: String| ws.send(Message::text(s)).map_err(|e: tungstenite::Error| e.to_string());
-    let mut gen = 0u64;
-    let mut last_ping = std::time::Instant::now();
-    let mut auth_id = String::new();
-    for frame in chat.outbox_events() {
-        send(&mut ws, frame)?;
-    }
-    while !stop.load(Ordering::Relaxed) {
-        let g = chat.sub_gen.load(Ordering::Relaxed);
-        if g != gen {
-            gen = g;
-            let mut req = vec![json!("REQ"), json!("lv")];
-            req.extend(chat.filters());
-            send(&mut ws, json!(req).to_string())?;
-        }
-        // what we have to send (spaced out a little: relays limit bursts)
-        let mut sent = 0;
-        while let Ok(frame) = rx.try_recv() {
-            send(&mut ws, frame)?;
-            sent += 1;
-            if sent >= 8 {
-                std::thread::sleep(Duration::from_millis(120));
-                sent = 0;
-            }
-        }
-        if last_ping.elapsed() > Duration::from_secs(45) {
-            ws.send(Message::Ping(Vec::new().into())).map_err(|e| e.to_string())?;
-            last_ping = std::time::Instant::now();
-        }
-        match ws.read() {
-            Ok(Message::Text(t)) => {
-                let Ok(v) = serde_json::from_str::<Value>(t.as_str()) else { continue };
-                match v[0].as_str().unwrap_or("") {
-                    "EVENT" => {
-                        if let Ok(ev) = serde_json::from_value::<Event>(v[2].clone()) {
-                            chat.take(ev, "net");
-                        }
-                    }
-                    "OK" => {
-                        let id = v[1].as_str().unwrap_or("");
-                        let ok = v[2].as_bool().unwrap_or(false);
-                        if id == auth_id {
-                            gen = 0; // (signed in: ask again)
-                        } else if ok || v[3].as_str().unwrap_or("").starts_with("duplicate") {
-                            chat.relay_ok(id);
-                        }
-                    }
-                    // NIP-42: some relays only hand over wraps to the one they are for
-                    "AUTH" => {
-                        let challenge = v[1].as_str().unwrap_or("").to_string();
-                        let st = chat.st.lock().unwrap();
-                        let ev = Event::new(st.me.clone(), now(), KIND_AUTH, vec![vec!["relay".into(), url.into()], vec!["challenge".into(), challenge]], String::new()).sign(&st.key);
-                        drop(st);
-                        auth_id = ev.id.clone();
-                        send(&mut ws, json!(["AUTH", ev]).to_string())?;
-                    }
-                    _ => {}
-                }
-            }
-            Ok(Message::Close(_)) => return Err("closed".into()),
-            Ok(_) => {}
-            Err(tungstenite::Error::Io(e)) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
-                let _ = ws.flush();
-            }
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-    let _ = ws.close(None);
-    Ok(())
-}
-
 // ---------- the page's calls (api_call → "chat…") ----------
 
 pub fn api(dir: &Path, name: &str, args: &[Value], read_item: &dyn Fn(&str) -> Res<Vec<u8>>) -> Res<Value> {
@@ -1527,7 +1429,7 @@ pub fn api(dir: &Path, name: &str, args: &[Value], read_item: &dyn Fn(&str) -> R
             Ok(json!(qr.render::<qrcode::render::svg::Color>().min_dimensions(220, 220).quiet_zone(true).build()))
         }
         "chatMessages" => {
-            let list = chat.messages(&cid);
+            let list = chat.messages(&cid, a(2).as_u64().map(|n| n as usize).unwrap_or(KEEP_MESSAGES));
             // (looked at with the app in front: read receipts, if you send them)
             if a(1).as_bool() == Some(true) {
                 chat.send_receipts(&cid);
@@ -1593,15 +1495,18 @@ pub fn api(dir: &Path, name: &str, args: &[Value], read_item: &dyn Fn(&str) -> R
         "chatLeave" => chat.leave(&cid),
         "chatSet" => chat.set(&cid, &a(1)),
         "chatRelays" => {
+            // (your own list: exactly those relays; an empty one: automatic again)
             let list: Vec<String> = a(0).as_array().cloned().unwrap_or_default().iter().filter_map(|v| v.as_str())
-                .map(|u| u.trim().to_string()).filter(|u| u.starts_with("wss://") || u.starts_with("ws://")).take(12).collect();
+                .map(|u| u.trim().trim_end_matches('/').to_string()).filter(|u| u.starts_with("wss://") || u.starts_with("ws://")).take(12).collect();
             {
                 let mut st = chat.st.lock().unwrap();
-                st.saved.relays = if list.is_empty() { DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect() } else { list };
+                st.saved.manual = !list.is_empty();
+                st.saved.relays = list;
                 st.dirty_state = true;
             }
-            chat.up.lock().unwrap().clear();
-            chat.connect();
+            for l in chat.links.lock().unwrap().iter() {
+                l.stop.store(true, Ordering::Relaxed);
+            }
             chat.bump();
             Ok(json!(true))
         }
@@ -1615,7 +1520,9 @@ pub fn api(dir: &Path, name: &str, args: &[Value], read_item: &dyn Fn(&str) -> R
                 if m.state == "failed" { m.state = "sending".into(); }
             }
             drop(st);
-            chat.connect();
+            for f in chat.outbox_events() {
+                chat.broadcast(&f);
+            }
             Ok(json!(true))
         }
         // Nearby (Bluetooth): the native side moves sealed events between phones; these wrap and take them
@@ -1735,7 +1642,10 @@ mod tests {
         let a = Chat::open(da.clone());
         let b = Chat::open(db.clone());
         for c in [&a, &b] {
-            c.st.lock().unwrap().saved.relays = vec![format!("ws://127.0.0.1:{port}")];
+            let mut st = c.st.lock().unwrap();
+            st.saved.relays = vec![format!("ws://127.0.0.1:{port}")];
+            st.saved.manual = true;
+            drop(st);
             c.connect();
         }
         let none = |_: &str| -> Res<Vec<u8>> { Err("none".into()) };
@@ -1748,7 +1658,7 @@ mod tests {
             match n {
                 "add" => c.add_contact(&cid, "").unwrap(),
                 "send" => c.send_text(&cid, args[1].as_str().unwrap(), "").unwrap(),
-                "msgs" => c.messages(&cid),
+                "msgs" => c.messages(&cid, 500),
                 "join" => c.join_room(&cid, "").unwrap(),
                 _ => { let _ = none; Value::Null }
             }
@@ -1784,7 +1694,7 @@ mod tests {
         b.st.lock().unwrap().saved.receipts = true;
         let mid2 = a.send_text(&pb, "did you see this?", "").unwrap().as_str().unwrap().to_string();
         assert!(wait(&|| b.st.lock().unwrap().msgs[&pa].iter().any(|m| m.id == mid2)), "Bob got it");
-        b.messages(&pa);
+        b.messages(&pa, 50);
         b.send_receipts(&pa);
         assert!(wait(&|| a.st.lock().unwrap().msgs[&pb].iter().any(|m| m.id == mid2 && m.state == "read")), "Alice sees it read");
         // typing (Bob allows it): ephemeral, nothing kept by the relay's store matters
@@ -1829,7 +1739,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lv-chat-api-{}", new_id()));
         fs::create_dir_all(&dir).unwrap();
         // (a relay nobody listens on: no network in tests)
-        fs::write(dir.join("state.json"), json!({ "relays": ["ws://127.0.0.1:9"] }).to_string()).unwrap();
+        fs::write(dir.join("state.json"), json!({ "relays": ["ws://127.0.0.1:9"], "manual": true }).to_string()).unwrap();
         let other = new_key();
         let none = |_: &str| -> Res<Vec<u8>> { Err("no items".into()) };
         let call = |name: &str, args: Value| -> Value {
@@ -1842,7 +1752,8 @@ mod tests {
         call("chatNick", json!(["Tester"]));
         let st = call("chatState", json!([0]));
         assert_eq!(st["me"]["nick"], "Tester");
-        assert_eq!(st["relays"][0]["url"], "ws://127.0.0.1:9");
+        assert_eq!(st["pool"]["mode"], "manual");
+        assert_eq!(st["pool"]["yours"][0], "ws://127.0.0.1:9");
         // (unchanged: just the number; a relay thread may have bumped it in between, then it's the whole)
         let again = call("chatState", json!([st["rev"]]));
         assert!(again["rev"].is_u64() && (again["convs"].is_null() || again["rev"] != st["rev"]));
@@ -1871,6 +1782,12 @@ mod tests {
         test_relay_on(0)
     }
 
+    /// A test relay that can be switched off (its port, and the switch).
+    pub fn test_relay_ctl() -> (u16, Arc<AtomicBool>) {
+        let off = Arc::new(AtomicBool::new(false));
+        (relay_with(0, off.clone()), off)
+    }
+
     /// The test relay on its own, for trying the chat screens by hand or in the screenshot harness:
     /// RELAY_PORT=7447 cargo test chat_relay_server -- --ignored, then LV_CHAT_RELAYS=ws://127.0.0.1:7447
     #[test]
@@ -1884,30 +1801,48 @@ mod tests {
     }
 
     pub fn test_relay_on(port: u16) -> u16 {
+        relay_with(port, Arc::new(AtomicBool::new(false)))
+    }
+
+    fn relay_with(port: u16, off: Arc<AtomicBool>) -> u16 {
         use std::net::TcpListener;
         let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
         let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
         let store: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
         let clients: Arc<Mutex<Vec<mpsc::Sender<Event>>>> = Arc::new(Mutex::new(Vec::new()));
         std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let (store, clients) = (store.clone(), clients.clone());
+            loop {
+                if off.load(Ordering::Relaxed) {
+                    return; // (switched off: no more connections, and the open ones close below)
+                }
+                let stream = match listener.accept() {
+                    Ok((s, _)) => s,
+                    Err(_) => { std::thread::sleep(Duration::from_millis(20)); continue; }
+                };
+                stream.set_nonblocking(false).ok();
+                let (store, clients, off) = (store.clone(), clients.clone(), off.clone());
                 std::thread::spawn(move || {
                     let Ok(mut ws) = tungstenite::accept(stream.try_clone().unwrap()) else { return };
                     stream.set_read_timeout(Some(Duration::from_millis(50))).ok();
                     let (tx, rx) = mpsc::channel::<Event>();
                     clients.lock().unwrap().push(tx);
-                    let mut subs: Vec<Value> = Vec::new();
+                    // (subscriptions by id, as relays keep them: a new REQ with another id adds one)
+                    let mut subs: HashMap<String, Vec<Value>> = HashMap::new();
                     let matches = |f: &Value, e: &Event| {
                         f["kinds"].as_array().map(|k| k.iter().any(|x| x.as_u64() == Some(e.kind as u64))).unwrap_or(true)
+                            && f["authors"].as_array().map(|a| a.iter().any(|x| x.as_str() == Some(e.pubkey.as_str()))).unwrap_or(true)
                             && f["#p"].as_array().map(|p| p.iter().any(|x| Some(x.as_str().unwrap_or("")) == e.tag("p"))).unwrap_or(true)
                             && f["#r"].as_array().map(|p| p.iter().any(|x| Some(x.as_str().unwrap_or("")) == e.tag("r"))).unwrap_or(true)
                             && f["since"].as_i64().map(|s| e.created_at >= s).unwrap_or(true)
                     };
                     loop {
+                        if off.load(Ordering::Relaxed) {
+                            return;
+                        }
                         while let Ok(e) = rx.try_recv() {
-                            if subs.iter().any(|f| matches(f, &e)) {
-                                if ws.send(tungstenite::Message::text(json!(["EVENT", "lv", e]).to_string())).is_err() { return; }
+                            for (id, fs) in &subs {
+                                if fs.iter().any(|f| matches(f, &e)) && ws.send(tungstenite::Message::text(json!(["EVENT", id, e]).to_string())).is_err() { return; }
                             }
                         }
                         match ws.read() {
@@ -1924,14 +1859,18 @@ mod tests {
                                         }
                                     }
                                     Some("REQ") => {
-                                        subs = v.as_array().unwrap()[2..].to_vec();
+                                        let id = v[1].as_str().unwrap_or("").to_string();
+                                        let fs = v.as_array().unwrap()[2..].to_vec();
                                         for e in store.lock().unwrap().iter() {
-                                            if subs.iter().any(|f| matches(f, e)) {
-                                                let _ = ws.send(tungstenite::Message::text(json!(["EVENT", "lv", e]).to_string()));
+                                            // (ephemeral kinds are never stored: never replayed)
+                                            if e.kind < 20000 && fs.iter().any(|f| matches(f, e)) {
+                                                let _ = ws.send(tungstenite::Message::text(json!(["EVENT", id, e]).to_string()));
                                             }
                                         }
-                                        let _ = ws.send(tungstenite::Message::text(json!(["EOSE", "lv"]).to_string()));
+                                        let _ = ws.send(tungstenite::Message::text(json!(["EOSE", id]).to_string()));
+                                        subs.insert(id, fs);
                                     }
+                                    Some("CLOSE") => { subs.remove(v[1].as_str().unwrap_or("")); }
                                     _ => {}
                                 }
                             }
