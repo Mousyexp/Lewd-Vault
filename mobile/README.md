@@ -34,7 +34,7 @@ copies `phone.js`; both ship in the Windows build too and do nothing there.
 | The emergency key (a global shortcut) | **More → Hide now**, or a three-finger tap anywhere. It shows a lock screen (swipe up, then your PIN) or a working calculator (your PIN, then `=`); with no PIN, hold the clock or the display for a second. The app also covers itself in the background, so the app switcher shows nothing. |
 | Open with another program, Show in folder | Hidden. |
 | Cloud-synced folders, Another folder… | Hidden (there is one container). |
-| Google Drive in your browser | iOS: hidden (iOS suspends the app while Safari is in front, so the sign-in could never return). Android: works, and is the way to bring a vault over. |
+| Google Drive in your browser | iOS: signs in in Apple's sign-in sheet inside the app (`mobile/ios/Nearby/LvAuth.swift`), since iOS suspends the app while Safari is in front and the sign-in could never return. Android: the browser. On both it is the way to bring a vault over. |
 | In-app updates | Install a newer IPA or APK. |
 | Esc / the window's close | Android: the back button closes what's on top (a sheet, the viewer, the slideshow), then goes back to the Library. |
 

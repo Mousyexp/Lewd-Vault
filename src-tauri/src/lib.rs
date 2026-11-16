@@ -54,6 +54,33 @@ const VIEWS_NAME: &str = "views.csv";
 const APP_NAME: &str = "_app";
 // Discreet names (discreet.rs): every item in one neutral folder, named by its number only
 static DISCREET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The phone app is in the background (for a while), or on low data: background work waits (Chat's
+/// relays, Drive's automatic sync). Set by the phone page (appState); the PC never sets them.
+static APP_PAUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LOW_DATA: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(crate) fn app_quiet() -> bool {
+    APP_PAUSED.load(std::sync::atomic::Ordering::Relaxed) || LOW_DATA.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Chat's folder: on this device, not in the vault (which may be on a synced drive, or open to the
+/// Files app on an iPhone): the app's own place per vault, as for caches. A chat kept in the vault by
+/// an earlier version moves here once.
+fn chat_dir(vault: &Vault) -> PathBuf {
+    let dir = storage::local_dir(&vault.root, "chat");
+    let old = vault.app_dir("chat");
+    if old.is_dir() && !dir.join("state.json").exists() {
+        let _ = fs::create_dir_all(dir.parent().unwrap_or(&dir));
+        if fs::rename(&old, &dir).is_err() {
+            // (another volume: copy, then remove)
+            let _ = fs::create_dir_all(&dir);
+            if let Ok(rd) = fs::read_dir(&old) {
+                let ok = rd.flatten().all(|e| fs::copy(e.path(), dir.join(e.file_name())).is_ok());
+                if ok { let _ = fs::remove_dir_all(&old); }
+            }
+        }
+    }
+    dir
+}
 const MEDIA_FOLDER: &str = "Media";
 
 const APP_FOLDERS: [&str; 4] = ["clips", "thumbs", "streams", "audio"]; // (audio: the Audio section's files)
@@ -1462,7 +1489,15 @@ fn api_call(vault: &Arc<Vault>, name: String, args: Vec<Value>) -> Res<Value> {
         // Chat (chat.rs): messages and rooms between Lewd Vault users, over Nostr relays and nearby phones
         n if n.starts_with("chat") => {
             let v = vault.clone();
-            chat::api(&vault.app_dir("chat"), n, &args, &move |id: &str| v.resolve(id).and_then(|p| crypt::read(&p).map_err(err)))
+            chat::api(&chat_dir(vault), n, &args, &move |id: &str| v.resolve(id).and_then(|p| crypt::read(&p).map_err(err)))
+        }
+        // the phone app in the background / on low data (see APP_PAUSED)
+        "appState" => {
+            let s = a(0);
+            if let Some(p) = s["paused"].as_bool() { APP_PAUSED.store(p, std::sync::atomic::Ordering::Relaxed); }
+            if let Some(l) = s["lowData"].as_bool() { LOW_DATA.store(l, std::sync::atomic::Ordering::Relaxed); }
+            chat::app_state(APP_PAUSED.load(std::sync::atomic::Ordering::Relaxed), LOW_DATA.load(std::sync::atomic::Ordering::Relaxed));
+            Ok(json!(true))
         }
         "findDuplicates" => dupes::start(vault.clone()),
         "duplicateProgress" => Ok(dupes::progress(&vault)),
@@ -1528,7 +1563,7 @@ fn api_call(vault: &Arc<Vault>, name: String, args: Vec<Value>) -> Res<Value> {
         // Google Drive over the web, for PCs without Google Drive for desktop (gdrive.rs)
         "driveStatus" => Ok(gdrive::status(&vault)),
         "driveSetKey" => gdrive::set_key(&vault, &str_of(&a(0)), &str_of(&a(1))),
-        "driveSignIn" => gdrive::sign_in(vault.clone()),
+        "driveSignIn" => gdrive::sign_in(vault.clone(), a(0).as_bool() == Some(true)),
         "driveSignOut" => gdrive::sign_out(&vault),
         "driveSync" => gdrive::sync_start(vault.clone()),
         "driveCancel" => Ok(gdrive::cancel()),
@@ -2227,6 +2262,23 @@ mod tests {
             let (src, dst) = (e.path(), to.join(e.file_name()));
             if src.is_dir() { copy_dir(&src, &dst); } else { fs::copy(&src, &dst).unwrap(); }
         }
+    }
+
+    #[test]
+    fn chat_lives_outside_the_vault() {
+        let root = std::env::temp_dir().join(format!("lv-chatdir-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let v = Vault::new(root.clone(), false);
+        // (a chat kept in the vault by an earlier version)
+        fs::create_dir_all(v.app_dir("chat")).unwrap();
+        fs::write(v.app_dir("chat").join("state.json"), b"{\"nick\":\"x\"}").unwrap();
+        let d = chat_dir(&v);
+        assert!(!d.starts_with(&root), "not in the vault: {}", d.display());
+        assert_eq!(fs::read(d.join("state.json")).unwrap(), b"{\"nick\":\"x\"}");
+        assert!(!v.app_dir("chat").exists(), "moved, not copied");
+        assert_eq!(chat_dir(&v), d);
+        let _ = fs::remove_dir_all(&d);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

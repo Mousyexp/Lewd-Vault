@@ -116,7 +116,9 @@
   const sideTabs = nav ? [...nav.querySelectorAll('button[data-tab]')] : [];
   const side = tab => sideTabs.find(b => b.dataset.tab === tab);
   const label = b => (b.querySelector('.nt-title') || b).textContent.trim();
-  const iconOf = b => getComputedStyle(b).getPropertyValue('--icon').trim(); // (the sidebar's own icon)
+  // (the sidebar's own icon; read once per tab: reading a computed style makes the browser work out styles)
+  const icons = new Map();
+  const iconOf = b => { if (!icons.has(b)) icons.set(b, getComputedStyle(b).getPropertyValue('--icon').trim()); return icons.get(b); };
   let PRIMARY = OPT.tabs.filter(side); // (which four sit in the bar: Settings → Phone → Tab bar)
   // (a <div>, not a <nav>: the desktop's sidebar rules are `html.desktop nav …`, and a phone carries both classes)
   const tabbar = make('div', 'ios-tabbar glass');
@@ -800,10 +802,15 @@
   const openInApp = [...document.querySelectorAll('#detail aside button')].find(b => b.textContent.trim() === 'Open');
   if (openInApp) openInApp.classList.add('ios-no');
 
-  // Settings' jump chips are made from its headings: drop the one for the section hidden on iOS
-  // (Drive's browser sign-in: iOS suspends the app while Safari is in front; Android doesn't)
+  // Google Drive's sign-in on iOS needs Apple's sign-in sheet (LvAuth.swift: Safari would send the app
+  // to the background, where it can't hear Google's answer). The Swift side puts its handler on the
+  // web view as the app starts, so look again for a few seconds; without it the section stays hidden.
+  const hasAuth = () => !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lvAuth);
+  if (!android) for (const t of [0, 800, 2500, 6000]) setTimeout(() => { if (hasAuth()) document.documentElement.classList.add('lv-auth'); }, t);
+  // Settings' jump chips are made from its headings: drop the one for that section while it's hidden
   const settingsTab = $('tab-settings');
   if (settingsTab && !android) new MutationObserver(() => {
+    if (document.documentElement.classList.contains('lv-auth')) return;
     for (const b of settingsTab.querySelectorAll('.st-jump')) if (/Google Drive/.test(b.textContent)) b.remove();
   }).observe(settingsTab, { childList: true, subtree: true });
 

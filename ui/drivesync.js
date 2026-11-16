@@ -49,11 +49,14 @@
         if (st.downloaded) { try { loadLibrary(); } catch (e) {} }
       }
     }
+    closeSheet();
     draw();
     const busy = st.state === 'syncing' || st.state === 'signing-in';
     clearTimeout(poll);
-    poll = setTimeout(refresh, busy ? 800 : 30000);
+    // (out of sight, no polling: it starts again when the app comes back)
+    if (!document.hidden || busy) poll = setTimeout(refresh, busy ? 800 : 30000);
   }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { clearTimeout(poll); poll = setTimeout(refresh, 600); } });
 
   function draw() {
     if (!st) return;
@@ -105,9 +108,26 @@
     if (st.state === 'error' && st.message) box.append(make('p', 'gd-err', st.message));
   }
 
+  // On an iPhone, Apple's sign-in sheet (mobile/ios/Nearby/LvAuth.swift): Safari would send the app to
+  // the background, where it can't hear Google's answer
+  const inApp = () => window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lvAuth;
+  let sheetOpen = false;
   async function signIn() {
-    if (await call('driveSignIn')) { toast('Sign in in the browser tab that just opened', 'ok'); refresh(); }
+    const auth = inApp();
+    if (!(await call('driveSignIn', !!auth))) return;
+    if (auth) {
+      for (let i = 0; i < 30; i++) {
+        let s; try { s = await api('driveStatus'); } catch (e) { break; }
+        if (s.authUrl) { auth.postMessage({ op: 'open', url: s.authUrl }); sheetOpen = true; break; }
+        if (s.state !== 'signing-in') break;
+        await new Promise(r => setTimeout(r, 100));
+      }
+    } else toast('Sign in in the browser tab that just opened', 'ok');
+    refresh();
   }
+  // (Google answered, or the sign-in ended: the sheet goes)
+  function closeSheet() { if (sheetOpen && st && st.state !== 'signing-in') { sheetOpen = false; try { inApp().postMessage({ op: 'close' }); } catch (e) {} } }
+  window.__lvAuthClosed = () => { sheetOpen = false; if (st && st.state === 'signing-in' && !st.connected) call('driveCancel'); };
 
   // "Add your key": a Desktop-app OAuth client of your own, step by step
   function keySheet() {

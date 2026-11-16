@@ -71,10 +71,18 @@
     document.body.prepend(canvas);
     const ctx = canvas.getContext('2d');
     let parts = [], kind = '', extra = '', raf = 0, last = 0, w = 0, h = 0, dpr = 1;
-    const size = () => { dpr = Math.min(2, devicePixelRatio || 1); w = innerWidth; h = innerHeight; canvas.width = w * dpr; canvas.height = h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); };
+    // (the canvas is sized again only when the screen really changed: resizing it allocates a new one)
+    const size = () => {
+      const d = Math.min(2, devicePixelRatio || 1);
+      if (d === dpr && w === innerWidth && h === innerHeight && canvas.width) return;
+      dpr = d; w = innerWidth; h = innerHeight; canvas.width = w * dpr; canvas.height = h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      sprites = {};
+    };
     addEventListener('resize', size);
     const rnd = (a, b) => a + Math.random() * (b - a);
-    const accent = () => getComputedStyle(html).getPropertyValue('--accent').trim() || '#ff6f96';
+    // the accent, read once per start (reading it makes the browser work out every style)
+    let acc = '#ff6f96';
+    const accent = () => acc;
     const make1 = (k, fresh) => {
       const p = { k, x: rnd(0, w), y: fresh ? rnd(-h, 0) : rnd(0, h), s: rnd(.6, 1.3), a: rnd(0, Math.PI * 2), va: rnd(-.02, .02), t: rnd(0, 100) };
       if (k === 'petals' || k === 'leaves') { p.vy = rnd(.35, .9); p.vx = rnd(-.3, .3); }
@@ -85,46 +93,76 @@
       return p;
     };
     const COUNT = { petals: 22, leaves: 16, snow: 40, hearts: 14, bubbles: 16, stars: 46, sparkles: 26, paws: 7 };
+    // Each shape is drawn once into a small picture (a sprite) and stamped every frame with one
+    // transform: much less work than building every petal's curves 30 times a second.
+    let sprites = {};
+    const R = 10; // (every shape fits in a box 2R wide)
+    const sprite = (key, paint) => {
+      if (sprites[key]) return sprites[key];
+      const c = document.createElement('canvas');
+      const k = dpr * 1.6; // (sharp up to the largest scale a particle has)
+      c.width = c.height = Math.ceil(R * 2 * k);
+      const g = c.getContext('2d');
+      g.setTransform(k, 0, 0, k, R * k, R * k);
+      paint(g);
+      return (sprites[key] = c);
+    };
+    const SHAPE = {
+      petal: g => {
+        g.fillStyle = 'rgba(255, 183, 206, .75)';
+        g.beginPath(); g.moveTo(0, -7); g.bezierCurveTo(7, -6, 6, 6, 0, 8); g.bezierCurveTo(-6, 6, -7, -6, 0, -7); g.fill();
+        g.fillStyle = 'rgba(255, 255, 255, .35)'; g.beginPath(); g.ellipse(-1.5, -2, 1.5, 3, 0, 0, 7); g.fill();
+      },
+      leaf: n => g => { g.fillStyle = ['rgba(226,122,62,.75)', 'rgba(205,82,52,.75)', 'rgba(232,170,64,.75)'][n]; g.beginPath(); g.moveTo(0, -9); g.quadraticCurveTo(8, 0, 0, 9); g.quadraticCurveTo(-8, 0, 0, -9); g.fill(); },
+      snow: g => { g.fillStyle = 'rgba(255,255,255,.8)'; g.beginPath(); g.arc(0, 0, 2.2, 0, 7); g.fill(); },
+      heart: g => { g.fillStyle = acc; g.beginPath(); g.moveTo(0, 4); g.bezierCurveTo(-8, -2, -4, -9, 0, -4); g.bezierCurveTo(4, -9, 8, -2, 0, 4); g.fill(); },
+      bubble: g => {
+        g.strokeStyle = 'rgba(255,255,255,.45)'; g.lineWidth = 1.2; g.beginPath(); g.arc(0, 0, 9, 0, 7); g.stroke();
+        g.fillStyle = 'rgba(255,255,255,.35)'; g.beginPath(); g.arc(-3, -3, 2.4, 0, 7); g.fill();
+        g.fillStyle = acc; g.globalAlpha = .5; g.beginPath(); g.moveTo(0, 3); g.bezierCurveTo(-4, 0, -2, -4, 0, -1.5); g.bezierCurveTo(2, -4, 4, 0, 0, 3); g.fill();
+      },
+      star: g => { g.fillStyle = '#fff'; g.beginPath(); g.arc(0, 0, 1.3, 0, 7); g.fill(); },
+      sparkle: g => { g.fillStyle = acc; g.beginPath(); g.moveTo(0, -7); g.quadraticCurveTo(1, -1, 7, 0); g.quadraticCurveTo(1, 1, 0, 7); g.quadraticCurveTo(-1, 1, -7, 0); g.quadraticCurveTo(-1, -1, 0, -7); g.fill(); },
+      paw: g => {
+        g.fillStyle = acc; g.beginPath(); g.ellipse(0, 3, 5, 4, 0, 0, 7); g.fill();
+        for (const [x, y] of [[-5, -3], [-1.8, -6], [1.8, -6], [5, -3]]) { g.beginPath(); g.ellipse(x, y, 1.7, 2.2, 0, 0, 7); g.fill(); }
+      },
+    };
     const draw = p => {
-      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.a); ctx.scale(p.s, p.s);
+      let s, alpha = 1;
       switch (p.k) {
-        case 'petals': {
-          ctx.fillStyle = 'rgba(255, 183, 206, .75)';
-          ctx.beginPath(); ctx.moveTo(0, -7); ctx.bezierCurveTo(7, -6, 6, 6, 0, 8); ctx.bezierCurveTo(-6, 6, -7, -6, 0, -7); ctx.fill();
-          ctx.fillStyle = 'rgba(255, 255, 255, .35)'; ctx.beginPath(); ctx.ellipse(-1.5, -2, 1.5, 3, 0, 0, 7); ctx.fill();
-          break;
-        }
-        case 'leaves': { ctx.fillStyle = ['rgba(226,122,62,.75)', 'rgba(205,82,52,.75)', 'rgba(232,170,64,.75)'][Math.floor(p.t) % 3]; ctx.beginPath(); ctx.moveTo(0, -9); ctx.quadraticCurveTo(8, 0, 0, 9); ctx.quadraticCurveTo(-8, 0, 0, -9); ctx.fill(); break; }
-        case 'snow': { ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.beginPath(); ctx.arc(0, 0, 2.2, 0, 7); ctx.fill(); break; }
-        case 'hearts': { ctx.fillStyle = accent(); ctx.globalAlpha = .55; ctx.beginPath(); ctx.moveTo(0, 4); ctx.bezierCurveTo(-8, -2, -4, -9, 0, -4); ctx.bezierCurveTo(4, -9, 8, -2, 0, 4); ctx.fill(); break; }
-        case 'bubbles': {
-          ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(0, 0, 9, 0, 7); ctx.stroke();
-          ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.beginPath(); ctx.arc(-3, -3, 2.4, 0, 7); ctx.fill();
-          ctx.fillStyle = accent(); ctx.globalAlpha = .5; ctx.beginPath(); ctx.moveTo(0, 3); ctx.bezierCurveTo(-4, 0, -2, -4, 0, -1.5); ctx.bezierCurveTo(2, -4, 4, 0, 0, 3); ctx.fill();
-          break;
-        }
-        case 'stars': { const g = .35 + .65 * Math.abs(Math.sin(p.t)); ctx.fillStyle = `rgba(255,255,255,${g * .8})`; ctx.beginPath(); ctx.arc(0, 0, 1.3, 0, 7); ctx.fill(); break; }
-        case 'sparkles': {
-          const g = Math.max(0, Math.sin(p.t)); ctx.globalAlpha = g * .8; ctx.fillStyle = accent();
-          ctx.beginPath(); ctx.moveTo(0, -7); ctx.quadraticCurveTo(1, -1, 7, 0); ctx.quadraticCurveTo(1, 1, 0, 7); ctx.quadraticCurveTo(-1, 1, -7, 0); ctx.quadraticCurveTo(-1, -1, 0, -7); ctx.fill();
-          break;
-        }
-        case 'paws': {
-          const g = p.life < 1 ? p.life : Math.max(0, 2.2 - p.life); ctx.globalAlpha = g * .35; ctx.fillStyle = accent();
-          ctx.beginPath(); ctx.ellipse(0, 3, 5, 4, 0, 0, 7); ctx.fill();
-          for (const [x, y] of [[-5, -3], [-1.8, -6], [1.8, -6], [5, -3]]) { ctx.beginPath(); ctx.ellipse(x, y, 1.7, 2.2, 0, 0, 7); ctx.fill(); }
-          break;
-        }
+        case 'petals': s = sprite('petal', SHAPE.petal); break;
+        case 'leaves': { const n = Math.floor(p.t) % 3; s = sprite('leaf' + n, SHAPE.leaf(n)); break; }
+        case 'snow': s = sprite('snow', SHAPE.snow); break;
+        case 'hearts': s = sprite('heart', SHAPE.heart); alpha = .55; break;
+        case 'bubbles': s = sprite('bubble', SHAPE.bubble); break;
+        case 'stars': s = sprite('star', SHAPE.star); alpha = (.35 + .65 * Math.abs(Math.sin(p.t))) * .8; break;
+        case 'sparkles': s = sprite('sparkle', SHAPE.sparkle); alpha = Math.max(0, Math.sin(p.t)) * .8; break;
+        case 'paws': { const g = p.life < 1 ? p.life : Math.max(0, 2.2 - p.life); alpha = g * .35; s = sprite('paw', SHAPE.paw); break; }
+        default: return;
       }
-      ctx.restore();
+      if (alpha <= .01) return;
+      const k = dpr * p.s, cos = Math.cos(p.a) * k, sin = Math.sin(p.a) * k;
+      ctx.setTransform(cos, sin, -sin, cos, p.x * dpr, p.y * dpr);
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(s, -R, -R, R * 2, R * 2);
     };
     // a shooting star now and then, on Midnight
     let shoot = null;
+    // (covered by the viewer, the slideshow, a lock...: checked twice a second, not every frame, and
+    // while covered the loop sleeps instead of running for nothing)
+    let coveredAt = 0, covered = false;
+    const isCovered = now => {
+      if (now - coveredAt > 500) { coveredAt = now; covered = html.classList.contains('pin-locked') || !!document.querySelector('#detail:not(.hidden), #show:not(.hidden), .ph-story, .pv-screen, .ios-calc, .ph-tlock'); }
+      return covered;
+    };
     const frame = now => {
+      if (isCovered(now)) { raf = 0; setTimeout(() => { if (!raf && parts.length) raf = requestAnimationFrame(frame); }, 500); return; }
       raf = requestAnimationFrame(frame);
       if (now - last < 33) return; // (30 frames a second is plenty for drifting)
       const dt = Math.min(3, (now - last) / 16.7); last = now;
-      if (document.hidden || html.classList.contains('pin-locked') || document.querySelector('#detail:not(.hidden), #show:not(.hidden), .ph-story, .pv-screen, .ios-calc')) return;
+      if (document.hidden) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.globalAlpha = 1;
       ctx.clearRect(0, 0, w, h);
       for (const p of parts) {
         p.t += (p.tw || .02) * dt; p.a += p.va * dt;
@@ -133,6 +171,7 @@
         if (p.y > h + 20 || p.y < -30 || p.x < -30 || p.x > w + 30) Object.assign(p, make1(p.k, true));
         draw(p);
       }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.globalAlpha = 1;
       if (kind === 'stars') {
         if (!shoot && Math.random() < .004 * dt) shoot = { x: rnd(w * .2, w), y: rnd(0, h * .4), life: 0 };
         if (shoot) {
@@ -150,6 +189,8 @@
         extra = opt.seasonal && !reduced() ? season() : '';
         const want = [kind, extra].filter(k => COUNT[k]);
         cancelAnimationFrame(raf);
+        acc = getComputedStyle(html).getPropertyValue('--accent').trim() || '#ff6f96';
+        sprites = {}; // (the accent, or the screen, may have changed)
         size();
         ctx.clearRect(0, 0, w, h);
         parts = want.flatMap(k => Array.from({ length: COUNT[k] }, () => make1(k, false)));
@@ -574,9 +615,18 @@
   function applyData() {
     const c = navigator.connection;
     const on = opt.lowData === 'on' || (opt.lowData === 'auto' && !!c && (c.saveData || c.type === 'cellular'));
+    if (window.vaultLowData !== on) api('appState', { lowData: on }).catch(() => {}); // (Chat and Drive sync hold back too)
     window.vaultLowData = on;
     html.classList.toggle('ph-lowdata', on);
   }
+  // in the background for half a minute: Chat lets its connections go and Drive's automatic sync waits
+  // (battery and data); back in front, everything carries on at once
+  let pauseT = null, pausedNow = false;
+  document.addEventListener('visibilitychange', () => {
+    clearTimeout(pauseT);
+    if (document.hidden) pauseT = setTimeout(() => { pausedNow = true; api('appState', { paused: true }).catch(() => {}); }, 30000);
+    else if (pausedNow) { pausedNow = false; api('appState', { paused: false }).catch(() => {}); }
+  });
   if (navigator.connection && navigator.connection.addEventListener) navigator.connection.addEventListener('change', applyData);
 
   // =====================================================================================
@@ -858,7 +908,8 @@
   }
   addEventListener('phone-opt', applyAll);
   applyAll();
-  new MutationObserver(() => checkSize()).observe($('count') || document.body, { childList: true, characterData: true, subtree: true });
+  // (only the count itself: watching the whole page for it would run on every change anywhere)
+  if ($('count')) new MutationObserver(() => checkSize()).observe($('count'), { childList: true, characterData: true, subtree: true });
 
   // =====================================================================================
   // 6. the welcome, on a phone: an opening worth remembering

@@ -58,10 +58,11 @@ html.phone .side-grip, html.phone .tp-grip, html.phone .tp-fold, html.phone .sid
 html.phone #detail, html.phone #collage { padding-top: var(--safe-t); }
 
 /* things with no meaning on iOS: a mouse pointer, a keyboard shortcut for the emergency key (More →
-   Hide now does that), picking a folder outside the app, and Google Drive's browser sign-in (iOS
-   suspends the app while Safari is in front, so the sign-in could never come back) */
+   Hide now does that), picking a folder outside the app, and Google Drive's sign-in where Apple's
+   sign-in sheet (mobile/ios/Nearby/LvAuth.swift, html.lv-auth) is missing: iOS suspends the app while
+   Safari is in front, so a sign-in there could never come back */
 html.phone .wl-pointer, html.phone .pv-keyrow:not(.pv-moderow):not(.pv-videorow), html.phone .wl-other, html.phone .wl-hint { display: none !important; }
-html.phone.ios .wl-driveweb, html.phone.ios .gd-box { display: none !important; }
+html.phone.ios:not(.lv-auth) .wl-driveweb, html.phone.ios:not(.lv-auth) .gd-box { display: none !important; }
 
 /* ---------- iOS controls: the system font, capsule buttons, filled fields, switches ---------- */
 html.phone body { font-family: -apple-system, "SF Pro Text", system-ui, "Helvetica Neue", sans-serif; letter-spacing: -.01em; }

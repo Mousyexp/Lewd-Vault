@@ -218,7 +218,9 @@
     }
     // not behind the Library or Discover either: their tiles cover the whole page, so it would only cost time
     const covered = () => !$('tab-library').classList.contains('hidden') || !!document.querySelector('#tab-discover:not(.hidden)');
-    const wanted = () => S('bgMotion') && !html.classList.contains('motion-off') && document.visibilityState === 'visible' && document.hasFocus()
+    // (phones have their own drifting layer, phone-plus.js: this one stays off there)
+    const phone = html.classList.contains('phone');
+    const wanted = () => !phone && S('bgMotion') && !html.classList.contains('motion-off') && document.visibilityState === 'visible' && document.hasFocus()
       && $('detail').classList.contains('hidden') && $('show').classList.contains('hidden') && !covered();
     function frame(now) {
       if (!wanted()) { running = false; return; }
@@ -256,13 +258,18 @@
       }
       ctx.globalAlpha = 1;
     }
+    // (the accent read again only when the theme or the accent changed: reading it makes the browser
+    // work out every style, and this runs on every switch of section)
+    let colourKey = '';
     function update() {
-      colour = accentNow();
-      canvas.classList.toggle('hidden', !S('bgMotion') || covered());
+      const key = (html.dataset.theme || '') + '|' + html.style.getPropertyValue('--accent');
+      if (key !== colourKey) { colourKey = key; colour = accentNow(); }
+      canvas.classList.toggle('hidden', phone || !S('bgMotion') || covered());
+      if (phone) return;
       if (!w) size();
       if (!running && wanted()) { running = true; last = performance.now(); requestAnimationFrame(frame); }
     }
-    addEventListener('resize', () => { size(); });
+    if (!phone) addEventListener('resize', () => { size(); });
     for (const ev of ['focus', 'visibilitychange']) addEventListener(ev, update);
     document.addEventListener('visibilitychange', update);
     // the full view and the slideshow pause it; closing them starts it again
@@ -329,6 +336,7 @@
   down.onclick = () => nav.scrollBy({ top: 160, behavior: 'smooth' });
   nav.before(up); nav.after(down);
   function moreArrows() {
+    if (html.classList.contains('phone')) return; // (no sidebar there: measuring it only costs a layout)
     up.classList.toggle('show', nav.scrollTop > 4);
     down.classList.toggle('show', nav.scrollTop + nav.clientHeight < nav.scrollHeight - 4);
   }

@@ -45,6 +45,8 @@ const LISTS: &[&str] = &[
     "https://raw.githubusercontent.com/sesseor/nostr-relays-list/main/relays.txt",
 ];
 const WANT: usize = 5;
+/// (on low data)
+const WANT_LOW: usize = 3;
 const CORE_SLOTS: usize = 2;
 const RACE: usize = 3;
 const MAX_KNOWN: usize = 400;
@@ -223,9 +225,17 @@ impl Chat {
         let mut last_probe = Instant::now();
         let mut last_list = Instant::now() - Duration::from_secs(3600);
         while !self.stopped.load(Ordering::Relaxed) {
+            // in the background on a phone: no links at all (battery, data); all back on return
+            if self.paused.load(Ordering::Relaxed) {
+                let had = { let mut l = self.links.lock().unwrap(); let n = l.len(); for x in l.drain(..) { x.stop.store(true, Ordering::Relaxed); } n };
+                if had > 0 { self.bump(); }
+                std::thread::sleep(Duration::from_millis(500));
+                continue;
+            }
             let manual = Chat::manual_relays(&self.st.lock().unwrap().saved).is_some();
+            let low = self.low_data.load(Ordering::Relaxed);
             self.tend(&mut last_rotate);
-            if !manual {
+            if !manual && !low {
                 if last_list.elapsed() > Duration::from_secs(3600) {
                     last_list = Instant::now();
                     self.refresh_lists();
@@ -293,6 +303,7 @@ impl Chat {
                         changed = true;
                     }
                 }
+                let want_n = if self.low_data.load(Ordering::Relaxed) { WANT_LOW } else { WANT };
                 let free = |l: &&Link| !l.pinned;
                 let up_free = links.iter().filter(free).filter(|l| l.up()).count();
                 let connecting_free = links.iter().filter(free).filter(|l| !l.up()).count();
@@ -304,8 +315,17 @@ impl Chat {
                     add(&mut want, u, false);
                 }
                 // the rest, raced: a few more than needed, the slowest let go once enough are up
-                if up_free < WANT {
-                    let wanted = WANT - up_free + RACE;
+                // (nothing at all is up or trying: the network was probably ours that failed, not the
+                // relays: the best few are tried again at once, resting or not)
+                if links.is_empty() && cands.len() < 3 {
+                    let mut all: Vec<(&String, f64)> = pool.iter().filter(|(_, s)| !s.banned()).map(|(u, s)| (u, s.score())).collect();
+                    all.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                    for (u, _) in all.iter().take(3) {
+                        add(&mut want, u, false);
+                    }
+                }
+                if up_free < want_n {
+                    let wanted = want_n - up_free + RACE;
                     for (u, _) in &cands {
                         if connecting_free + want.iter().filter(|w| !w.1).count() >= wanted {
                             break;
@@ -321,7 +341,7 @@ impl Chat {
                     // and more than enough: the slowest goes (keeping two core relays)
                     let core_up = links.iter().filter(|l| l.up() && CORE.contains(&l.url.as_str())).count();
                     let ups: Vec<&Link> = links.iter().filter(free).filter(|l| l.up()).collect();
-                    if ups.len() > WANT {
+                    if ups.len() > want_n {
                         let slow = ups.iter().filter(|l| !CORE.contains(&l.url.as_str()) || core_up > CORE_SLOTS).max_by_key(|l| l.rtt.load(Ordering::Relaxed));
                         if let Some(l) = slow {
                             l.stop.store(true, Ordering::Relaxed);
@@ -363,7 +383,9 @@ impl Chat {
             let r = session(&me, &url, &rx, &stop, &state, &rtt, mode);
             let was_up = state.load(Ordering::Relaxed) == UP;
             state.store(DEAD, Ordering::Relaxed);
-            if !stop.load(Ordering::Relaxed) {
+            // (nothing else up either: our own network, most likely; the relay isn't blamed)
+            let others_up = me.links.lock().unwrap().iter().any(|l| l.url != url && l.up());
+            if !stop.load(Ordering::Relaxed) && others_up {
                 // (one that never answered, or dropped us soon after, rests a while)
                 if r.is_err() && (!was_up || started.elapsed() < Duration::from_secs(20)) {
                     me.note(&url, |s| { s.fail += 1; s.streak += 1; s.last_fail = now(); });
@@ -892,6 +914,34 @@ mod tests {
         assert!(liar.banned() && liar.cooling(t) && liar.score() == 0.0 && !liar.working(t));
         let pay = Stat { paid: true, ..unknown.clone() };
         assert!(pay.score() < unknown.score() * 0.1);
+    }
+
+    /// In the background (a phone): no links at all; back: linked again. And when everything goes at
+    /// once (our own network), no relay is blamed for it.
+    #[test]
+    fn pause_and_our_own_network() {
+        let r = super::super::tests::TestRelay::start();
+        let c = Chat::open(std::env::temp_dir().join(format!("lv-pause-{}", new_id())));
+        {
+            let mut st = c.st.lock().unwrap();
+            st.saved.pool.clear();
+            st.saved.pool.insert(r.url(), Stat { src: "test".into(), ..Default::default() });
+            st.saved.list_at = now();
+        }
+        c.connect();
+        let wait = |f: &dyn Fn() -> bool| { for _ in 0..80 { if f() { return true; } std::thread::sleep(Duration::from_millis(100)); } false };
+        let ups = || c.links.lock().unwrap().iter().filter(|l| l.up()).count();
+        assert!(wait(&|| ups() == 1), "linked");
+        c.paused.store(true, Ordering::Relaxed);
+        assert!(wait(&|| c.links.lock().unwrap().is_empty()), "no links while paused");
+        c.paused.store(false, Ordering::Relaxed);
+        assert!(wait(&|| ups() == 1), "linked again");
+        r.off.store(true, Ordering::Relaxed);
+        assert!(wait(&|| ups() == 0), "the relay went");
+        std::thread::sleep(Duration::from_millis(500));
+        let s = c.st.lock().unwrap().saved.pool[&r.url()].clone();
+        assert_eq!((s.streak, s.drops), (0, 0), "not blamed: nothing else was up either");
+        c.shutdown();
     }
 
     /// A probe asks one empty question and publishes nothing.

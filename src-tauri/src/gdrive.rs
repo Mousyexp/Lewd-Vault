@@ -212,7 +212,9 @@ pub fn cancel() -> Value {
 
 /// Sign in, in the web browser; the page polls status() meanwhile (it shows "authUrl" in case the
 /// browser didn't open).
-pub fn sign_in(vault: Arc<Vault>) -> Res<Value> {
+/// `in_app`: the page opens the link itself (on an iPhone, Apple's sign-in sheet, which keeps the app
+/// in front so its local server can hear Google's answer; Safari would send it to the background).
+pub fn sign_in(vault: Arc<Vault>, in_app: bool) -> Res<Value> {
     let a: Account = load(&vault, "account.json");
     if client(&a).is_none() {
         return Err("Add a Google key first (Client ID and secret).".into());
@@ -223,7 +225,7 @@ pub fn sign_in(vault: Arc<Vault>) -> Res<Value> {
     CANCEL.store(false, Ordering::Relaxed);
     set_status(json!({ "state": "signing-in" }));
     std::thread::spawn(move || {
-        let r = sign_in_flow(&vault);
+        let r = sign_in_flow(&vault, in_app);
         BUSY.store(false, Ordering::SeqCst);
         match r {
             Ok(()) => {
@@ -269,7 +271,8 @@ pub fn start(vault: Arc<Vault>) {
         std::thread::sleep(Duration::from_secs(20));
         loop {
             let a: Account = load(&vault, "account.json");
-            if a.auto && !a.refresh_token.is_empty() && client(&a).is_some() {
+            // (a phone in the background or on low data: the automatic sync waits; "Sync now" doesn't)
+            if a.auto && !a.refresh_token.is_empty() && client(&a).is_some() && !super::app_quiet() {
                 let _ = sync_start(vault.clone());
             }
             std::thread::sleep(EVERY);
@@ -322,7 +325,7 @@ fn page(title: &str, text: &str) -> String {
     format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
 }
 
-fn sign_in_flow(vault: &Vault) -> Res<()> {
+fn sign_in_flow(vault: &Vault, in_app: bool) -> Res<()> {
     use base64::Engine;
     use sha2::Digest;
     let mut a: Account = load(vault, "account.json");
@@ -336,7 +339,9 @@ fn sign_in_flow(vault: &Vault) -> Res<()> {
     let url = format!("{AUTH_URL}?client_id={}&redirect_uri={}&response_type=code&scope={}&code_challenge={challenge}&code_challenge_method=S256&state={state}&access_type=offline&prompt=consent",
         enc(&id), enc(&redirect), enc(SCOPE));
     status_cell().lock().unwrap()["authUrl"] = json!(url);
-    open_browser(&url)?;
+    if !in_app {
+        open_browser(&url)?;
+    }
 
     // Google sends the browser back to us with ?code=… (or ?error=…)
     listener.set_nonblocking(true).map_err(err)?;

@@ -237,6 +237,7 @@ final class LvNearby: NSObject, WKScriptMessageHandler, CBCentralManagerDelegate
 /// Started by LvNearbyLoad.m: waits for the app's web view to exist, then puts "lvBle" on it.
 @objc(LvNearbyInstaller) final class LvNearbyInstaller: NSObject {
   @objc static func begin() { tick(0) }
+  private static var authHandler: LvAuth?
 
   private static func tick(_ n: Int) {
     if LvNearby.shared != nil || n > 240 { return }
@@ -244,6 +245,12 @@ final class LvNearby: NSObject, WKScriptMessageHandler, CBCentralManagerDelegate
       let nearby = LvNearby(webView: wv)
       LvNearby.shared = nearby
       wv.configuration.userContentController.add(nearby, name: "lvBle")
+      // (and Google Drive's sign-in sheet, LvAuth.swift)
+      let auth = LvAuth(webView: wv)
+      authHandler = auth
+      wv.configuration.userContentController.add(auth, name: "lvAuth")
+      // (the page shows Drive's sign-in once it knows the sheet is there)
+      wv.evaluateJavaScript("document.documentElement.classList.add('lv-auth')", completionHandler: nil)
       return
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { tick(n + 1) }

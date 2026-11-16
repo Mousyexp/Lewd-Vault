@@ -529,6 +529,7 @@
   const sheetMode = () => !document.documentElement.classList.contains('phone');
   const shownInfo = () => detailEl.scrollTop > 40;
   const drawInfoBtn = () => {
+    if (!sheetMode()) return; // (phones: their own details, phone.js)
     const on = shownInfo();
     infoBtn.textContent = on ? 'Picture' : 'Details';
     infoBtn.title = (on ? 'Back to the whole picture' : 'Show the details') + ' (I)';

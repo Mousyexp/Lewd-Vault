@@ -1442,8 +1442,11 @@
   }
   function schedule() {
     clearTimeout(timer);
+    // (the app out of sight: no polling at all, unless a direct link is under way; back in sight, at once)
+    if (document.hidden && Date.now() >= fastUntil) return;
     timer = setTimeout(async () => { await refresh(); schedule(); }, visible() || Date.now() < fastUntil ? 1200 : 9000);
   }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && started) { refresh(); schedule(); } });
   function start() {
     started = true;
     rev = 0;

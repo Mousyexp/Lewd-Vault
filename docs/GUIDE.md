@@ -45,7 +45,8 @@ copies of `index.csv` (`index (1).csv`), the app merges the copy back in by itse
    3. **Google Auth Platform**: any app name, audience **External**. Add your Google address as a
       test user, or press **Publish app** (in "Testing", Google signs you out after 7 days).
    4. **Clients → Create client → Desktop app.** Paste its Client ID and secret into the app.
-2. **Sign in with Google.** Your browser opens Google's own page. The app can only reach the files
+2. **Sign in with Google.** Your browser opens Google's own page (on an iPhone, Apple's sign-in
+   sheet inside the app, which keeps the app awake to hear Google's answer). The app can only reach the files
    it made itself (the `drive.file` scope), never the rest of your Drive.
 3. The vault then syncs both ways with a **Lewd Vault** folder in your Drive: on sign-in, every
    10 minutes, and on **Sync now**.
@@ -181,6 +182,13 @@ for you to confirm you're 18 or over; nothing connects before that.
   Chat is a network of its own and doesn't talk to bitchat.
 - **Erase Chat** (Chat settings) deletes your identity, contacts, rooms and every message on this
   device.
+- **Where it lives**: Chat (your key, contacts, rooms, messages, pictures) is kept on the device,
+  in the app's private storage (on an iPhone not visible in Files; on a PC the local app data), not
+  in the vault folder, so a synced or copied vault never carries your chat key. An older vault's
+  `_app/chat` moves there by itself.
+- **In the background** (phones): after 30 seconds out of sight Chat closes its relay links, and
+  Google Drive's automatic sync waits, until the app is back. Low-data mode keeps three relays
+  instead of five and skips the daily list refresh and the background tests.
 
 ## iPhone, iPad and Android
 
@@ -259,7 +267,7 @@ On a phone the app is laid out like Photos:
 - The app covers itself while it is in the background, so the app switcher shows nothing.
 
 Not on the phones: the global emergency shortcut, opening files in other apps, cloud-folder choices,
-Google Drive's browser sign-in (iOS only; Android has it), and in-app updates (install a newer IPA
+and in-app updates (install a newer IPA
 or APK instead).
 
 ## The vault folder
@@ -275,7 +283,6 @@ Image Vault data/
   _app/
     thumbs/ clips/ streams/ audio/     thumbnails (packed), preview clips, seek tables, audio
     settings.json, state.json, kv/     settings, the next item number, small documents
-    chat/                              Chat: your key, contacts, rooms, messages, pictures
     backups/                           daily copies of the two lists and the settings
 ```
 

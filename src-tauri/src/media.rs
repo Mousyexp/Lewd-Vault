@@ -31,8 +31,13 @@ pub fn origin() -> String {
 pub fn start(vault: Arc<Vault>) {
     let Ok(listener) = TcpListener::bind("127.0.0.1:0") else { return };
     let Ok(port) = listener.local_addr().map(|a| a.port()) else { return };
-    // (RandomState's keys come from the system's random source; two of them make 128 bits)
-    let token: String = (0..2).map(|_| format!("{:016x}", RandomState::new().build_hasher().finish())).collect();
+    // (256 bits from the system's random source)
+    let mut raw = [0u8; 32];
+    if getrandom::getrandom(&mut raw).is_err() {
+        // (never expected; RandomState's keys come from the same source)
+        for (i, b) in raw.iter_mut().enumerate() { *b = (RandomState::new().build_hasher().finish() >> (i % 8 * 8)) as u8; }
+    }
+    let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     let _ = AT.set((port, token));
     std::thread::spawn(move || {
         for conn in listener.incoming().flatten() {

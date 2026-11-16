@@ -516,6 +516,9 @@ pub struct Chat {
     stopped: AtomicBool,
     pool_on: AtomicBool,
     probing: AtomicBool,
+    /// the phone app in the background (no links at all), or on low data (fewer, no probing)
+    paused: AtomicBool,
+    low_data: AtomicBool,
     /// (itself, for the threads it starts from a plain &self)
     me_ref: std::sync::Weak<Chat>,
 }
@@ -567,6 +570,8 @@ impl Chat {
             stopped: AtomicBool::new(false),
             pool_on: AtomicBool::new(false),
             probing: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
+            low_data: AtomicBool::new(false),
             me_ref: me_ref.clone(),
         })
     }
@@ -1799,6 +1804,16 @@ pub fn api(dir: &Path, name: &str, args: &[Value], read_item: &dyn Fn(&str) -> R
             Ok(json!(chat.take(ev, "nearby")))
         }
         _ => Err(format!("Unknown call: {name}")),
+    }
+}
+
+/// The phone app went to the background (or came back), or low data changed (lib.rs appState).
+pub fn app_state(paused: bool, low_data: bool) {
+    if let Some(c) = CHAT.lock().unwrap().as_ref() {
+        c.low_data.store(low_data, Ordering::Relaxed);
+        if c.paused.swap(paused, Ordering::Relaxed) != paused {
+            c.bump();
+        }
     }
 }
 

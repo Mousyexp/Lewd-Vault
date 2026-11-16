@@ -6,7 +6,8 @@
 //   2. the share extension (mobile/ios/ShareExtension): "Lewd Vault" in the share sheet, handing
 //      what was shared to the app through the app group's share-inbox (src-tauri/src/phone.rs).
 //   3. Chat's Nearby (mobile/ios/Nearby: LvNearby.swift, Bluetooth LE, and LvNearbyLoad.m, which starts
-//      it): compiled into the app; it finds the web view itself and adds the "lvBle" message handler.
+//      it): compiled into the app; it finds the web view itself and adds the "lvBle" message handler
+//      (and "lvAuth", Google Drive's sign-in sheet, LvAuth.swift).
 // Then the Xcode project is generated again from the edited project.yml.
 //   node tools/ios-patch.mjs
 import fs from 'node:fs';
