@@ -669,7 +669,7 @@
     seg(look, 'Density', [['normal', 'Comfortable'], ['compact', 'Compact']], 'density');
 
     // --- the tab bar ---
-    const tabs = section('Tab bar', 'Drag to choose: the first four sit in the tab bar, the rest are in More.');
+    const tabs = section('Tab bar', 'Drag to choose: the first five sit in the tab bar; the rest are in More, behind your picture at the top of the Library.');
     const tl = make('div', 'ios-list ph-tabsort');
     const all = P.sections();
     const order = [...(opt.tabs || []).filter(t => all.some(s => s.tab === t)), ...all.map(s => s.tab).filter(t => !(opt.tabs || []).includes(t))];
@@ -677,7 +677,7 @@
       tl.replaceChildren();
       order.forEach((t, k) => {
         const s = all.find(x => x.tab === t);
-        if (k === 4) tl.append(make('div', 'ph-tabsort-more', 'In More'));
+        if (k === 5) tl.append(make('div', 'ph-tabsort-more', 'In More'));
         const r = make('div', 'ios-row plain ph-tabrow');
         r.dataset.tab = t;
         const ic = make('span', 'ph-tabrow-ico'); ic.style.setProperty('--icon', s.icon);
@@ -700,7 +700,7 @@
           const up = () => {
             grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up);
             order.splice(at, 0, order.splice(k, 1)[0]);
-            opt.tabs = order.slice(0, 4); saveOpt(); drawOrder();
+            opt.tabs = order.slice(0, 5); saveOpt(); drawOrder();
           };
           grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
         });
@@ -989,27 +989,25 @@
   meBtn.onclick = () => {
     buzz('light');
     drawMe();
+    // a narrow column under your picture: an icon and a word each
     const back = make('div', 'ph-me-back');
-    const card = make('div', 'ph-me-card glass');
-    const pf = profileNow();
-    const head = make('div', 'ph-me-head');
-    const av = make('span', 'ph-me-av'); av.append(avatarOf(pf, 160));
-    const who = make('div', 'ph-me-who');
-    who.append(make('b', '', pf.name || 'You'), make('small', '', pf.title || 'Your vault'));
-    head.append(av, who);
-    const row = (cls, title, sub, go) => {
+    const card = make('div', 'ph-me-card');
+    const row = (cls, title, go) => {
       const b = make('button', 'ph-me-row ' + cls); b.type = 'button';
-      b.append(make('i'), make('span', '', title), make('small', '', sub));
+      b.append(make('i'), make('span', '', title));
       b.onclick = () => { close(); setTimeout(go, 120); };
-      return b;
+      card.append(b);
     };
-    card.append(head,
-      row('you', 'Your profile', 'Your picture, levels and stats', () => window.vaultProfile && window.vaultProfile.open()),
-      row('gear', 'Settings', 'Look, privacy, phone, library', () => { const s = document.querySelector('header nav button[data-tab="settings"]'); if (s) s.click(); }));
+    row('you', 'Profile', () => window.vaultProfile && window.vaultProfile.open());
+    row('gear', 'Settings', () => { const s = document.querySelector('header nav button[data-tab="settings"]'); if (s) s.click(); });
+    row('more', 'More', () => P.openMore && P.openMore());
     back.append(card);
     document.body.append(back);
+    const r = meBtn.getBoundingClientRect();
+    card.style.top = (r.bottom + 8) + 'px';
+    card.style.right = Math.max(8, innerWidth - r.right) + 'px';
     requestAnimationFrame(() => back.classList.add('in'));
-    function close() { back.classList.remove('in'); setTimeout(() => back.remove(), 220); }
+    function close() { back.classList.remove('in'); setTimeout(() => back.remove(), 200); }
     back.onclick = e => { if (e.target === back) close(); };
   };
 

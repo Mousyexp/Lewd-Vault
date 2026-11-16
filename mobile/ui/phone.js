@@ -57,8 +57,9 @@
   const icon = name => `url("data:image/svg+xml;utf8,${ICON[name].replace(/"/g, "'").replace(/#/g, '%23')}")`;
 
   // ---------- the phone's own settings (Settings → Phone, in phone-plus.js), kept in the vault ----------
-  // (the bar like Instagram's: Library, Browser, Add in the middle, Chat; Slideshow and the rest in More)
-  const OPT = { tabs: ['library', 'discover', 'add', 'chat'], gDouble: 'zoom', gTwo: 'like', gHold: 'level', haptics: true };
+  // (the bar like Instagram's: five tabs, Add in the middle; everything else is in More, which opens
+  // from your picture at the top of the Library: phone-plus.js)
+  const OPT = { tabs: ['library', 'discover', 'add', 'chat', 'slideshow'], gDouble: 'zoom', gTwo: 'like', gHold: 'level', haptics: true };
   const opt = { ...OPT };
   (typeof setupReady !== 'undefined' ? setupReady : Promise.resolve()).then(async () => {
     try { const v = await api('kvGet', 'phone'); if (v && typeof v === 'object') Object.assign(opt, v); } catch (e) {}
@@ -66,6 +67,12 @@
     if (!opt.chatInBar) {
       if (Array.isArray(opt.tabs) && opt.tabs.join() === 'library,discover,add,slideshow') opt.tabs = OPT.tabs.slice();
       opt.chatInBar = true;
+      setTimeout(() => api('kvSet', 'phone', opt).catch(() => {}), 0);
+    }
+    // and Slideshow takes the place More had (the fifth)
+    if (!opt.fiveTabs) {
+      if (Array.isArray(opt.tabs) && opt.tabs.length < 5 && !opt.tabs.includes('slideshow')) opt.tabs = [...opt.tabs, 'slideshow'];
+      opt.fiveTabs = true;
       setTimeout(() => api('kvSet', 'phone', opt).catch(() => {}), 0);
     }
     dispatchEvent(new Event('phone-opt'));
@@ -123,17 +130,16 @@
     tabbar.append(t);
     return t;
   };
-  const moreBtn = tabButton('More', icon('more'), openMore);
-  moreBtn.dataset.tab = 'more';
+
   document.body.append(tabbar);
   function drawTabs() {
-    const want = (Array.isArray(opt.tabs) ? opt.tabs : OPT.tabs).filter(side).slice(0, 4);
+    const want = (Array.isArray(opt.tabs) ? opt.tabs : OPT.tabs).filter(side).slice(0, 5);
     const next = want.length ? want : OPT.tabs.filter(side);
     // (only when the order really changed: a button rebuilt under a finger loses its tap)
     if (next.join() === [...tabbar.querySelectorAll('button:not([data-tab="more"])')].map(b => b.dataset.tab).join()) return;
     PRIMARY = next;
     tabbar.querySelectorAll('button:not([data-tab="more"])').forEach(b => b.remove());
-    for (const tab of PRIMARY) { const b = tabButton(label(side(tab)), iconOf(side(tab)), () => side(tab).click()); b.dataset.tab = tab; tabbar.insertBefore(b, moreBtn); }
+    for (const tab of PRIMARY) { const b = tabButton(label(side(tab)), iconOf(side(tab)), () => side(tab).click()); b.dataset.tab = tab; }
     syncTabs();
   }
 
@@ -163,8 +169,7 @@
   const syncTabs = () => {
     const on = nav && nav.querySelector('button.on');
     const tab = on ? on.dataset.tab : '';
-    const inMore = !PRIMARY.includes(tab);
-    tabbar.querySelectorAll('button').forEach(t => t.classList.toggle('on', t.dataset.tab === tab || (t === moreBtn && inMore)));
+    tabbar.querySelectorAll('button').forEach(t => t.classList.toggle('on', t.dataset.tab === tab));
   };
   if (nav) new MutationObserver(syncTabs).observe(nav, { subtree: true, attributes: true, attributeFilter: ['class'] });
   drawTabs();
@@ -2158,7 +2163,7 @@
   // what phone-plus.js (the settings, the themes, the privacy extras, the native parts) builds on
   window.__phone = {
     html, make, icon, ICON, sheet, gestures, heartAt, dial, layer, unlayer, overlays, setProps, swallowTap, all, moving, thumbOf, fileUrl,
-    opt, OPT, saveOpt, native, buzz, hideNow, drawTabs, openSort, renderSoon, lockIfPin, pinOk, pin, rings: () => rings, tabbar,
+    opt, OPT, saveOpt, native, buzz, hideNow, drawTabs, openSort, openMore, renderSoon, lockIfPin, pinOk, pin, rings: () => rings, tabbar,
     sections: () => sideTabs.map(b => ({ tab: b.dataset.tab, label: label(b), icon: iconOf(b) })),
     setLastTap: t => { lastTap = t; }
   };

@@ -136,7 +136,7 @@ the same either way. **Settings → Look → Fun features** turns them on or off
 
 ## Chat
 
-**Chat** (in the sidebar, and in More on a phone) is private messages, pictures from your vault and
+**Chat** (in the sidebar, and in the tab bar on a phone) is private messages, pictures from your vault and
 rooms with other Lewd Vault users, with no account. The first time, it asks for a nickname and
 for you to confirm you're 18 or over; nothing connects before that.
 
@@ -189,6 +189,9 @@ Storage), which works on Android.
 
 On a phone the app is laid out like Photos:
 
+- **The tab bar**: Library, Browser, Add, Chat and Slideshow. Your picture at the top right of the
+  Library opens a small menu: **Profile**, **Settings** and **More** (Videos, Audio, Stats, Clean up,
+  Coach, Sort, Hide now…).
 - **Library**: an edge-to-edge grid, the title over it, **Select**, and a switcher (All / Pictures /
   GIFs / Videos) above the floating tab bar. Search, filters and tags are sheets from the bottom.
 - **Long-press a picture** and it lifts into a preview with its actions under it: stars, the NSFW
@@ -235,7 +238,7 @@ On a phone the app is laid out like Photos:
   (or "Open in"); they're waiting in Add next time you open it.
 - **Settings → Phone** (also in More) gathers the phone's own settings: animated themes (Sakura,
   Midnight, Bubblegum, Aurora, Kitten, Neon, Lavender, Mono) and your own accent; seasonal touches and
-  milestone celebrations; haptics; text size and density; the tab bar (drag to choose which four sit
+  milestone celebrations; haptics; text size and density; the tab bar (drag to choose which five sit
   in it); what double-tap, two-finger tap and long-press do in the viewer; Face ID / fingerprint
   unlock; a decoy PIN that opens an empty vault; locking again after leaving the app; shake to hide;
   hiding from screen recordings (Android also blocks screenshots); a break-in photo after three wrong
