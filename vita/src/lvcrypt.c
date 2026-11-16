@@ -224,3 +224,27 @@ int lv_write_all(const char *path, const uint8_t *key, const void *data, size_t 
   if (had) remove(old);
   return 0;
 }
+
+int lv_append(const char *path, const uint8_t *key, const void *data, size_t n) {
+  FILE *f = fopen(path, "r+b");
+  if (!f) return -1;
+  uint8_t h[16];
+  int enc = fread(h, 1, 16, f) == 16 && memcmp(h, MAGIC, 4) == 0;
+  if (enc && !key) { fclose(f); return -1; }
+  fseek(f, 0, SEEK_END);
+  long end = ftell(f);
+  int ok = 1;
+  if (enc) {
+    uint8_t buf[4096];
+    for (size_t at = 0; ok && at < n; at += sizeof buf) {
+      size_t t = n - at < sizeof buf ? n - at : sizeof buf;
+      memcpy(buf, (const uint8_t *)data + at, t);
+      lv_chacha20_xor(key, h + 4, (uint64_t)(end - 16) + at, buf, t);
+      ok &= fwrite(buf, 1, t, f) == t;
+    }
+  } else {
+    ok &= fwrite(data, 1, n, f) == n;
+  }
+  ok &= fclose(f) == 0;
+  return ok ? 0 : -1;
+}

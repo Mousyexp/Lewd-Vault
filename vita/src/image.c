@@ -4,7 +4,6 @@
 #include <string.h>
 #include <turbojpeg.h>
 #include <webp/decode.h>
-#include <webp/encode.h>
 
 static void fit(int w, int h, int max_w, int max_h, int *ow, int *oh) {
   double s = 1.0;
@@ -130,14 +129,39 @@ int lv_decode(const uint8_t *d, size_t n, int max_w, int max_h, LvPixels *out) {
   return -1;
 }
 
-uint8_t *lv_encode_webp(const LvPixels *p, int quality, size_t *n) {
-  uint8_t *o = NULL;
-  size_t s = WebPEncodeRGBA(p->rgba, p->w, p->h, p->w * 4, (float)quality, &o);
-  if (!s) return NULL;
-  // (WebP's own allocation: copied so the caller frees it with free())
-  uint8_t *b = malloc(s);
-  if (b) memcpy(b, o, s);
-  WebPFree(o);
-  *n = s;
+uint8_t *lv_encode_jpeg(const LvPixels *p, int quality, size_t *n) {
+  tjhandle t = tjInitCompress();
+  if (!t) return NULL;
+  unsigned char *o = NULL;
+  unsigned long len = 0;
+  int r = tjCompress2(t, p->rgba, p->w, p->w * 4, p->h, TJPF_RGBA, &o, &len, TJSAMP_420, quality, TJFLAG_FASTDCT);
+  tjDestroy(t);
+  if (r != 0 || !o) { if (o) tjFree(o); return NULL; }
+  // (turbojpeg's own allocation: copied so the caller frees it with free())
+  uint8_t *b = malloc(len);
+  if (b) memcpy(b, o, len);
+  tjFree(o);
+  *n = len;
   return b;
+}
+
+int lv_jpeg_size(const uint8_t *d, size_t n, int *w, int *h) {
+  if (n < 3 || d[0] != 0xFF || d[1] != 0xD8) return 0;
+  tjhandle t = tjInitDecompress();
+  if (!t) return 0;
+  int sub, cs;
+  int ok = tjDecompressHeader3(t, d, (unsigned long)n, w, h, &sub, &cs) == 0;
+  tjDestroy(t);
+  return ok;
+}
+
+int lv_image_size(const uint8_t *d, size_t n, int *w, int *h) {
+  if (lv_jpeg_size(d, n, w, h)) return 1;
+  if (n >= 24 && !memcmp(d, "\x89PNG", 4)) {
+    *w = d[16] << 24 | d[17] << 16 | d[18] << 8 | d[19];
+    *h = d[20] << 24 | d[21] << 16 | d[22] << 8 | d[23];
+    return 1;
+  }
+  if (n >= 12 && !memcmp(d, "RIFF", 4) && !memcmp(d + 8, "WEBP", 4)) return WebPGetInfo(d, n, w, h) ? 1 : 0;
+  return 0;
 }

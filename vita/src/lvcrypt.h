@@ -27,5 +27,8 @@ size_t lv_read_at(LvFile *lf, uint64_t off, void *buf, size_t n);
 void lv_close(LvFile *lf);
 // The whole file, decrypted (malloc'd, NUL-terminated; *n without the NUL). NULL if it can't.
 uint8_t *lv_read_all(const char *path, const uint8_t *key, size_t *n);
+// Adds to the end of a file (one of ours stays encrypted: the keystream goes on from where it
+// ended). 0 on success.
+int lv_append(const char *path, const uint8_t *key, const void *data, size_t n);
 // Written next to it, then moved over it; encrypted with a fresh nonce when key is set. 0 on success.
 int lv_write_all(const char *path, const uint8_t *key, const void *data, size_t n);

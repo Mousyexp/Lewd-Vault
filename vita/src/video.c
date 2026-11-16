@@ -104,6 +104,9 @@ struct LvVideo {
   volatile int snd_done, dec_done;
 };
 
+static void release_now(vita2d_texture *t) { vita2d_wait_rendering_done(); vita2d_free_texture(t); }
+void (*lv_video_release_texture)(vita2d_texture *t) = release_now;
+
 static int ext(const char *p, const char *e) {
   const char *d = strrchr(p, '.');
   return d && !strcasecmp(d + 1, e);
@@ -516,8 +519,7 @@ static int sw_close(LvVideo *v) {
   if (!dec_ok || !snd_ok) {
     if (v->dec_started && !dec_ok) pthread_detach(v->dec_thread);
     if (v->snd_started && !snd_ok) pthread_detach(v->snd_thread);
-    vita2d_wait_rendering_done();
-    for (int k = 0; k < 2; k++) if (v->rgb2[k]) vita2d_free_texture(v->rgb2[k]);
+    for (int k = 0; k < 2; k++) if (v->rgb2[k]) lv_video_release_texture(v->rgb2[k]);
     return 0;
   }
   if (v->vpx_ok) vpx_codec_destroy(&v->vpx);
@@ -530,8 +532,7 @@ static int sw_close(LvVideo *v) {
   free(v->ring);
   free(v->pix[0]);
   free(v->pix[1]);
-  vita2d_wait_rendering_done();
-  for (int k = 0; k < 2; k++) if (v->rgb2[k]) vita2d_free_texture(v->rgb2[k]);
+  for (int k = 0; k < 2; k++) if (v->rgb2[k]) lv_video_release_texture(v->rgb2[k]);
   return 1;
 }
 
@@ -544,7 +545,7 @@ static vita2d_texture *sw_frame(LvVideo *v) {
     int t = v->rgb_cur ^ 1;
     vita2d_texture **tex = &v->rgb2[t];
     if (!*tex || (int)vita2d_texture_get_width(*tex) != v->pix_w || (int)vita2d_texture_get_height(*tex) != v->pix_h) {
-      if (*tex) { vita2d_wait_rendering_done(); vita2d_free_texture(*tex); }
+      if (*tex) lv_video_release_texture(*tex);
       *tex = vita2d_create_empty_texture(v->pix_w, v->pix_h);
       if (*tex) vita2d_texture_set_filters(*tex, SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
     }

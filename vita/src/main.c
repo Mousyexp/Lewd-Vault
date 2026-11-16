@@ -161,7 +161,9 @@ static void heart(float cx, float cy, float s, unsigned c) {
 static struct {
   char vault[512];
   int sort, kind, interval, shuffle, volume;
-} cfg = {"", 0, 0, 5, 0, 80};
+  int site, ratings, wsort; // the Browser's site, ratings (LV_R_* bits) and order
+  char wquery[128], save_cat[64];
+} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", ""};
 static void cfg_load(void) {
   FILE *f = fopen(DATA "/config.txt", "r");
   if (!f) return;
@@ -177,15 +179,24 @@ static void cfg_load(void) {
     else if (!strcmp(line, "interval")) cfg.interval = atoi(eq);
     else if (!strcmp(line, "shuffle")) cfg.shuffle = atoi(eq);
     else if (!strcmp(line, "volume")) cfg.volume = atoi(eq);
+    else if (!strcmp(line, "site")) cfg.site = atoi(eq);
+    else if (!strcmp(line, "ratings")) cfg.ratings = atoi(eq);
+    else if (!strcmp(line, "wsort")) cfg.wsort = atoi(eq);
+    else if (!strcmp(line, "wquery")) snprintf(cfg.wquery, sizeof cfg.wquery, "%s", eq);
+    else if (!strcmp(line, "save_cat")) snprintf(cfg.save_cat, sizeof cfg.save_cat, "%s", eq);
   }
   fclose(f);
   if (cfg.interval < 2 || cfg.interval > 60) cfg.interval = 5;
   if (cfg.volume < 0 || cfg.volume > 100) cfg.volume = 80;
+  if (cfg.site < 0 || cfg.site >= 64) cfg.site = 0;
+  if (!(cfg.ratings & 15)) cfg.ratings = 15;
+  if (cfg.wsort < 0 || cfg.wsort > 3) cfg.wsort = 0;
 }
 static void cfg_save(void) {
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\n", cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume);
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\n",
+          cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -289,6 +300,16 @@ static unsigned long fnv(const char *s) {
   return h;
 }
 
+// The size to decode a picture at for a card: just big enough to cover it (a landscape picture as
+// tall as the card, a portrait one as wide), never more.
+static void cover_size(const uint8_t *b, size_t n, int *mw, int *mh) {
+  int w = 0, h = 0;
+  *mw = CARD_W; *mh = CARD_H * 2;
+  if (!lv_image_size(b, n, &w, &h) || w <= 0 || h <= 0) return;
+  if (w * CARD_H >= h * CARD_W) { *mh = CARD_H; *mw = (int)((long long)CARD_H * w / h) + 1; if (*mw > CARD_W * 4) *mw = CARD_W * 4; }
+  else { *mw = CARD_W; *mh = (int)((long long)CARD_W * h / w) + 1; if (*mh > CARD_H * 3) *mh = CARD_H * 3; }
+}
+
 static int cache_broken;
 // The average difference of a sample of pixels, small enough for a lossy copy of the same picture.
 static int pixels_close(const LvPixels *a, const LvPixels *b) {
@@ -302,11 +323,13 @@ static int pixels_close(const LvPixels *a, const LvPixels *b) {
 static int thumb_pixels(int i, LvPixels *px) {
   LvItem *it = &vault.items[i];
   char cp[800];
-  snprintf(cp, sizeof cp, "%s/%08lx%08lx.webp", cache_dir, fnv(it->thumb), fnv(it->id));
+  snprintf(cp, sizeof cp, "%s/%08lx%08lx.jpg", cache_dir, fnv(it->thumb), fnv(it->id));
   size_t n = 0;
   uint8_t *b = lv_read_all(cp, lv_key(&vault), &n);
   if (b) {
-    int r = lv_decode(b, n, CARD_W, CARD_H * 2, px);
+    int cw, ch;
+    cover_size(b, n, &cw, &ch);
+    int r = lv_decode(b, n, cw, ch, px);
     free(b);
     if (r == 0) return 0;
   }
@@ -314,14 +337,18 @@ static int thumb_pixels(int i, LvPixels *px) {
   if (!b && it->path && !is_video(it) && !is_gif(it)) b = lv_read_all(it->path, lv_key(&vault), &n); // (no thumbnail: the picture itself)
   if (!b) return -1;
   // cover the card: decode to its width (the card crops the height)
-  int r = lv_decode(b, n, CARD_W, CARD_H * 2, px);
+  int sw = 0, shh = 0, small = lv_image_size(b, n, &sw, &shh) && sw <= CARD_W * 4 && shh <= CARD_H * 3 && (sw <= CARD_W * 3 / 2 || shh <= CARD_H * 3 / 2);
+  int cw, ch;
+  cover_size(b, n, &cw, &ch);
+  int r = lv_decode(b, n, cw, ch, px);
   free(b);
   if (r != 0) return -1;
+  if (small) return 0; // (already card-sized, like the Browser's saves: nothing to gain from a copy)
   // Kept small for next time, once the copy is known to come back right: it is decoded again and
   // compared, and if the encoder ever gets it wrong (Vita3K's does) nothing more is cached.
   if (!cache_broken) {
     size_t en = 0;
-    uint8_t *enc = lv_encode_webp(px, 80, &en);
+    uint8_t *enc = lv_encode_jpeg(px, 85, &en);
     LvPixels back;
     if (enc && lv_decode(enc, en, px->w, px->h, &back) == 0) {
       int ok = back.w == px->w && back.h == px->h && pixels_close(px, &back);
@@ -370,11 +397,19 @@ static void *worker(void *arg) {
   return NULL;
 }
 
-static vita2d_texture *pending_free[64];
-static int npending;
+// Textures are freed at the start of the next frame, once the GPU is done with the last one: never
+// while a frame is being put together (it may already use them). The list grows as it must.
+static vita2d_texture **pending_free;
+static int npending, cappending;
 static void free_later(vita2d_texture *t) {
   if (!t) return;
-  if (npending == 64) { vita2d_wait_rendering_done(); for (int k = 0; k < npending; k++) vita2d_free_texture(pending_free[k]); npending = 0; }
+  if (npending == cappending) {
+    int cap = cappending ? cappending * 2 : 64;
+    vita2d_texture **p = realloc(pending_free, cap * sizeof *p);
+    if (!p) return; // (a leak, not a crash)
+    pending_free = p;
+    cappending = cap;
+  }
   pending_free[npending++] = t;
 }
 static vita2d_texture *upload(const LvPixels *px) {
@@ -593,7 +628,7 @@ static int ime_poll(char *out, int cap) {
 }
 
 // ---------- screens ----------
-enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER };
+enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW };
 static int screen = S_PICK, cover_return = S_LIBRARY;
 static char found[16][512];
 static int nfound, pick_sel;
@@ -733,27 +768,31 @@ static void open_viewer(int k, int slideshow);
 static void draw_bar(void) {
   vita2d_draw_rectangle(0, H - BAR, W, BAR, with_alpha(SURF, 245));
   vita2d_draw_line(0, H - BAR, W, H - BAR, with_alpha(TEXT, 20));
-  static const char *labels[] = {"Library", "Slideshow", "Search", "Settings"};
+  static const char *labels[] = {"Library", "Browser", "Slideshow", "Settings"};
   for (int k = 0; k < 4; k++) {
     int cx = W / 8 + k * W / 4;
-    int on = (k == 0 && screen == S_LIBRARY) || (k == 3 && screen == S_SETTINGS) || (k == 2 && query[0] && screen == S_LIBRARY);
+    int on = (k == 0 && screen == S_LIBRARY) || (k == 1 && screen == S_WEB) || (k == 3 && screen == S_SETTINGS);
     unsigned c = on ? ACC : DIM;
     int y = H - BAR + 20;
     switch (k) {
       case 0: for (int i = 0; i < 4; i++) rrect(cx - 11 + (i % 2) * 12, y - 10 + (i / 2) * 12, 10, 10, 2, c); break;
-      case 1: rrect(cx - 13, y - 9, 26, 18, 3, c); vita2d_draw_rectangle(cx - 3, y - 4, 2, 8, BG); vita2d_draw_rectangle(cx + 1, y - 4, 2, 8, BG); break;
-      case 2: circle(cx - 2, y - 2, 9, c); circle(cx - 2, y - 2, 6, with_alpha(SURF, 255));
-              for (int i = 0; i < 6; i++) circle(cx + 5 + i, y + 5 + i, 2, c);
-              break;
+      case 1: // a globe
+        circle(cx, y, 11, c); circle(cx, y, 9, with_alpha(SURF, 255));
+        vita2d_draw_rectangle(cx - 9, y - 1, 18, 2, c); vita2d_draw_rectangle(cx - 1, y - 9, 2, 18, c);
+        break;
+      case 2: rrect(cx - 13, y - 9, 26, 18, 3, c); vita2d_draw_rectangle(cx - 3, y - 4, 2, 8, BG); vita2d_draw_rectangle(cx + 1, y - 4, 2, 8, BG); break;
       case 3: circle(cx, y, 10, c); circle(cx, y, 4, with_alpha(SURF, 255));
               for (int i = 0; i < 6; i++) circle(cx + cosf(i * 1.047f) * 11, y + sinf(i * 1.047f) * 11, 3, c);
               break;
     }
     text_center(cx, H - 10, c, 13, labels[k]);
+    // (the button that leads here: ○ goes round Library, Browser, Settings)
+    int next = (screen == S_LIBRARY && k == 1) || (screen == S_WEB && k == 3) || (screen == S_SETTINGS && k == 0);
+    if (next) { circle(cx + 30, y - 6, 8, with_alpha(TEXT, 40)); text_center(cx + 30, y - 1, DIM, 12, "\u25cb"); }
     if (hit(cx - W / 8, H - BAR, W / 4, BAR)) {
       if (k == 0) { screen = S_LIBRARY; if (query[0]) { query[0] = 0; refilter(); } }
-      if (k == 1 && nshown) open_viewer(sel < nshown ? sel : 0, 1);
-      if (k == 2 && !ime_open) ime_start(2, "Search tags, names, categories", query, 0);
+      if (k == 1) screen = S_WEB;
+      if (k == 2 && nshown) open_viewer(sel < nshown ? sel : 0, 1);
       if (k == 3) screen = S_SETTINGS;
     }
   }
@@ -891,7 +930,7 @@ static void draw_library(void) {
 
   if ((in.pressed & SCE_CTRL_CROSS) && nshown) open_viewer(sel, 0);
   if ((in.pressed & SCE_CTRL_START) && nshown) open_viewer(sel, 1);
-  if (in.pressed & SCE_CTRL_CIRCLE) { screen = S_SETTINGS; set_sel = 0; }
+  if (in.pressed & SCE_CTRL_CIRCLE) screen = S_WEB; // (○ goes round the tabs: Library, Browser, Settings)
   draw_bar();
 }
 
@@ -1208,6 +1247,18 @@ static void draw_cover_screen(void) {
   text_center(W / 2, H / 2 + 64, RGBA(120, 128, 140, 255), 20, b);
 }
 
+// The vault got an item (a save from the Browser): the Library's per-item arrays grow with it.
+static void library_grew(void) {
+  signed char *t = realloc(tstate, vault.n + 1);
+  short *so = realloc(slot_of, (vault.n + 1) * sizeof *so);
+  if (t) tstate = t;
+  if (so) slot_of = so;
+  if (t && so) { tstate[vault.n - 1] = 0; slot_of[vault.n - 1] = -1; tstate[vault.n] = 0; slot_of[vault.n] = -1; }
+  refilter();
+}
+
+#include "web.c"
+
 int main(void) {
   sceIoMkdir("ux0:data", 0777);
   sceIoMkdir(DATA, 0777);
@@ -1225,6 +1276,7 @@ int main(void) {
   // (a bigger per-frame vertex pool than vita2d's 1 MB: room to spare on the busiest screen)
   vita2d_init_advanced(4 * 1024 * 1024);
   make_disc();
+  lv_video_release_texture = free_later;
   vita2d_set_clear_color(BG);
   vita2d_set_vblank_wait(1);
   font = vita2d_load_font_file("app0:font.ttf");
@@ -1249,12 +1301,14 @@ int main(void) {
     read_input();
     if (npending) { vita2d_wait_rendering_done(); for (int k = 0; k < npending; k++) vita2d_free_texture(pending_free[k]); npending = 0; }
     if (loaded_vault) take_results();
+    if (web_started) web_take_results();
 
     // the keyboard's answer
     if (ime_open) {
       char got[120];
       int r = ime_poll(got, sizeof got);
       if (r == 1 && ime_for == 1) { snprintf(password, sizeof password, "%s", got); screen = S_UNLOCKING; unlock_stage = 0; }
+      if (r == 1 && ime_for == 3) { char clean[128]; snprintf(cfg.wquery, sizeof cfg.wquery, "%s", lv_booru_clean(got, clean, sizeof clean)); sheet = SH_NONE; screen = S_WEB; web_search(); }
       if (r == 1 && ime_for == 2) { snprintf(query, sizeof query, "%s", got); cat = -1; refilter(); sel = 0; scroll = 0; screen = S_LIBRARY; }
       if (r != 0) memset(&in, 0, sizeof in);
       else in.pressed = 0, in.tap = 0;
@@ -1265,6 +1319,7 @@ int main(void) {
       else if (screen != S_UNLOCKING) {
         cover_return = screen;
         if (vid) lv_video_pause(vid, 1);
+        if (wv_vid) lv_video_pause(wv_vid, 1);
         screen = S_COVER;
       }
       in.pressed = 0;
@@ -1281,6 +1336,8 @@ int main(void) {
       case S_LIBRARY: draw_library(); break;
       case S_VIEWER: draw_viewer(); break;
       case S_SETTINGS: draw_settings(); break;
+      case S_WEB: draw_web(); break;
+      case S_WEBVIEW: draw_webview(); break;
       case S_COVER: draw_cover_screen(); if (in.tap) { screen = cover_return; } break;
     }
     if (frame_no < message_until && screen != S_COVER) {

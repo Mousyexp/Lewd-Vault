@@ -12,5 +12,10 @@ typedef struct {
 
 // Fits inside max_w x max_h (never larger than the picture itself). 0 on success.
 int lv_decode(const uint8_t *data, size_t n, int max_w, int max_h, LvPixels *out);
-// A small WebP of these pixels (the thumbnail cache). malloc'd, or NULL.
-uint8_t *lv_encode_webp(const LvPixels *p, int quality, size_t *n);
+// A JPEG of these pixels (saved pictures, thumbnails and the thumbnail cache: on the Vita a JPEG
+// decodes faster than anything else, with libjpeg-turbo's NEON code). malloc'd, or NULL.
+uint8_t *lv_encode_jpeg(const LvPixels *p, int quality, size_t *n);
+// A JPEG's size without decoding it: 1 when it is one.
+int lv_jpeg_size(const uint8_t *data, size_t n, int *w, int *h);
+// A picture's size without decoding it (JPEG, PNG, WebP): 1 when known.
+int lv_image_size(const uint8_t *data, size_t n, int *w, int *h);

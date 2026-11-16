@@ -19,3 +19,6 @@ void lv_video_pause(LvVideo *v, int on);
 void lv_video_seek(LvVideo *v, int64_t ms);
 void lv_video_set_volume(LvVideo *v, int vol);
 void lv_video_close(LvVideo *v);
+// How the player lets go of its textures: the app sets this to free them after the frame that may
+// still draw them (by default: wait for the GPU, then free).
+extern void (*lv_video_release_texture)(vita2d_texture *t);

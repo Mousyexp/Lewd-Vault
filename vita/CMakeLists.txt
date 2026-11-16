@@ -21,13 +21,16 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -ffunction-sections -fdata-sections -Wall -Wno-unused-parameter -D_GNU_SOURCE")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
 
-add_executable(${PROJECT_NAME} src/main.c src/vault.c src/lvcrypt.c src/image.c src/video.c)
+# (src/web.c is compiled as part of main.c)
+add_executable(${PROJECT_NAME} src/main.c src/vault.c src/lvcrypt.c src/image.c src/video.c src/booru.c src/json.c src/net.c)
 target_link_libraries(${PROJECT_NAME}
   vita2d freetype bz2 png turbojpeg webp sharpyuv
-  avformat avcodec swresample swscale avutil vpx mp3lame mpg123 opus vorbis ogg pthread z m
+  avformat avcodec swresample swscale avutil vpx mp3lame mpg123 opus vorbis ogg
+  curl ssl crypto zstd pthread z m
   SceAvPlayer_stub SceAudio_stub SceGxm_stub SceDisplay_stub SceSysmodule_stub SceCtrl_stub
   SceTouch_stub ScePower_stub SceAppUtil_stub SceCommonDialog_stub SceIme_stub ScePgf_stub
   SceLibKernel_stub SceKernelThreadMgr_stub SceRtc_stub SceAppMgr_stub
+  SceNet_stub SceNetCtl_stub SceKernelModulemgr_stub SceIofilemgr_stub SceSysmem_stub SceProcessmgr_stub
 )
 
 vita_create_self(eboot.bin ${PROJECT_NAME} UNSAFE)
@@ -39,4 +42,5 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
   FILE sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
   FILE font.ttf font.ttf
+  FILE cacert.pem cacert.pem
 )

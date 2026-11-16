@@ -177,6 +177,19 @@ int lv_b64url_decode(const char *in, char *out, size_t cap) {
   return (int)o;
 }
 
+void lv_b64url_encode(const char *in, char *out, size_t cap) {
+  static const char A[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  size_t o = 0, n = strlen(in);
+  for (size_t i = 0; i < n && o + 5 < cap; i += 3) {
+    unsigned v = (unsigned char)in[i] << 16 | (i + 1 < n ? (unsigned char)in[i + 1] << 8 : 0) | (i + 2 < n ? (unsigned char)in[i + 2] : 0);
+    out[o++] = A[v >> 18 & 63];
+    out[o++] = A[v >> 12 & 63];
+    if (i + 1 < n) out[o++] = A[v >> 6 & 63];
+    if (i + 2 < n) out[o++] = A[v & 63];
+  }
+  out[o] = 0;
+}
+
 // A file name from an id must stay a plain name (plain_name in lib.rs).
 static int plain_name(const char *s) {
   if (!*s || !strcmp(s, ".") || !strcmp(s, "..")) return 0;
@@ -634,4 +647,144 @@ int lv_vault_save_views(LvVault *v) {
   free(text);
   if (r == 0) v->views_dirty = 0;
   return r;
+}
+
+// ---------- adding an item (the Browser's saves) ----------
+
+static void csv_cell(Buf *b, const char *s) {
+  if (strpbrk(s, "\",\r\n")) {
+    bstr(b, "\"");
+    for (const char *p = s; *p; p++) { bput(b, p, 1); if (*p == '"') bput(b, "\"", 1); }
+    bstr(b, "\"");
+  } else bstr(b, s);
+}
+
+// The next item number: state.json's nextUid, and never one already in the index.
+static long next_uid(LvVault *v) {
+  long next = 1;
+  char *st = read_text(v, "_app/state.json");
+  if (st) {
+    char *k = strstr(st, "\"nextUid\"");
+    if (k && (k = strchr(k, ':'))) next = strtol(k + 1, NULL, 10);
+    free(st);
+  }
+  for (int i = 0; i < v->n; i++) {
+    long u = strtol(v->items[i].uid, NULL, 10);
+    if (u >= next) next = u + 1;
+  }
+  return next < 1 ? 1 : next;
+}
+static void save_next_uid(LvVault *v, long next) {
+  char p[700], text[64];
+  snprintf(p, sizeof p, "%s/_app/state.json", v->root);
+  char *st = read_text(v, "_app/state.json");
+  // (keeps whatever else is in it: only the number changes)
+  char *k = st ? strstr(st, "\"nextUid\"") : NULL;
+  if (k && (k = strchr(k, ':'))) {
+    char *e = k + 1;
+    while (*e == ' ') e++;
+    while (*e >= '0' && *e <= '9') e++;
+    Buf b = {0};
+    bput(&b, st, (size_t)(k + 1 - st));
+    snprintf(text, sizeof text, "%ld", next);
+    bstr(&b, text);
+    bstr(&b, e);
+    lv_write_all(p, lv_key(v), b.s, b.n);
+    free(b.s);
+  } else {
+    snprintf(text, sizeof text, "{\"nextUid\":%ld}", next);
+    lv_write_all(p, lv_key(v), text, strlen(text));
+  }
+  free(st);
+}
+
+int lv_vault_add(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, const char *ext,
+                 const uint8_t *thumb, size_t tlen, int tw, int th, const char **why) {
+  static const char *msg;
+  if (v->untraceable && !v->has_key) { msg = "The vault is locked"; *why = msg; return -1; }
+  long next = next_uid(v);
+  char uid[16], dir[300], name[400], path[1300], tname[64], tpath[800], tid[128], tb[96];
+  snprintf(uid, sizeof uid, "%06ld", next);
+  // where the PC would put it: Media/ with Discreet names, else the category's folder
+  char kind_letter = !strcmp(n->kind, "video") ? 'v' : !strcmp(n->kind, "gif") ? 'g' : 'i';
+  if (v->discreet) {
+    snprintf(dir, sizeof dir, "Media");
+    snprintf(name, sizeof name, "%s_file.%s", uid, ext);
+  } else {
+    safe_name(n->category, dir, sizeof dir);
+    char ymd[8] = "000000";
+    if (strlen(n->added) >= 10) snprintf(ymd, sizeof ymd, "%.2s%.2s%.2s", n->added + 2, n->added + 5, n->added + 8);
+    snprintf(name, sizeof name, "%s_%s_%c%02d%d_%s.%s", uid, ymd, kind_letter, n->nsfw, n->quality > 9 ? 9 : n->quality, dir, ext);
+  }
+  snprintf(path, sizeof path, "%s/%s", v->root, dir);
+  mkdir(path, 0777);
+  snprintf(path, sizeof path, "%s/%s/%s", v->root, dir, name);
+  if (lv_write_all(path, lv_key(v), data, len) != 0) { msg = "The file could not be written (is the memory card full?)"; *why = msg; return -1; }
+  // the thumbnail, made card-sized, in _app/thumbs (named the way the PC's are)
+  tid[0] = 0;
+  if (thumb && tlen) {
+    snprintf(tpath, sizeof tpath, "%s/_app", v->root);
+    mkdir(tpath, 0777);
+    snprintf(tpath, sizeof tpath, "%s/_app/thumbs", v->root);
+    mkdir(tpath, 0777);
+    snprintf(tname, sizeof tname, "%s.jpg", uid);
+    snprintf(tpath, sizeof tpath, "%s/_app/thumbs/%s", v->root, tname);
+    if (lv_write_all(tpath, lv_key(v), thumb, tlen) == 0) {
+      lv_b64url_encode(tname, tb, sizeof tb);
+      snprintf(tid, sizeof tid, "thumbs-%s", tb);
+    }
+  }
+  // the row, in index.csv's columns (HEADERS in lib.rs), appended
+  char id[24], nsfw[8], q[8], w[16], h[16], d[32], tsize[32];
+  snprintf(id, sizeof id, "item-%s", uid);
+  snprintf(nsfw, sizeof nsfw, "%d", n->nsfw);
+  snprintf(q, sizeof q, "%d", n->quality);
+  lv_num_or_empty(n->width, w, sizeof w);
+  lv_num_or_empty(n->height, h, sizeof h);
+  lv_num_or_empty(n->duration, d, sizeof d);
+  if (tw && th) snprintf(tsize, sizeof tsize, "%dx%d", tw, th); else tsize[0] = 0;
+  const char *cells[21] = {id, uid, name, n->name, n->category, n->kind, nsfw, q, n->added, w, h, d, "", tid, "", "", tsize, "", "", n->tags, n->source};
+  Buf row = {0};
+  for (int k = 0; k < 21; k++) { if (k) bstr(&row, ","); csv_cell(&row, cells[k]); }
+  bstr(&row, "\r\n");
+  char ip[700];
+  snprintf(ip, sizeof ip, "%s/index.csv", v->root);
+  int ok = lv_append(ip, lv_key(v), row.s, row.n) == 0;
+  free(row.s);
+  if (!ok) { remove(path); msg = "index.csv could not be written"; *why = msg; return -1; }
+  save_next_uid(v, next + 1);
+
+  // and into the loaded vault, without reading it all again
+  LvItem *items = realloc(v->items, (v->n + 1) * sizeof *items);
+  LvHot *hot = realloc(v->hot, (v->n + 2) * sizeof *hot);
+  if (!items || !hot) { if (items) v->items = items; if (hot) v->hot = hot; msg = "Saved (reopen the vault to see it)"; *why = msg; return 0; }
+  v->items = items;
+  v->hot = hot;
+  LvItem *it = &v->items[v->n];
+  memset(it, 0, sizeof *it);
+  it->id = arena_dup(&v->arena, id); it->uid = arena_dup(&v->arena, uid); it->file = arena_dup(&v->arena, name);
+  it->name = arena_dup(&v->arena, n->name); it->category = arena_dup(&v->arena, n->category); it->kind = arena_dup(&v->arena, n->kind);
+  it->added = arena_dup(&v->arena, n->added); it->preview_id = arena_dup(&v->arena, ""); it->thumb = arena_dup(&v->arena, tid);
+  it->collection = arena_dup(&v->arena, ""); it->tags = arena_dup(&v->arena, n->tags); it->source = arena_dup(&v->arena, n->source);
+  it->path = arena_dup(&v->arena, path);
+  it->nsfw = n->nsfw; it->quality = n->quality; it->width = n->width; it->height = n->height; it->duration = n->duration;
+  it->view = -1;
+  int c;
+  for (c = 0; c < v->ncats; c++) if (!strcmp(v->cats[c], n->category)) break;
+  if (c == v->ncats) {
+    v->cats = realloc(v->cats, (v->ncats + 1) * sizeof *v->cats);
+    v->cat_counts = realloc(v->cat_counts, (v->ncats + 1) * sizeof *v->cat_counts);
+    v->cats[c] = dup(n->category);
+    v->cat_counts[c] = 0;
+    v->ncats++;
+  }
+  v->cat_counts[c]++;
+  LvHot *hh = &v->hot[v->n];
+  hh->added = time_key(n->added);
+  hh->cat = (int16_t)c;
+  hh->kind = kind_letter == 'v' ? LV_VIDEO : kind_letter == 'g' ? LV_GIF : LV_IMAGE;
+  hh->quality = (uint8_t)n->quality;
+  hh->view = -1;
+  v->n++;
+  return 0;
 }

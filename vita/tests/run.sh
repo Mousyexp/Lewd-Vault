@@ -1,7 +1,10 @@
 #!/bin/sh
-# The Vita app's vault core (src/vault.c, src/lvcrypt.c) on this PC, against the golden vaults.
+# The Vita app's portable parts on this PC: the vault core (src/vault.c, src/lvcrypt.c) against the
+# golden vaults, and the Browser's site readers (src/booru.c, src/json.c) against saved answers.
 set -e
 cd "$(dirname "$0")/.."
-out="${TMPDIR:-/tmp}/lv-vita-core-test"
-${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wno-unused-parameter -o "$out" tests/core_test.c src/vault.c src/lvcrypt.c -lm
-"$out" ../src-tauri/tests/fixtures
+out="${TMPDIR:-/tmp}/lv-vita-test"
+${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wno-unused-parameter -o "$out-core" tests/core_test.c src/vault.c src/lvcrypt.c -lm
+"$out-core" ../src-tauri/tests/fixtures
+${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wno-unused-parameter -o "$out-booru" tests/booru_test.c src/booru.c src/json.c
+"$out-booru"

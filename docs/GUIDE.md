@@ -274,9 +274,11 @@ or APK instead).
 
 A separate, native viewer for the Vita (HENkaku/Ensō, installed with VitaShell): the library with
 its categories, sorting and search, the full view with details, pinch-zoom and hearts, the
-slideshow, videos (MP4 in hardware, WebM/MKV in software) and a SELECT cover screen. Copy the vault
-folder into `ux0:data/LewdVault/`; an Untraceable vault stays encrypted and opens with its password.
-Views, hearts and time go into the vault's `views.csv` as on the PC. It doesn't add or edit items.
+slideshow, videos (MP4 in hardware, WebM/MKV in software), a SELECT cover screen, and a Browser for
+ten boorus (site tabs, ratings filter, sort, search) that saves into the vault at Vita size (JPEG,
+card-sized thumbnails, the row appended). Copy the vault folder into `ux0:data/LewdVault/`; an
+Untraceable vault stays encrypted and opens with its password. Views, hearts and time go into the
+vault's `views.csv` as on the PC. It doesn't edit or delete items.
 `vita/README.md` has the details; the VPK comes from Actions → Build PS Vita.
 
 ## The vault folder

@@ -73,6 +73,17 @@ long long lv_views_of(const LvVault *v, const LvItem *it);
 long long lv_likes_of(const LvVault *v, const LvItem *it);
 int lv_vault_save_views(LvVault *v);
 
+// A new item from the Browser: its file and thumbnail written into the vault (encrypted for an
+// Untraceable one), its row appended to index.csv (not the whole file rewritten), and the item added
+// to the loaded vault. 0 on success; *why says what went wrong.
+typedef struct {
+  const char *name, *category, *kind, *tags, *source, *added; // kind: image, gif or video
+  int nsfw, quality, width, height;
+  double duration;
+} LvNew;
+int lv_vault_add(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, const char *ext,
+                 const uint8_t *thumb, size_t tlen, int tw, int th, const char **why);
+
 // The CSV pieces (exposed for the tests).
 typedef struct { char ***rows; int *ncells; int nrows; } LvCsv;
 void lv_csv_parse(const char *text, LvCsv *out);
@@ -80,4 +91,5 @@ void lv_csv_free(LvCsv *c);
 char *lv_csv_text(char ***rows, const int *ncells, int nrows); // malloc'd
 char *lv_views_csv(const LvVault *v);
 int lv_b64url_decode(const char *in, char *out, size_t cap);
+void lv_b64url_encode(const char *in, char *out, size_t cap);
 void lv_num_or_empty(double f, char *out, size_t cap);

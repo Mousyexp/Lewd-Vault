@@ -169,6 +169,56 @@ int main(int argc, char **argv) {
   }
   lv_vault_free(&v);
 
+  // ---- saving from the Browser: plain and Untraceable ----
+  for (int enc = 0; enc < 2; enc++) {
+    char src[300], tmp[200], cmd[700];
+    snprintf(src, sizeof src, "%s/%s", fx, enc ? "golden-untraceable" : "golden-vault");
+    snprintf(tmp, sizeof tmp, "/tmp/lv-vita-add-%d-%d", (int)getpid(), enc);
+    snprintf(cmd, sizeof cmd, "rm -rf %s && cp -r '%s' %s", tmp, src, tmp);
+    CHECK(system(cmd) == 0, "copy");
+    LvVault a;
+    lv_vault_init(&a, tmp);
+    if (enc) CHECK(lv_vault_unlock(&a, "hunter2") == 1, "unlock");
+    CHECK(lv_vault_load(&a, &why) == 0, "load");
+    int before = a.n;
+    const uint8_t pic[] = {0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4};
+    const uint8_t th[] = {0xFF, 0xD8, 9, 9};
+    LvNew nw = {"Danbooru 123", "Danbooru", "image", "blue_hair smile", "https://danbooru.donmai.us/posts/123", "2026-11-16T10:00:00.000Z", 9, 5, 850, 1200, 0};
+    CHECK(lv_vault_add(&a, &nw, pic, sizeof pic, "jpg", th, sizeof th, 148, 209, &why) == 0, "add: %s", why);
+    CHECK(a.n == before + 1 && !strcmp(a.items[before].uid, "000126"), "in the loaded vault: %d %s", a.n, a.n > before ? a.items[before].uid : "");
+    CHECK(!strcmp(a.cats[a.hot[before].cat], "Danbooru") && a.hot[before].added == 20261116100000LL, "its hot record");
+    lv_vault_free(&a);
+    // read again from the card
+    lv_vault_init(&a, tmp);
+    if (enc) lv_vault_unlock(&a, "hunter2");
+    CHECK(lv_vault_load(&a, &why) == 0, "reload");
+    CHECK(a.n == before + 1, "reloaded %d items", a.n);
+    LvItem *it = &a.items[a.n - 1];
+    CHECK(!strcmp(it->id, "item-000126") && !strcmp(it->category, "Danbooru") && it->nsfw == 9 && it->width == 850 && !strcmp(it->tags, "blue_hair smile"), "the row");
+    CHECK(it->path && strstr(it->path, enc ? "/Danbooru/000126_261116_i095_Danbooru.jpg" : "/Danbooru/000126_261116_i095_Danbooru.jpg"), "its file: %s", it->path ? it->path : "-");
+    size_t fn = 0, tn = 0;
+    uint8_t *f = it->path ? lv_read_all(it->path, lv_key(&a), &fn) : NULL;
+    CHECK(f && fn == sizeof pic && !memcmp(f, pic, fn), "its bytes");
+    free(f);
+    uint8_t *t = lv_thumb_bytes(&a, it, &tn);
+    CHECK(t && tn == sizeof th && !memcmp(t, th, tn), "its thumbnail (%s)", it->thumb);
+    free(t);
+    if (enc) {
+      snprintf(cmd, sizeof cmd, "%s/Danbooru/000126_261116_i095_Danbooru.jpg", tmp);
+      size_t rn = 0;
+      char *raw = slurp(cmd, &rn);
+      CHECK(raw && !memcmp(raw, "LVX1", 4), "stored encrypted");
+      free(raw);
+    }
+    // the next one gets the next number
+    char *st = (char *)lv_read_all(strcat(strcpy(cmd, tmp), "/_app/state.json"), lv_key(&a), NULL);
+    CHECK(st && strstr(st, "\"nextUid\":127"), "state.json: %s", st ? st : "-");
+    free(st);
+    lv_vault_free(&a);
+    snprintf(cmd, sizeof cmd, "rm -rf %s", tmp);
+    CHECK(system(cmd) == 0, "clean up");
+  }
+
   printf(fails ? "%d FAILED\n" : "core: all passed\n", fails);
   return fails != 0;
 }
