@@ -34,6 +34,7 @@
 #include <vita2d.h>
 
 #include "image.h"
+#include "sfx.h"
 #include "lvcrypt.h"
 #include "vault.h"
 #include "video.h"
@@ -56,7 +57,11 @@ int _newlib_heap_size_user = 200 * 1024 * 1024;
 #define CARD_H 197
 #define GAP 8
 #define MARGIN ((W - COLS * CARD_W - (COLS - 1) * GAP) / 2)
-#define SLOTS 120 // (four atlases of 30 cards; the Browser has four more)
+// (a thumbnail is kept whole, up to 336 x 168: a 2:1 landscape picture at a row's full height, or
+// a portrait one 168 tall)
+#define CELL_W 336
+#define CELL_H 168
+#define SLOTS 72 // (four atlases of 18 cells; the Browser has four more)
 
 // ---------- colours (the vault's theme picks the accent, as on the phone) ----------
 #define RGBA(r, g, b, a) ((unsigned)(r) | (unsigned)(g) << 8 | (unsigned)(b) << 16 | (unsigned)(a) << 24)
@@ -160,13 +165,84 @@ static void heart(float cx, float cy, float s, unsigned c) {
   }
 }
 
+// ---------- the grid: justified rows ----------
+// Each card keeps its picture's shape (a landscape one wide, a portrait one narrow), the cards of a
+// row share its height, and each row is stretched to the screen's width (as Photos lays them out).
+#define ROW_H 168
+#define JMARGIN 8
+typedef struct { float x, y, w, h; } Rect;
+typedef struct { Rect *r; short *row; int n, cap; float height; } Grid;
+static float clamp_aspect(float a) { return !(a > 0) ? 0.75f : a < 0.5f ? 0.5f : a > 2.0f ? 2.0f : a; }
+static void grid_build(Grid *g, int n, float (*aspect)(int k)) {
+  if (n + 1 > g->cap) {
+    int cap = n + 64;
+    Rect *r = realloc(g->r, cap * sizeof *r);
+    short *rw = realloc(g->row, cap * sizeof *rw);
+    if (r) g->r = r;
+    if (rw) g->row = rw;
+    if (!r || !rw) { g->n = 0; g->height = 0; return; }
+    g->cap = cap;
+  }
+  g->n = n;
+  float avail = W - 2 * JMARGIN;
+  int k = 0, row = 0;
+  float y = 0;
+  while (k < n) {
+    int start = k;
+    float sum = 0;
+    while (k < n) {
+      float a = clamp_aspect(aspect(k));
+      if (k > start && (sum + a) * ROW_H + (k - start) * GAP > avail) break;
+      sum += a;
+      k++;
+    }
+    float h = (avail - (k - start - 1) * GAP) / sum;
+    if (k >= n && h > ROW_H) h = ROW_H; // (the last row isn't stretched)
+    if (h > ROW_H * 1.25f) h = ROW_H * 1.25f;
+    float x = JMARGIN;
+    for (int j = start; j < k; j++) {
+      float w = clamp_aspect(aspect(j)) * h;
+      g->r[j] = (Rect){x, y, w, h};
+      g->row[j] = (short)(row < 32767 ? row : 32767);
+      x += w + GAP;
+    }
+    y += h + GAP;
+    row++;
+  }
+  g->height = y;
+}
+// the first card whose bottom is below `top`
+static int grid_first(const Grid *g, float top) {
+  int lo = 0, hi = g->n;
+  while (lo < hi) { int m = (lo + hi) / 2; if (g->r[m].y + g->r[m].h < top) lo = m + 1; else hi = m; }
+  // (back to the start of that row)
+  while (lo > 0 && lo < g->n && g->row[lo - 1] == g->row[lo]) lo--;
+  return lo;
+}
+// ↑ / ↓: the card in the row above or below nearest the same place across
+static int grid_move(const Grid *g, int k, int dir) {
+  if (k < 0 || k >= g->n) return k;
+  float cx = g->r[k].x + g->r[k].w / 2;
+  int want = g->row[k] + dir, best = k;
+  float bd = 1e9f;
+  for (int j = k + dir; j >= 0 && j < g->n; j += dir) {
+    if (g->row[j] == g->row[k]) continue;
+    if (g->row[j] != want) break;
+    float d = fabsf(g->r[j].x + g->r[j].w / 2 - cx);
+    if (d < bd) { bd = d; best = j; }
+  }
+  return best;
+}
+
 // ---------- the app's own settings (ux0:data/LWDV00001/config.txt) ----------
 static struct {
   char vault[512];
   int sort, kind, interval, shuffle, volume;
   int site, ratings, wsort; // the Browser's site, ratings (LV_R_* bits) and order
   char wquery[128], save_cat[64];
-} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", ""};
+  int wpages, wsel; // where the Browser was: pages loaded, the post picked (it picks up there)
+  int sounds;       // the interface sounds' volume, 0-100 (0: off)
+} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70};
 static void cfg_load(void) {
   FILE *f = fopen(DATA "/config.txt", "r");
   if (!f) return;
@@ -187,6 +263,9 @@ static void cfg_load(void) {
     else if (!strcmp(line, "wsort")) cfg.wsort = atoi(eq);
     else if (!strcmp(line, "wquery")) snprintf(cfg.wquery, sizeof cfg.wquery, "%s", eq);
     else if (!strcmp(line, "save_cat")) snprintf(cfg.save_cat, sizeof cfg.save_cat, "%s", eq);
+    else if (!strcmp(line, "wpages")) cfg.wpages = atoi(eq);
+    else if (!strcmp(line, "wsel")) cfg.wsel = atoi(eq);
+    else if (!strcmp(line, "sounds")) cfg.sounds = atoi(eq);
   }
   fclose(f);
   if (cfg.interval < 2 || cfg.interval > 60) cfg.interval = 5;
@@ -194,12 +273,16 @@ static void cfg_load(void) {
   if (cfg.site < 0 || cfg.site >= 64) cfg.site = 0;
   if (!(cfg.ratings & 15)) cfg.ratings = 15;
   if (cfg.wsort < 0 || cfg.wsort > 3) cfg.wsort = 0;
+  if (cfg.wpages < 0 || cfg.wpages > 50) cfg.wpages = 0;
+  if (cfg.wsel < 0) cfg.wsel = 0;
+  if (cfg.sounds < 0 || cfg.sounds > 100) cfg.sounds = 70;
 }
 static void cfg_save(void) {
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\n",
-          cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat);
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\n",
+          cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
+          cfg.wpages, cfg.wsel, cfg.sounds);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -248,6 +331,12 @@ static int cmp_items(const void *a, const void *b) {
   d = y->added - x->added;
   return d > 0 ? 1 : d < 0 ? -1 : 0;
 }
+static Grid lgrid;
+static float lib_aspect(int k) {
+  const LvItem *it = &vault.items[shown[k]];
+  return it->width > 0 && it->height > 0 ? (float)it->width / it->height : 0.75f;
+}
+
 static void refilter(void) {
   free(shown);
   shown = malloc((vault.n + 1) * sizeof *shown);
@@ -269,6 +358,7 @@ static void refilter(void) {
   } else {
     qsort(shown, nshown, sizeof *shown, cmp_items);
   }
+  grid_build(&lgrid, nshown, lib_aspect);
 }
 
 static void now_iso(char *out, size_t cap) {
@@ -309,14 +399,11 @@ static unsigned long fnv(const char *s) {
   return h;
 }
 
-// The size to decode a picture at for a card: just big enough to cover it (a landscape picture as
-// tall as the card, a portrait one as wide), never more.
+// The size to decode a thumbnail at: whole, inside a cell (the grid keeps each picture's shape).
 static void cover_size(const uint8_t *b, size_t n, int *mw, int *mh) {
-  int w = 0, h = 0;
-  *mw = CARD_W; *mh = CARD_H * 2;
-  if (!lv_image_size(b, n, &w, &h) || w <= 0 || h <= 0) return;
-  if (w * CARD_H >= h * CARD_W) { *mh = CARD_H; *mw = (int)((long long)CARD_H * w / h) + 1; if (*mw > CARD_W * 4) *mw = CARD_W * 4; }
-  else { *mw = CARD_W; *mh = (int)((long long)CARD_W * h / w) + 1; if (*mh > CARD_H * 3) *mh = CARD_H * 3; }
+  (void)b; (void)n;
+  *mw = CELL_W;
+  *mh = CELL_H;
 }
 
 static int cache_broken;
@@ -332,7 +419,7 @@ static int pixels_close(const LvPixels *a, const LvPixels *b) {
 static int thumb_pixels(int i, LvPixels *px) {
   LvItem *it = &vault.items[i];
   char cp[800];
-  snprintf(cp, sizeof cp, "%s/%08lx%08lx.jpg", cache_dir, fnv(it->thumb), fnv(it->id));
+  snprintf(cp, sizeof cp, "%s/%08lx%08lx-w.jpg", cache_dir, fnv(it->thumb), fnv(it->id)); // (-w: whole, not cropped)
   size_t n = 0;
   uint8_t *b = lv_read_all(cp, lv_key(&vault), &n);
   if (b) {
@@ -346,7 +433,7 @@ static int thumb_pixels(int i, LvPixels *px) {
   if (!b && it->path && !is_video(it) && !is_gif(it)) b = lv_read_all(it->path, lv_key(&vault), &n); // (no thumbnail: the picture itself)
   if (!b) return -1;
   // cover the card: decode to its width (the card crops the height)
-  int sw = 0, shh = 0, small = lv_image_size(b, n, &sw, &shh) && sw <= CARD_W * 4 && shh <= CARD_H * 3 && (sw <= CARD_W * 3 / 2 || shh <= CARD_H * 3 / 2);
+  int sw = 0, shh = 0, small = lv_image_size(b, n, &sw, &shh) && sw <= CELL_W * 3 / 2 && shh <= CELL_H * 3 / 2;
   int cw, ch;
   cover_size(b, n, &cw, &ch);
   int r = lv_decode(b, n, cw, ch, px);
@@ -440,10 +527,10 @@ static vita2d_texture *upload(const LvPixels *px) {
 // texture is made or freed while scrolling (the GPU's memory doesn't fragment over a long session).
 // Each cell is a texture of its own as far as drawing goes: a view onto its part of the atlas
 // (sceGxmTextureInitLinearStrided).
-#define ACOLS 6
-#define AROWS 5
+#define ACOLS 3
+#define AROWS 6
 #define CELLS_PER_ATLAS (ACOLS * AROWS)
-#define ATLASES 8 // (cells 0-119 the Library's, 120-239 the Browser's)
+#define ATLASES 8 // (cells 0-71 the Library's, 72-143 the Browser's)
 static vita2d_texture *atlas[ATLASES];
 static vita2d_texture cells[ATLASES * CELLS_PER_ATLAS];
 static void atlas_init(void) {
@@ -453,39 +540,45 @@ static void atlas_init(void) {
     uint8_t *d = vita2d_texture_get_datap(atlas[a]);
     unsigned stride = vita2d_texture_get_stride(atlas[a]);
     for (int k = 0; k < CELLS_PER_ATLAS; k++) {
-      int x = (k % ACOLS) * (CARD_W + 2), y = (k / ACOLS) * (CARD_H + 2);
+      int x = (k % ACOLS) * (CELL_W + 2), y = (k / ACOLS) * (CELL_H + 2);
       vita2d_texture *c = &cells[a * CELLS_PER_ATLAS + k];
       memset(c, 0, sizeof *c);
-      sceGxmTextureInitLinearStrided(&c->gxm_tex, d + (size_t)y * stride + (size_t)x * 4, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, CARD_W, CARD_H, stride);
+      sceGxmTextureInitLinearStrided(&c->gxm_tex, d + (size_t)y * stride + (size_t)x * 4, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, CELL_W, CELL_H, stride);
       sceGxmTextureSetMinFilter(&c->gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
       sceGxmTextureSetMagFilter(&c->gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
     }
   }
 }
-// A card's picture into its cell: cropped to the card's shape (from near the top for a tall one,
-// where faces tend to be) and scaled to fit, nearest pixel (cover_size made it about the right size).
+// A thumbnail into its cell, whole: it was decoded to fit CELL_W x CELL_H, so it's copied as it is
+// (scaled down only if it somehow isn't), and the cell's view takes its size.
 static vita2d_texture *put_cell(int cell, const LvPixels *px) {
   vita2d_texture *at = atlas[cell / CELLS_PER_ATLAS];
   if (!at || !px->rgba || px->w <= 0 || px->h <= 0) return NULL;
   int k = cell % CELLS_PER_ATLAS;
   unsigned stride = vita2d_texture_get_stride(at);
-  uint8_t *d = (uint8_t *)vita2d_texture_get_datap(at) + (size_t)((k / ACOLS) * (CARD_H + 2)) * stride + (size_t)((k % ACOLS) * (CARD_W + 2)) * 4;
-  float s = fmaxf((float)CARD_W / px->w, (float)CARD_H / px->h);
-  float sw = CARD_W / s, sh = CARD_H / s;
-  float sx = (px->w - sw) / 2, sy = (px->h - sh) * 0.3f;
-  for (int y = 0; y < CARD_H; y++) {
-    int yy = (int)(sy + (y + 0.5f) / s);
+  uint8_t *d = (uint8_t *)vita2d_texture_get_datap(at) + (size_t)((k / ACOLS) * (CELL_H + 2)) * stride + (size_t)((k % ACOLS) * (CELL_W + 2)) * 4;
+  float s = fminf(1.0f, fminf((float)CELL_W / px->w, (float)CELL_H / px->h));
+  int w = (int)(px->w * s), h = (int)(px->h * s);
+  if (w < 1) w = 1;
+  if (h < 1) h = 1;
+  for (int y = 0; y < h; y++) {
+    int yy = s == 1.0f ? y : (int)((y + 0.5f) / s);
     if (yy >= px->h) yy = px->h - 1;
     const uint32_t *srow = (const uint32_t *)(px->rgba + (size_t)yy * px->w * 4);
     uint32_t *drow = (uint32_t *)(d + (size_t)y * stride);
-    for (int x = 0; x < CARD_W; x++) {
-      int xx = (int)(sx + (x + 0.5f) / s);
-      if (xx >= px->w) xx = px->w - 1;
-      drow[x] = srow[xx] | 0xFF000000u;
+    if (s == 1.0f) { for (int x = 0; x < w; x++) drow[x] = srow[x] | 0xFF000000u; continue; }
+    for (int x = 0; x < w; x++) {
+      int xx = (int)((x + 0.5f) / s);
+      drow[x] = srow[xx < px->w ? xx : px->w - 1] | 0xFF000000u;
     }
   }
-  return &cells[cell];
+  vita2d_texture *c = &cells[cell];
+  sceGxmTextureInitLinearStrided(&c->gxm_tex, d, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, w, h, stride);
+  sceGxmTextureSetMinFilter(&c->gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
+  sceGxmTextureSetMagFilter(&c->gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
+  return c;
 }
+
 
 static vita2d_texture *big_tex;
 static int big_item = -1, big_gen, big_failed;
@@ -726,7 +819,7 @@ static void apply_theme(void) {
   ACC = THEMES[0].a; ACC2 = THEMES[0].b;
 }
 
-static int scroll_target, sel;
+static int sel;
 static float scroll, scroll_v;
 static void close_vault(void) {
   if (!loaded_vault) return;
@@ -873,14 +966,40 @@ static void draw_locked(void) {
   if (!ime_open && ((in.pressed & SCE_CTRL_CROSS) || hit(cx - 140, 330, 280, 52))) ime_start(1, "Vault password", "", 1);
   if (!ime_open && ((in.pressed & SCE_CTRL_CIRCLE) || hit(cx - 140, 396, 280, 44))) { find_vaults(); screen = S_PICK; }
 }
-static void draw_unlocking(int stage) {
-  float cx = W / 2.0f;
-  float a = frame_no * 0.12f;
-  for (int k = 0; k < 8; k++) {
-    float t = a + k * 0.785f;
-    circle(cx + cosf(t) * 26, 230 + sinf(t) * 26, 4 + k * 0.6f, with_alpha(ACC, 80 + k * 20));
+// ----- the loading screen: at start (while the vault opens behind it) and while a vault unlocks -----
+static vita2d_texture *splash_tex;
+static unsigned splash_until = 96; // (frames: at least about a second and a half at start)
+static void draw_splash(const char *line, int alpha) {
+  float t = frame_no / 60.0f;
+  vita2d_draw_rectangle(0, 0, W, H, with_alpha(BG, alpha));
+  // a slow rose glow, breathing, and a few soft flecks of light drifting up
+  float br = 0.85f + 0.15f * sinf(t * 1.6f);
+  circle(W / 2.0f, 220, 230 * br, with_alpha(ACC, alpha * 22 / 255));
+  circle(W / 2.0f, 220, 150 * br, with_alpha(ACC, alpha * 30 / 255));
+  for (int k = 0; k < 14; k++) {
+    float x = fmodf(k * 173.0f + 40, W), y = H - fmodf(t * (18 + k * 3) + k * 61.0f, H + 40) + 20;
+    circle(x, y, 3 + (k % 4) * 2, with_alpha(ACC2, alpha * (30 + (k % 3) * 15) / 255));
   }
-  text_center(cx, 310, TEXT, 22, stage ? "Opening the vault…" : "Checking the password…");
+  // the heart springs in, then breathes
+  float in_t = fminf(1.0f, frame_no / 36.0f);
+  float spring = 1.0f - expf(-6.0f * in_t) * cosf(9.0f * in_t);
+  float scale = (0.55f + 0.45f * spring) * (1.0f + 0.025f * sinf(t * 3.2f));
+  if (splash_tex) {
+    float sz = 200 * scale;
+    vita2d_draw_texture_tint_scale(splash_tex, W / 2.0f - sz / 2, 214 - sz / 2, sz / 256.0f, sz / 256.0f, with_alpha(RGBA(255, 255, 255, 255), alpha));
+  } else heart(W / 2.0f, 214, 60 * scale, with_alpha(ACC, alpha));
+  int ta = (int)(alpha * fminf(1.0f, fmaxf(0.0f, (frame_no - 14) / 24.0f)));
+  text_center(W / 2, 372, with_alpha(TEXT, ta), 34, "Lewd Vault");
+  text_center(W / 2, 404, with_alpha(DIM, ta), 16, line);
+  // a thin bar with light running along it
+  float bw = 220, bx = W / 2.0f - bw / 2, by = 440;
+  rrect(bx, by, bw, 4, 2, with_alpha(TEXT, ta * 40 / 255));
+  float run = fmodf(t * 0.9f, 1.4f) - 0.2f;
+  float x0 = bx + bw * fmaxf(0, run), x1 = bx + bw * fminf(1, run + 0.25f);
+  if (x1 > x0) rrect(x0, by, x1 - x0, 4, 2, with_alpha(ACC, ta));
+}
+static void draw_unlocking(int stage) {
+  draw_splash(stage ? "Opening the vault\u2026" : "Checking the password\u2026", 255);
 }
 
 static int set_sel;
@@ -911,6 +1030,7 @@ static void draw_bar(void) {
     int next = (screen == S_LIBRARY && k == 1) || (screen == S_WEB && k == 3) || (screen == S_SETTINGS && k == 0);
     if (next) { circle(cx + 30, y - 6, 8, with_alpha(TEXT, 40)); text_center(cx + 30, y - 1, DIM, 12, "\u25cb"); }
     if (hit(cx - W / 8, H - BAR, W / 4, BAR)) {
+      sfx(SFX_TAB);
       if (k == 0) { screen = S_LIBRARY; if (query[0]) { query[0] = 0; refilter(); } }
       if (k == 1) screen = S_WEB;
       if (k == 2 && nshown) open_viewer(sel < nshown ? sel : 0, 1);
@@ -927,9 +1047,9 @@ static int chip(int x, int y, const char *label, int on) {
 }
 
 static float chips_scroll;
+static int last_top_row = -1;
 static void draw_library(void) {
-  int rows = (nshown + COLS - 1) / COLS;
-  float content = rows * (CARD_H + GAP) + 12;
+  float content = lgrid.height + 12;
   float view_h = H - TOP - BAR;
   float max_scroll = fmaxf(0, content - view_h);
 
@@ -940,41 +1060,45 @@ static void draw_library(void) {
   scroll_v *= 0.94f;
   if (fabsf(scroll_v) < 0.2f) scroll_v = 0;
   scroll += in.ly * 14;
-  int moved_sel = 0;
-  if (in.pressed & SCE_CTRL_RIGHT) { sel++; moved_sel = 1; }
-  if (in.pressed & SCE_CTRL_LEFT) { sel--; moved_sel = 1; }
-  if (in.pressed & SCE_CTRL_DOWN) { sel += COLS; moved_sel = 1; }
-  if (in.pressed & SCE_CTRL_UP) { sel -= COLS; moved_sel = 1; }
+  int before = sel;
+  if (in.pressed & SCE_CTRL_RIGHT) sel++;
+  if (in.pressed & SCE_CTRL_LEFT) sel--;
   if (sel >= nshown) sel = nshown - 1;
   if (sel < 0) sel = 0;
-  if (moved_sel) {
-    float top = (sel / COLS) * (CARD_H + GAP);
-    if (top < scroll) scroll_target = (int)top;
-    else if (top + CARD_H > scroll + view_h) scroll_target = (int)(top + CARD_H - view_h + 10);
-    else scroll_target = (int)scroll;
-    scroll += (scroll_target - scroll) * 0.6f;
+  if (in.pressed & SCE_CTRL_DOWN) sel = grid_move(&lgrid, sel, 1);
+  if (in.pressed & SCE_CTRL_UP) sel = grid_move(&lgrid, sel, -1);
+  if (sel != before && sel >= 0 && sel < lgrid.n) {
+    sfx(SFX_TICK);
+    Rect r = lgrid.r[sel];
+    if (r.y < scroll) scroll += (r.y - scroll) * 0.6f + (r.y < scroll - 1 ? -1 : 0);
+    else if (r.y + r.h > scroll + view_h) scroll += (r.y + r.h - view_h + 10 - scroll) * 0.6f;
+    if (r.y < scroll) scroll = r.y;
+    if (r.y + r.h > scroll + view_h) scroll = r.y + r.h - view_h + 10;
   }
   if (scroll < 0) { scroll = in.touching ? scroll : scroll * 0.7f; if (!in.touching) scroll_v = 0; }
   if (scroll > max_scroll) { scroll = in.touching ? scroll : max_scroll + (scroll - max_scroll) * 0.7f; if (!in.touching) scroll_v = 0; }
 
   // --- the grid ---
-  int first = (int)fmaxf(0, scroll / (CARD_H + GAP)) * COLS;
-  int last = (int)((scroll + view_h) / (CARD_H + GAP) + 1) * COLS + COLS;
-  int wanted[64], nw = 0;
-  for (int k = first; k < last && k < nshown; k++) {
+  int first = grid_first(&lgrid, scroll - 8);
+  // (a soft tick each time a row of pictures passes the top, as the Vita's own lists do)
+  if (first < lgrid.n && lgrid.row[first] != last_top_row) { if (last_top_row >= 0 && (in.touching || scroll_v != 0 || in.ly)) sfx(SFX_TICK); last_top_row = lgrid.row[first]; }
+  int wanted[64], nw = 0, last = first;
+  for (int k = first; k < nshown && k < lgrid.n; k++) {
     int i = shown[k];
-    float x = MARGIN + (k % COLS) * (CARD_W + GAP);
-    float y = TOP + 6 + (k / COLS) * (CARD_H + GAP) - scroll;
-    if (y > H || y + CARD_H < TOP - 4) continue;
+    Rect rc = lgrid.r[k];
+    float x = rc.x, y = TOP + 6 + rc.y - scroll, cw = rc.w, ch = rc.h;
+    if (y > H) break;
+    last = k + 1;
+    if (y + ch < TOP - 4) continue;
     LvItem *it = &vault.items[i];
     vita2d_texture *t = thumb_of(i);
     int on = k == sel && !in.touching;
     float grow = on ? 4 : 0;
-    if (on) rrect(x - grow - 3, y - grow - 3, CARD_W + 2 * grow + 6, CARD_H + 2 * grow + 6, 14, ACC);
-    if (t) draw_cover(t, x - grow, y - grow, CARD_W + 2 * grow, CARD_H + 2 * grow, RGBA(255, 255, 255, 255));
+    if (on) rrect(x - grow - 3, y - grow - 3, cw + 2 * grow + 6, ch + 2 * grow + 6, 12, ACC);
+    if (t) draw_cover(t, x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, RGBA(255, 255, 255, 255));
     else {
-      rrect(x - grow, y - grow, CARD_W + 2 * grow, CARD_H + 2 * grow, 10, SURF);
-      if (tstate[i] == 3) text_center(x + CARD_W / 2, y + CARD_H / 2, FAINT, 14, "No picture");
+      rrect(x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, 8, SURF);
+      if (tstate[i] == 3) text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No picture");
       else if (nw < 64) wanted[nw++] = i;
     }
     if (is_video(it) || is_gif(it)) {
@@ -982,15 +1106,15 @@ static void draw_library(void) {
       if (is_gif(it)) snprintf(d, sizeof d, "GIF");
       else snprintf(d, sizeof d, "%d:%02d", (int)it->duration / 60, (int)it->duration % 60);
       int tw = text_w(13, d);
-      rrect(x + CARD_W - tw - 16, y + CARD_H - 26, tw + 12, 20, 10, RGBA(0, 0, 0, 150));
-      text(x + CARD_W - tw - 10, y + CARD_H - 11, TEXT, 13, d);
+      rrect(x + cw - tw - 16, y + ch - 26, tw + 12, 20, 10, RGBA(0, 0, 0, 150));
+      text(x + cw - tw - 10, y + ch - 11, TEXT, 13, d);
     }
-    if (lv_likes_of(&vault, it) > 0) heart(x + 16, y + CARD_H - 16, 6, ACC);
+    if (lv_likes_of(&vault, it) > 0) heart(x + 16, y + ch - 16, 6, ACC);
     if (!it->path) { rrect(x + 6, y + 6, 20, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 16, y + 21, ACC2, 14, "!"); }
-    if (hit((int)x, (int)y, CARD_W, CARD_H) && in.tap_y > TOP && in.tap_y < H - BAR) { sel = k; open_viewer(k, 0); return; }
+    if (hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR) { sel = k; sfx(SFX_SELECT); open_viewer(k, 0); return; }
   }
   // (and the next screenful, ready before it's needed)
-  for (int k = last; k < last + COLS * 3 && k < nshown && nw < 64; k++) if (!thumb_of(shown[k]) && tstate[shown[k]] != 3) wanted[nw++] = shown[k];
+  for (int k = last; k < last + 18 && k < nshown && nw < 64; k++) if (!thumb_of(shown[k]) && tstate[shown[k]] != 3) wanted[nw++] = shown[k];
   ask_thumbs(wanted, nw);
   if (!nshown) {
     text_center(W / 2, TOP + 150, DIM, 20, query[0] ? "Nothing matches that search" : "Nothing here");
@@ -1014,11 +1138,11 @@ static void draw_library(void) {
   sx -= ws;
   rrect(sx, 8, ws, 26, 13, SURF2);
   text(sx + 13, 26, TEXT, 15, SORTS[cfg.sort]);
-  if (hit(sx, 0, ws, 36) || (in.pressed & SCE_CTRL_TRIANGLE)) { cfg.sort = (cfg.sort + 1) % 6; refilter(); cfg_save(); sel = 0; scroll = 0; }
+  if (hit(sx, 0, ws, 36) || (in.pressed & SCE_CTRL_TRIANGLE)) { sfx(SFX_TOGGLE); cfg.sort = (cfg.sort + 1) % 6; refilter(); cfg_save(); sel = 0; scroll = 0; }
   sx -= wk + 8;
   rrect(sx, 8, wk, 26, 13, SURF2);
   text(sx + 13, 26, TEXT, 15, KINDS[cfg.kind]);
-  if (hit(sx, 0, wk, 36) || (in.pressed & SCE_CTRL_SQUARE)) { cfg.kind = (cfg.kind + 1) % 3; refilter(); cfg_save(); sel = 0; scroll = 0; }
+  if (hit(sx, 0, wk, 36) || (in.pressed & SCE_CTRL_SQUARE)) { sfx(SFX_TOGGLE); cfg.kind = (cfg.kind + 1) % 3; refilter(); cfg_save(); sel = 0; scroll = 0; }
   if (query[0]) {
     char q[160];
     snprintf(q, sizeof q, "“%s”  ✕", query);
@@ -1029,6 +1153,7 @@ static void draw_library(void) {
     if (hit(sx, 0, wq, 36)) { query[0] = 0; refilter(); }
   }
   // categories: L / R, or tap
+  if (in.pressed & (SCE_CTRL_RTRIGGER | SCE_CTRL_LTRIGGER)) sfx(SFX_TAB);
   if (in.pressed & SCE_CTRL_RTRIGGER) { cat = cat + 1 >= vault.ncats ? -1 : cat + 1; refilter(); sel = 0; scroll = 0; }
   if (in.pressed & SCE_CTRL_LTRIGGER) { cat = cat - 1 < -1 ? vault.ncats - 1 : cat - 1; refilter(); sel = 0; scroll = 0; }
   if (in.touching && in.ty < TOP && in.ty > 36) chips_scroll -= in.drag_dx;
@@ -1039,7 +1164,7 @@ static void draw_library(void) {
     int w = text_w(16, nm) + 28;
     if (cxp + w > 0 && cxp < W) {
       chip((int)cxp, 34, nm, k == cat);
-      if (hit((int)cxp, 34, w, 30)) { cat = k; refilter(); sel = 0; scroll = 0; }
+      if (hit((int)cxp, 34, w, 30)) { sfx(SFX_TAB); cat = k; refilter(); sel = 0; scroll = 0; }
     }
     // keep the chosen chip in view
     if (k == cat && (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER))) {
@@ -1049,9 +1174,9 @@ static void draw_library(void) {
     cxp += w + 6;
   }
 
-  if ((in.pressed & SCE_CTRL_CROSS) && nshown) open_viewer(sel, 0);
-  if ((in.pressed & SCE_CTRL_START) && nshown) open_viewer(sel, 1);
-  if (in.pressed & SCE_CTRL_CIRCLE) screen = S_WEB; // (○ goes round the tabs: Library, Browser, Settings)
+  if ((in.pressed & SCE_CTRL_CROSS) && nshown) { sfx(SFX_SELECT); open_viewer(sel, 0); }
+  if ((in.pressed & SCE_CTRL_START) && nshown) { sfx(SFX_SLIDESHOW); open_viewer(sel, 1); }
+  if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_WEB; } // (○ goes round the tabs: Library, Browser, Settings)
   draw_bar();
 }
 
@@ -1128,14 +1253,17 @@ static void open_viewer(int k, int show) {
   show_item(k);
 }
 static void close_viewer(void) {
+  sfx(SFX_BACK);
   LOG("close_viewer screen=%d\n", screen);
   account_time();
   stop_video();
   if (lv_vault_save_views(&vault) != 0) LOG("views.csv could not be saved\n");
   screen = S_LIBRARY;
   sel = vk;
-  float top = (sel / COLS) * (CARD_H + GAP);
-  if (top < scroll || top + CARD_H > scroll + H - TOP - BAR) scroll = top - 40;
+  if (sel >= 0 && sel < lgrid.n) {
+    Rect r = lgrid.r[sel];
+    if (r.y < scroll || r.y + r.h > scroll + H - TOP - BAR) scroll = r.y - 40;
+  }
 }
 
 static void fmt_time(uint64_t ms, char *o, size_t n) { int s = (int)(ms / 1000); snprintf(o, n, "%d:%02d", s / 60, s % 60); }
@@ -1182,8 +1310,8 @@ static void draw_viewer(void) {
     }
   } else {
     pinch_d0 = 0;
-    if (swipe_x > 120) { swipe_x = 0; show_item(vk - 1); return; }
-    if (swipe_x < -120) { swipe_x = 0; show_item(vk + 1); return; }
+    if (swipe_x > 120) { swipe_x = 0; sfx(SFX_TICK); show_item(vk - 1); return; }
+    if (swipe_x < -120) { swipe_x = 0; sfx(SFX_TICK); show_item(vk + 1); return; }
     swipe_x *= 0.7f;
     if (zoom < 1.01f) zoom = 1;
   }
@@ -1199,12 +1327,12 @@ static void draw_viewer(void) {
   }
 
   // --- buttons ---
-  if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_RTRIGGER)) { show_item(vk + 1); return; }
-  if (in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER)) { show_item(vk - 1); return; }
+  if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_RTRIGGER)) { sfx(SFX_TICK); show_item(vk + 1); return; }
+  if (in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER)) { sfx(SFX_TICK); show_item(vk - 1); return; }
   if (in.pressed & SCE_CTRL_CIRCLE) { if (details) details = 0; else { close_viewer(); return; } }
-  if (in.pressed & SCE_CTRL_TRIANGLE) details = !details;
-  if (in.pressed & SCE_CTRL_SQUARE) { char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); chrome_until = frame_no + 120; }
-  if (in.pressed & SCE_CTRL_START) { slideshow = !slideshow; slide_at = frame_no; say(slideshow ? "Slideshow" : "Slideshow stopped"); }
+  if (in.pressed & SCE_CTRL_TRIANGLE) { sfx(details ? SFX_CLOSE : SFX_OPEN); details = !details; }
+  if (in.pressed & SCE_CTRL_SQUARE) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); chrome_until = frame_no + 120; }
+  if (in.pressed & SCE_CTRL_START) { sfx(SFX_SLIDESHOW); slideshow = !slideshow; slide_at = frame_no; say(slideshow ? "Slideshow" : "Slideshow stopped"); }
   if (in.pressed & SCE_CTRL_CROSS) {
     if (vid && !vid_clip) lv_video_pause(vid, !lv_video_paused(vid));
     else { zoom = zoom > 1.5f ? 1 : 2.5f; pan_x = pan_y = 0; }
@@ -1321,11 +1449,14 @@ static void draw_settings(void) {
   snprintf(v1, sizeof v1, "%d seconds", cfg.interval);
   snprintf(v2, sizeof v2, "%s", cfg.shuffle ? "On" : "Off");
   snprintf(v3, sizeof v3, "%d%%", cfg.volume);
+  char v4[16];
+  if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   struct { const char *name, *value, *hint; } rows[] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Slideshow: each picture for", v1, "← → to change"},
     {"Slideshow: shuffle", v2, "Plays the items in a random order"},
     {"Video volume", v3, "← → to change"},
+    {"Interface sounds", v4, "The Vita's own clicks and chimes"},
     {"Open another vault", "", "The vaults on the memory card"},
     {"Clear the thumbnail cache", "", "They're made again as you scroll"},
     {"Cover the screen", "SELECT", "A plain screen, at a press, anywhere"},
@@ -1341,6 +1472,7 @@ static void draw_settings(void) {
     if (hit(30, y, W - 60, 50)) { set_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
   textf(30, H - BAR - 8, FAINT, 13, "%s  ·  %d items%s", vault.root, vault.n, vault.untraceable ? "  ·  Untraceable" : "");
+  if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
   if (in.pressed & SCE_CTRL_DOWN) set_sel = (set_sel + 1) % n;
   if (in.pressed & SCE_CTRL_UP) set_sel = (set_sel + n - 1) % n;
   int d = (in.pressed & SCE_CTRL_RIGHT) ? 1 : (in.pressed & SCE_CTRL_LEFT) ? -1 : 0;
@@ -1351,8 +1483,9 @@ static void draw_settings(void) {
       case 0: cfg.interval = cfg.interval + d * (cfg.interval >= 10 ? 5 : 1); if (cfg.interval > 60) cfg.interval = 2; if (cfg.interval < 2) cfg.interval = 60; break;
       case 1: cfg.shuffle = !cfg.shuffle; break;
       case 2: cfg.volume += d * 10; if (cfg.volume > 100) cfg.volume = 0; if (cfg.volume < 0) cfg.volume = 100; break;
-      case 3: if (in.pressed & SCE_CTRL_CROSS) { lv_vault_save_views(&vault); find_vaults(); screen = S_PICK; return; } break;
-      case 4:
+      case 3: cfg.sounds += d * 10; if (cfg.sounds > 100) cfg.sounds = 0; if (cfg.sounds < 0) cfg.sounds = 100; sfx_volume(cfg.sounds); sfx(SFX_TOGGLE); break;
+      case 4: if (in.pressed & SCE_CTRL_CROSS) { lv_vault_save_views(&vault); find_vaults(); screen = S_PICK; return; } break;
+      case 5:
         if (in.pressed & SCE_CTRL_CROSS) {
           DIR *dd = opendir(cache_dir);
           struct dirent *e;
@@ -1362,11 +1495,11 @@ static void draw_settings(void) {
           say("Thumbnail cache cleared");
         }
         break;
-      case 5: if (in.pressed & SCE_CTRL_CROSS) { cover_return = S_SETTINGS; screen = S_COVER; } break;
+      case 6: if (in.pressed & SCE_CTRL_CROSS) { cover_return = S_SETTINGS; screen = S_COVER; } break;
     }
     cfg_save();
   }
-  if (in.pressed & SCE_CTRL_CIRCLE) screen = S_LIBRARY;
+  if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_LIBRARY; }
   draw_bar();
 }
 
@@ -1428,6 +1561,9 @@ int main(void) {
   // (a bigger per-frame vertex pool than vita2d's 1 MB: room to spare on the busiest screen)
   vita2d_init_advanced(4 * 1024 * 1024);
   make_disc();
+  splash_tex = vita2d_load_PNG_file("app0:splash.png");
+  sfx_init();
+  sfx_volume(70);
   lv_video_release_texture = free_later;
   vita2d_set_clear_color(BG);
   vita2d_set_vblank_wait(1);
@@ -1435,6 +1571,8 @@ int main(void) {
   pgf = vita2d_load_default_pgf();
   rnd_state ^= (unsigned)time(NULL);
   cfg_load();
+  sfx_volume(cfg.sounds);
+  sfx(SFX_START);
 
   pthread_t th;
   pthread_attr_t at;
@@ -1453,6 +1591,7 @@ int main(void) {
   for (;;) {
     frame_no++;
     read_input();
+    if (frame_no < splash_until) { in.pressed = 0; in.tap = 0; in.touching = 0; } // (nothing happens under the loading screen)
     if (npending) { vita2d_wait_rendering_done(); for (int k = 0; k < npending; k++) vita2d_free_texture(pending_free[k]); npending = 0; }
     videos_close_now();
     if (woke) {
@@ -1504,6 +1643,12 @@ int main(void) {
       case S_WEBVIEW: draw_webview(); break;
       case S_COVER: draw_cover_screen(); if (in.tap) { screen = cover_return; } break;
     }
+    // the loading screen at start, fading into whatever is behind it once the vault is open
+    if (frame_no < splash_until + 24) {
+      if (frame_no >= splash_until && (screen == S_UNLOCKING || load_state == 1)) splash_until = frame_no + 1; // (still opening)
+      int a = frame_no < splash_until ? 255 : (int)(255 * (splash_until + 24 - frame_no) / 24.0f);
+      if (screen != S_LOCKED || frame_no < splash_until) draw_splash(screen == S_LOCKED ? "Untraceable vault" : "Opening the vault\u2026", a);
+    }
     if (frame_no < message_until && screen != S_COVER) {
       int w = text_w(16, message) + 40;
       int a = message_until - frame_no < 20 ? (message_until - frame_no) * 12 : 240;
@@ -1523,6 +1668,8 @@ int main(void) {
         screen = S_LOCKED;
       } else if (load_state == 2 || load_state == 3) finish_open();
     }
+    static unsigned cfg_tick;
+    if ((screen == S_WEB || screen == S_WEBVIEW) && ++cfg_tick % 600 == 0) cfg_save();
     // views reach the card now and then while looking (and always when leaving the full view)
     if (loaded_vault && vault.views_dirty && ++idle_save > 60 * 30) { lv_vault_save_views(&vault); idle_save = 0; }
   }

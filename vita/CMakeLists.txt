@@ -22,7 +22,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=n
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
 
 # (src/web.c is compiled as part of main.c)
-add_executable(${PROJECT_NAME} src/main.c src/vault.c src/lvcrypt.c src/image.c src/video.c src/booru.c src/json.c src/net.c)
+add_executable(${PROJECT_NAME} src/main.c src/vault.c src/lvcrypt.c src/image.c src/video.c src/booru.c src/json.c src/net.c src/sfx.c)
 target_link_libraries(${PROJECT_NAME}
   vita2d freetype bz2 png turbojpeg webp sharpyuv
   avformat avcodec swresample swscale avutil vpx mp3lame mpg123 opus vorbis ogg
@@ -43,4 +43,20 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
   FILE font.ttf font.ttf
   FILE cacert.pem cacert.pem
+  FILE splash.png splash.png
+  FILE sce_sys/pic0.png sce_sys/pic0.png
+  FILE sounds/tick.wav sounds/tick.wav
+  FILE sounds/select.wav sounds/select.wav
+  FILE sounds/back.wav sounds/back.wav
+  FILE sounds/toggle.wav sounds/toggle.wav
+  FILE sounds/open.wav sounds/open.wav
+  FILE sounds/close.wav sounds/close.wav
+  FILE sounds/tab.wav sounds/tab.wav
+  FILE sounds/error.wav sounds/error.wav
+  FILE sounds/saved.wav sounds/saved.wav
+  FILE sounds/done.wav sounds/done.wav
+  FILE sounds/delete.wav sounds/delete.wav
+  FILE sounds/slideshow.wav sounds/slideshow.wav
+  FILE sounds/more.wav sounds/more.wav
+  FILE sounds/start.wav sounds/start.wav
 )

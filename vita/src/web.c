@@ -366,7 +366,11 @@ static void web_start(void) {
 
 // ---------- searches ----------
 
+static Grid wgrid;
+static float post_aspect(int k) { return posts[k].width > 0 && posts[k].height > 0 ? (float)posts[k].width / posts[k].height : 0.75f; }
 static float wscroll, wscroll_v;
+// picking up where the Browser was: the pages to load again and the post to go back to (-1: none)
+static int resume_pages, resume_sel = -1, resume_checked;
 static int wsel;
 static void web_clear_textures(void) {
   // (the cells stay: only who they belong to is forgotten)
@@ -382,6 +386,8 @@ static void web_search(void) {
   lv_posts_free(posts, nposts);
   posts = NULL;
   nposts = 0;
+  wgrid.n = 0;
+  wgrid.height = 0;
   wpage = 0;
   wend = 0;
   werr[0] = 0;
@@ -450,7 +456,7 @@ static void wv_show(int k) {
 }
 static void wv_save(void) {
   if (saving || wv >= nposts) return;
-  if (is_saved(&posts[wv])) { say("Already in your vault"); return; }
+  if (is_saved(&posts[wv])) { sfx(SFX_ERROR); say("Already in your vault"); return; }
   if (!loaded_vault) { say("Open a vault first"); return; }
   int video = lv_post_is_video(&posts[wv]);
   if (wv_raw_post != wv || (!wv_raw && !video)) { say("Still loading…"); return; }
@@ -498,6 +504,9 @@ static void web_take_results(void) {
         // (the ones not taken: freed with the array below)
         if (count < page_ready.count) { for (int k = count; k < page_ready.count; k++) { LvPost *q = &got[k]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); } }
         nposts += count;
+        grid_build(&wgrid, nposts, post_aspect);
+
+        if (nposts > 0 && page_ready.page > 1) sfx(SFX_MORE);
         free(got);
         got = NULL;
         wpage = page_ready.page;
@@ -508,6 +517,16 @@ static void web_take_results(void) {
     page_ready.ready = 0;
     page_ready.posts = NULL;
     wloading = 0;
+    // picking up where it was: more pages until the post it was on, then back to it
+    if (resume_sel >= 0) {
+      if (resume_sel < nposts && resume_sel < wgrid.n) {
+        wsel = resume_sel;
+        Rect r = wgrid.r[wsel];
+        wscroll = r.y - 40 > 0 ? r.y - 40 : 0;
+        resume_sel = -1;
+      } else if (!wend && wpage < resume_pages) { wloading = 1; list_want = wpage + 1; pthread_cond_broadcast(&wcv); }
+      else resume_sel = -1;
+    }
   }
   int n = nwdone;
   WDone got[24];
@@ -544,7 +563,7 @@ static void web_take_results(void) {
       }
     } else if (d->kind == WD_SAVE) {
       saving = 0;
-      if (d->err[0] || !d->added.uid[0]) say(d->err[0] ? d->err : "It couldn't be saved");
+      if (d->err[0] || !d->added.uid[0]) { sfx(SFX_ERROR); say(d->err[0] ? d->err : "It couldn't be saved"); }
       else if (d->vgen == vgen && loaded_vault) {
         // on the card already (the save thread wrote it): now into the loaded vault
         int before = vault.n;
@@ -555,6 +574,7 @@ static void web_take_results(void) {
         saved_add(d->nw.source);
         char m[160];
         snprintf(m, sizeof m, "Saved to %s (%zu KB)%s", d->cat, d->an / 1024, ok ? "" : ": it shows when the vault is opened again");
+        sfx(SFX_SAVED);
         say(m);
       }
       free((char *)d->nw.tags);
@@ -600,10 +620,11 @@ static void draw_sites_sheet(void) {
     text(x + w - 18 - text_w(13, kinds[LV_SITES[k].kind]), ry + 24, FAINT, 13, kinds[LV_SITES[k].kind]);
     if (hit(x, ry, w, rh)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
+  if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
   if (in.pressed & SCE_CTRL_DOWN) sheet_sel = (sheet_sel + 1) % LV_NSITES;
   if (in.pressed & SCE_CTRL_UP) sheet_sel = (sheet_sel + LV_NSITES - 1) % LV_NSITES;
-  if (in.pressed & SCE_CTRL_CROSS) { sheet = SH_NONE; if (sheet_sel != cfg.site) { cfg.site = sheet_sel; if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST; web_search(); } }
-  else if ((in.pressed & SCE_CTRL_CIRCLE) || (in.tap && !(in.tap_x >= x && in.tap_y < y + LV_NSITES * rh + 16))) sheet = SH_NONE;
+  if (in.pressed & SCE_CTRL_CROSS) { sfx(SFX_SELECT); sheet = SH_NONE; if (sheet_sel != cfg.site) { cfg.site = sheet_sel; if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST; web_search(); } }
+  else if ((in.pressed & SCE_CTRL_CIRCLE) || (in.tap && !(in.tap_x >= x && in.tap_y < y + LV_NSITES * rh + 16))) { sfx(SFX_CLOSE); sheet = SH_NONE; }
   in.pressed = 0;
   in.tap = 0;
 }
@@ -633,6 +654,7 @@ static void draw_filter_sheet(void) {
     }
     if (hit(x, ry, w, rh)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
+  if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
   if (in.pressed & SCE_CTRL_DOWN) sheet_sel = (sheet_sel + 1) % R_N;
   if (in.pressed & SCE_CTRL_UP) sheet_sel = (sheet_sel + R_N - 1) % R_N;
   int d = (in.pressed & SCE_CTRL_RIGHT) ? 1 : (in.pressed & SCE_CTRL_LEFT) ? -1 : (in.pressed & SCE_CTRL_CROSS) ? 1 : 0;
@@ -640,8 +662,8 @@ static void draw_filter_sheet(void) {
     if (sheet_sel == R_SEARCH && (in.pressed & SCE_CTRL_CROSS) && !ime_open) ime_start(3, "Search tags", cfg.wquery, 0);
     else if (sheet_sel >= R_G && sheet_sel <= R_E && (in.pressed & SCE_CTRL_CROSS)) {
       int bit = 1 << (sheet_sel - R_G);
-      if ((cfg.ratings & ~bit) & LV_R_ALL || !(cfg.ratings & bit)) { cfg.ratings ^= bit; web_search(); }
-      else say("At least one rating stays on");
+      if ((cfg.ratings & ~bit) & LV_R_ALL || !(cfg.ratings & bit)) { sfx(SFX_TOGGLE); cfg.ratings ^= bit; web_search(); }
+      else { sfx(SFX_ERROR); say("At least one rating stays on"); }
     } else if (sheet_sel == R_CAT) {
       // the site's name, then the vault's categories
       int cur = -1;
@@ -649,10 +671,11 @@ static void draw_filter_sheet(void) {
       int nx = cfg.save_cat[0] ? cur + d : (d > 0 ? 0 : vault.ncats - 1);
       if (nx < 0 || nx >= vault.ncats) cfg.save_cat[0] = 0;
       else snprintf(cfg.save_cat, sizeof cfg.save_cat, "%s", vault.cats[nx]);
+      sfx(SFX_TOGGLE);
       cfg_save();
     }
   }
-  if ((in.pressed & SCE_CTRL_CIRCLE) || (in.pressed & SCE_CTRL_SQUARE) || (in.tap && !(in.tap_x >= x && in.tap_y < y + R_N * rh + 18))) sheet = SH_NONE;
+  if ((in.pressed & SCE_CTRL_CIRCLE) || (in.pressed & SCE_CTRL_SQUARE) || (in.tap && !(in.tap_x >= x && in.tap_y < y + R_N * rh + 18))) { sfx(SFX_CLOSE); sheet = SH_NONE; }
   in.pressed = 0;
   in.tap = 0;
 }
@@ -662,9 +685,14 @@ static void draw_filter_sheet(void) {
 static void draw_web(void) {
   web_start();
   if (!saved_src && loaded_vault) saved_build();
-  if (!nposts && !wloading && !wend && !werr[0]) web_search();
-  int rows = (nposts + COLS - 1) / COLS;
-  float content = rows * (CARD_H + GAP) + 60;
+  if (!nposts && !wloading && !wend && !werr[0]) {
+    web_search();
+    if (!resume_checked) { resume_checked = 1; resume_pages = cfg.wpages; resume_sel = cfg.wpages > 0 ? cfg.wsel : -1; }
+  }
+  // (remembered as it goes, for next time)
+  cfg.wpages = wpage;
+  cfg.wsel = wsel;
+  float content = wgrid.height + 60;
   float view_h = H - TOP - BAR;
   float max_scroll = fmaxf(0, content - view_h);
   int sheet_open = sheet != SH_NONE;
@@ -675,53 +703,57 @@ static void draw_web(void) {
     wscroll += wscroll_v + in.ly * 14;
     wscroll_v *= 0.94f;
     if (fabsf(wscroll_v) < 0.2f) wscroll_v = 0;
-    int moved = 0;
-    if (in.pressed & SCE_CTRL_RIGHT) { wsel++; moved = 1; }
-    if (in.pressed & SCE_CTRL_LEFT) { wsel--; moved = 1; }
-    if (in.pressed & SCE_CTRL_DOWN) { wsel += COLS; moved = 1; }
-    if (in.pressed & SCE_CTRL_UP) { wsel -= COLS; moved = 1; }
+    int before = wsel;
+    if (in.pressed & SCE_CTRL_RIGHT) wsel++;
+    if (in.pressed & SCE_CTRL_LEFT) wsel--;
     if (wsel >= nposts) wsel = nposts - 1;
     if (wsel < 0) wsel = 0;
-    if (moved) {
-      float top = (wsel / COLS) * (CARD_H + GAP);
-      if (top < wscroll) wscroll = top;
-      else if (top + CARD_H > wscroll + view_h) wscroll = top + CARD_H - view_h + 10;
+    if (in.pressed & SCE_CTRL_DOWN) wsel = grid_move(&wgrid, wsel, 1);
+    if (in.pressed & SCE_CTRL_UP) wsel = grid_move(&wgrid, wsel, -1);
+    if (wsel != before && wsel < wgrid.n) {
+      sfx(SFX_TICK);
+      Rect r = wgrid.r[wsel];
+      if (r.y < wscroll) wscroll = r.y;
+      else if (r.y + r.h > wscroll + view_h) wscroll = r.y + r.h - view_h + 10;
     }
     if (wscroll < 0 && !in.touching) { wscroll *= 0.7f; wscroll_v = 0; }
     if (wscroll > max_scroll && !in.touching) { wscroll = max_scroll + (wscroll - max_scroll) * 0.7f; wscroll_v = 0; }
   }
 
-  int first = (int)fmaxf(0, wscroll / (CARD_H + GAP)) * COLS;
-  int last = (int)((wscroll + view_h) / (CARD_H + GAP) + 1) * COLS + COLS;
-  int wanted[48], nw = 0;
-  for (int k = first; k < last && k < nposts; k++) {
-    float x = MARGIN + (k % COLS) * (CARD_W + GAP);
-    float y = TOP + 6 + (k / COLS) * (CARD_H + GAP) - wscroll;
-    if (y > H || y + CARD_H < TOP - 4) continue;
+  int first = grid_first(&wgrid, wscroll - 8);
+  static int wlast_top_row = -1;
+  if (first < wgrid.n && wgrid.row[first] != wlast_top_row) { if (wlast_top_row >= 0 && (in.touching || wscroll_v != 0 || in.ly)) sfx(SFX_TICK); wlast_top_row = wgrid.row[first]; }
+  int wanted[48], nw = 0, last = first;
+  for (int k = first; k < nposts && k < wgrid.n; k++) {
+    Rect rc = wgrid.r[k];
+    float x = rc.x, y = TOP + 6 + rc.y - wscroll, cw = rc.w, ch = rc.h;
+    if (y > H) break;
+    last = k + 1;
+    if (y + ch < TOP - 4) continue;
     LvPost *p = &posts[k];
     vita2d_texture *t = preview_of(k);
     int on = k == wsel && !in.touching && !sheet_open;
     float g = on ? 4 : 0;
-    if (on) rrect(x - g - 3, y - g - 3, CARD_W + 2 * g + 6, CARD_H + 2 * g + 6, 14, ACC);
-    if (t) draw_cover(t, x - g, y - g, CARD_W + 2 * g, CARD_H + 2 * g, RGBA(255, 255, 255, 255));
+    if (on) rrect(x - g - 3, y - g - 3, cw + 2 * g + 6, ch + 2 * g + 6, 12, ACC);
+    if (t) draw_cover(t, x - g, y - g, cw + 2 * g, ch + 2 * g, RGBA(255, 255, 255, 255));
     else {
-      rrect(x - g, y - g, CARD_W + 2 * g, CARD_H + 2 * g, 10, SURF);
-      if (wstate[k] == 3) text_center(x + CARD_W / 2, y + CARD_H / 2, FAINT, 14, "No preview");
+      rrect(x - g, y - g, cw + 2 * g, ch + 2 * g, 8, SURF);
+      if (wstate[k] == 3) text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No preview");
       else if (nw < 48) wanted[nw++] = k;
     }
     const char *badge = lv_post_is_video(p) ? "VIDEO" : !strcmp(p->ext, "gif") ? "GIF" : NULL;
     if (badge) {
       int tw = text_w(12, badge);
-      rrect(x + CARD_W - tw - 16, y + CARD_H - 26, tw + 12, 20, 10, RGBA(0, 0, 0, 150));
-      text(x + CARD_W - tw - 10, y + CARD_H - 11, TEXT, 12, badge);
+      rrect(x + cw - tw - 16, y + ch - 26, tw + 12, 20, 10, RGBA(0, 0, 0, 150));
+      text(x + cw - tw - 10, y + ch - 11, TEXT, 12, badge);
     }
-    if (is_saved(p)) { circle(x + 17, y + 17, 11, ACC); text_center(x + 17, y + 23, RGBA(20, 12, 16, 255), 14, "✓"); }
-    if (!sheet_open && hit((int)x, (int)y, CARD_W, CARD_H) && in.tap_y > TOP && in.tap_y < H - BAR) { wsel = k; wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; screen = S_WEBVIEW; wv_show(k); return; }
+    if (is_saved(p)) { circle(x + 17, y + 17, 11, ACC); text_center(x + 17, y + 23, RGBA(20, 12, 16, 255), 14, "\u2713"); }
+    if (!sheet_open && hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR) { wsel = k; sfx(SFX_SELECT); wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; screen = S_WEBVIEW; wv_show(k); return; }
   }
-  for (int k = last; k < last + COLS * 3 && k < nposts && nw < 48; k++) if (!preview_of(k) && wstate[k] != 3) wanted[nw++] = k;
+  for (int k = last; k < last + 18 && k < nposts && nw < 48; k++) if (!preview_of(k) && wstate[k] != 3) wanted[nw++] = k;
   ask_previews(wanted, nw);
   // the next page, before the end is reached
-  if (last + COLS * 2 >= nposts) web_more();
+  if (last + 12 >= nposts) web_more();
   if (!nposts) {
     if (!lv_net_online()) text_center(W / 2, TOP + 150, DIM, 20, "Not connected: turn on Wi-Fi in the Vita's settings");
     else if (wloading) {
@@ -744,7 +776,7 @@ static void draw_web(void) {
   int ws = text_w(16, site) + 28;
   rrect(sx, 8, ws, 28, 14, ACC);
   text(sx + 14, 28, RGBA(20, 12, 16, 255), 16, site);
-  if (!sheet_open && hit(sx, 0, ws, 40)) { sheet = SH_SITES; sheet_sel = cfg.site; }
+  if (!sheet_open && hit(sx, 0, ws, 40)) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = cfg.site; }
   // filter and sort on the right
   char sortl[40], filt[40];
   snprintf(sortl, sizeof sortl, "⇅ %s", LV_SORT_NAMES[cfg.wsort]);
@@ -757,13 +789,14 @@ static void draw_web(void) {
   rrect(rx, 8, wsr, 26, 13, SURF2);
   text(rx + 13, 26, TEXT, 15, sortl);
   if (!sheet_open && (hit(rx, 0, wsr, 36) || (in.pressed & SCE_CTRL_TRIANGLE))) {
+    sfx(SFX_TOGGLE);
     do cfg.wsort = (cfg.wsort + 1) % LV_NSORTS; while (cfg.wsort == LV_SORT_HOT && !LV_SITES[cfg.site].hot);
     web_search();
   }
   rx -= wf + 8;
   rrect(rx, 8, wf, 26, 13, nr == 4 ? SURF2 : with_alpha(ACC, 90));
   text(rx + 13, 26, TEXT, 15, filt);
-  if (!sheet_open && (hit(rx, 0, wf, 36) || (in.pressed & SCE_CTRL_SQUARE))) { sheet = SH_FILTER; sheet_sel = 0; in.pressed &= ~SCE_CTRL_SQUARE; }
+  if (!sheet_open && (hit(rx, 0, wf, 36) || (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); sheet = SH_FILTER; sheet_sel = 0; in.pressed &= ~SCE_CTRL_SQUARE; }
   // the search, under the title
   char q[180];
   snprintf(q, sizeof q, "%s", cfg.wquery[0] ? cfg.wquery : "Search tags…");
@@ -782,6 +815,7 @@ static void draw_web(void) {
   if (!sheet_open) {
     // the sites are tabs: L / R go through them
     if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
+      sfx(SFX_TAB);
       cfg.site = (cfg.site + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : LV_NSITES - 1)) % LV_NSITES;
       if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST;
       web_search();
@@ -789,9 +823,9 @@ static void draw_web(void) {
       snprintf(m, sizeof m, "%s", LV_SITES[cfg.site].name);
       say(m);
     }
-    if ((in.pressed & SCE_CTRL_CROSS) && nposts) { wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; screen = S_WEBVIEW; wv_show(wsel); return; }
-    if (in.pressed & SCE_CTRL_CIRCLE) { screen = S_SETTINGS; set_sel = 0; }
-    if (in.pressed & SCE_CTRL_START) { sheet = SH_SITES; sheet_sel = cfg.site; }
+    if ((in.pressed & SCE_CTRL_CROSS) && nposts) { sfx(SFX_SELECT); wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; screen = S_WEBVIEW; wv_show(wsel); return; }
+    if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_SETTINGS; set_sel = 0; }
+    if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = cfg.site; }
   }
   draw_bar();
   if (sheet == SH_SITES) draw_sites_sheet();
@@ -842,24 +876,24 @@ static void draw_webview(void) {
     }
   } else {
     pd0 = 0;
-    if (wswipe > 120) { wswipe = 0; wv_show(wv - 1); return; }
-    if (wswipe < -120) { wswipe = 0; wv_show(wv + 1); return; }
+    if (wswipe > 120) { wswipe = 0; sfx(SFX_TICK); wv_show(wv - 1); return; }
+    if (wswipe < -120) { wswipe = 0; sfx(SFX_TICK); wv_show(wv + 1); return; }
     wswipe *= 0.7f;
     if (wzoom < 1.01f) wzoom = 1;
   }
   if (in.dbl) { wzoom = wzoom > 1.5f ? 1 : 2.5f; wpan_x = (W / 2.0f - in.tap_x) * (wzoom - 1); wpan_y = (H / 2.0f - in.tap_y) * (wzoom - 1); }
   else if (in.tap && wdetails_y < 0.5f) {
-    if (frame_no < wchrome_until && in.tap_x < 70 && in.tap_y < 60) { wv_drop(); screen = S_WEB; return; }
+    if (frame_no < wchrome_until && in.tap_x < 70 && in.tap_y < 60) { sfx(SFX_BACK); wv_drop(); screen = S_WEB; return; }
     else if (frame_no < wchrome_until && in.tap_x > W - 70 && in.tap_y < 60) wdetails = 1;
     else if (frame_no < wchrome_until && in.tap_x > W - 170 && in.tap_x < W - 70 && in.tap_y < 60) wv_save();
     else wchrome_until = frame_no < wchrome_until ? frame_no : frame_no + 240;
   }
 
   // --- buttons ---
-  if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_RTRIGGER)) { wv_show(wv + 1); return; }
-  if (in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER)) { wv_show(wv - 1); return; }
-  if (in.pressed & SCE_CTRL_CIRCLE) { if (wdetails) wdetails = 0; else { wv_drop(); wsel = wv; screen = S_WEB; return; } }
-  if (in.pressed & SCE_CTRL_TRIANGLE) wdetails = !wdetails;
+  if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_RTRIGGER)) { sfx(SFX_TICK); wv_show(wv + 1); return; }
+  if (in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER)) { sfx(SFX_TICK); wv_show(wv - 1); return; }
+  if (in.pressed & SCE_CTRL_CIRCLE) { if (wdetails) { sfx(SFX_CLOSE); wdetails = 0; } else { sfx(SFX_BACK); wv_drop(); wsel = wv; screen = S_WEB; return; } }
+  if (in.pressed & SCE_CTRL_TRIANGLE) { sfx(wdetails ? SFX_CLOSE : SFX_OPEN); wdetails = !wdetails; }
   if (in.pressed & SCE_CTRL_SQUARE) { wv_save(); wchrome_until = frame_no + 120; }
   if (in.pressed & SCE_CTRL_CROSS) {
     if (wv_vid) lv_video_pause(wv_vid, !lv_video_paused(wv_vid));
