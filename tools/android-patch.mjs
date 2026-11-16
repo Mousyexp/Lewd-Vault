@@ -9,7 +9,8 @@
 //   4. Plain http to the app's own media server on 127.0.0.1 (cleartext), and the camera for the
 //      break-in photo.
 //   5. Chat's Nearby (Bluetooth LE, like AirDrop): mobile/android/LvNearby.kt goes in beside the
-//      activity, which hands it the web view as window.LvBle; the Bluetooth permissions.
+//      activity, which hands it the web view as window.LvBle; the Bluetooth permissions; the
+//      microphone for voice notes.
 //   node tools/android-patch.mjs
 import fs from 'node:fs';
 import path from 'node:path';
@@ -86,6 +87,9 @@ if (!/BLUETOOTH_ADVERTISE/.test(m)) m = m.replace(/<application\b/, [
   '<uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />',
   '<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />',
   '<uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />',
+  // (Chat's voice notes: the web view asks, wry turns it into Android's microphone prompt)
+  '<uses-permission android:name="android.permission.RECORD_AUDIO" />',
+  '<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />',
   '<application'].join('\n    '));
 if (!/usesCleartextTraffic/.test(m)) m = m.replace(/<application\b/, '<application android:usesCleartextTraffic="true"');
 fs.writeFileSync(manifestPath, m);

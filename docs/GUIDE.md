@@ -148,6 +148,13 @@ for you to confirm you're 18 or over; nothing connects before that.
   (1280 px) before they leave, and can be **View once**. A picture you receive is saved into your
   vault only when you choose **Save to my vault**. Long-press (right-click) a message for
   reactions, reply, copy and delete; a double tap hearts it.
+- **Voice notes**: with nothing typed, the button beside the message field records (up to two
+  minutes); they travel like pictures.
+- **Videos and big files** (private chats, **+ → Videos & big files**): full size, straight from
+  your device to theirs over a direct link (WebRTC), not through the relays. They tap **Get it**
+  while both apps are open; each side sees the other's internet address. Up to 2 GB.
+- **Read receipts** and **"typing…"** are off until you turn them on in Chat settings (you see
+  other people's if they send them).
 - **Nearby** (phones): the AirDrop-like sheet behind the radar button. While it is open, phones
   close by with Nearby open see each other's nickname, and a tap sends a message or a picture
   straight over Bluetooth, with no internet.

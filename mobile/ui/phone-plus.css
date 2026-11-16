@@ -385,3 +385,5 @@ html.phone.ch-has-unread .ios-tabbar button[data-tab="chat"]::after,
 html.phone.ch-has-unread:not(:has(.ios-tabbar button[data-tab="chat"])) .ios-tabbar button[data-tab="more"]::after {
   content: var(--ch-unread); position: absolute; top: 2px; left: 54%; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 99px;
   background: #ff3b5c; color: #fff; font: 700 11px/18px system-ui, -apple-system, sans-serif; text-align: center; }
+html.phone #tab-chat .ch-rec { margin: 8px 10px calc(var(--safe-b) + 10px); }
+html.phone #tab-chat .ch-voice { min-width: 190px; }

@@ -45,8 +45,9 @@
 
   // ---------- state ----------
   let S = null, rev = 0, started = false, openId = '', msgs = [], msgSig = '', filter = 'all', query = '', replyTo = null;
-  let timer = null;
+  let timer = null, typingSig = '';
   const conv = id => S && S.convs.find(c => c.id === id);
+  const isTyping = c => !!(c && c.typing && Date.now() - c.typing < 6000);
 
   // avatars: a colour from the id, the first letter of the name (rooms: #)
   function avatar(id, name, size, ring) {
@@ -203,7 +204,8 @@
     top.append(make('b', '', c.name));
     if (c.kind === 'room' && c.extra.locked) top.append(make('i', 'ch-lock', ''));
     if (c.muted) top.append(make('i', 'ch-muted', ''));
-    mid.append(top, make('span', 'ch-row-last', c.extra && c.extra.request ? 'Wants to chat with you' : (c.last || (c.kind === 'room' ? 'Joined the room' : 'Say hi 👋'))));
+    const last = make('span', 'ch-row-last' + (isTyping(c) ? ' typing' : ''), isTyping(c) ? 'typing…' : c.extra && c.extra.request ? 'Wants to chat with you' : (c.last || (c.kind === 'room' ? 'Joined the room' : 'Say hi 👋')));
+    mid.append(top, last);
     const side = make('span', 'ch-row-side');
     side.append(make('small', '', when(c.at)));
     if (c.unread) side.append(make('em', 'ch-count', c.unread > 99 ? '99+' : String(c.unread)));
@@ -363,6 +365,8 @@
       <label class="ch-field"><span>Your nickname</span><input class="ch-input ch-set-nick" maxlength="24" autocomplete="off"></label>
       <div class="ch-field"><span>Your code</span><code class="ch-mycode"></code></div>
       <label class="ch-field"><span>Relays <small>(one per line; the defaults come back if you empty it)</small></span><textarea class="ch-input ch-set-relays" rows="4" spellcheck="false"></textarea></label>
+      <label class="ch-toggle"><span><b>Send read receipts</b><small>They see when you've read their messages. You see theirs either way, if they send them.</small></span><input type="checkbox" class="ch-set-receipts"></label>
+      <label class="ch-toggle"><span><b>Show when I'm typing</b><small>In private chats.</small></span><input type="checkbox" class="ch-set-typing"></label>
       <div class="ch-field ch-blocked"><span>Blocked</span></div>
       <p class="ch-help">Everything is end-to-end encrypted on this device before it leaves. The relays see that someone receives something, never who sent it or what it says. Pictures are made smaller before they're sent. Nothing saves itself into your vault: you choose.</p>
       <button class="btn danger ch-wipe" type="button">Erase Chat on this device</button>`;
@@ -370,6 +374,11 @@
     nick.value = S ? S.me.nick : '';
     nick.onchange = () => api('chatNick', nick.value.trim()).then(refresh);
     body.querySelector('.ch-mycode').textContent = S ? S.me.code : '';
+    for (const k of ['receipts', 'typing']) {
+      const box = body.querySelector('.ch-set-' + k);
+      box.checked = !!(S && S.prefs && S.prefs[k]);
+      box.onchange = () => api('chatPrefs', { [k]: box.checked }).then(refresh).catch(e => toast(errMsg(e), 'error'));
+    }
     const relays = body.querySelector('.ch-set-relays');
     relays.value = S ? S.relays.map(r => r.url).join('\n') : '';
     relays.disabled = !!(S && S.custom);
@@ -440,8 +449,10 @@
       <form class="ch-composer">
         <button class="ch-plus" type="button" aria-label="Send a picture"></button>
         <textarea rows="1" placeholder="Message…" spellcheck="true"></textarea>
+        <button class="ch-mic" type="button" aria-label="Record a voice note"></button>
         <button class="ch-send" type="submit" aria-label="Send"></button>
-      </form>`;
+      </form>
+      <div class="ch-rec hidden"><button class="ch-ic ch-x ch-rec-cancel" type="button" aria-label="Cancel"></button><span class="ch-rec-dot"></span><b class="ch-rec-time">0:00</b><span class="ch-rec-bars"></span><button class="ch-send ch-rec-send" type="button" aria-label="Send the voice note"></button></div>`;
     const q = s => f.conv.querySelector(s);
     C = { head: q('.ch-c-head'), title: q('.ch-c-title b'), sub: q('.ch-c-title small'), av: q('.ch-c-av'), scroll: q('.ch-scroll'), list: q('.ch-msgs'), req: q('.ch-req'),
           replybar: q('.ch-replybar'), form: q('.ch-composer'), text: q('.ch-composer textarea'), send: q('.ch-send') };
@@ -452,7 +463,13 @@
     C.req.querySelector('[data-a="accept"]').onclick = () => set(openId, { accept: true });
     C.req.querySelector('[data-a="block"]').onclick = () => block(conv(openId));
     const grow = () => { C.text.style.height = 'auto'; C.text.style.height = Math.min(C.text.scrollHeight, 140) + 'px'; C.form.classList.toggle('typed', !!C.text.value.trim()); };
-    C.text.oninput = grow;
+    let lastTyping = 0;
+    C.text.oninput = () => {
+      grow();
+      // (they see "typing…" if you allow it: Chat settings; the backend decides)
+      if (C.text.value.trim() && Date.now() - lastTyping > 3500 && conv(openId) && conv(openId).kind === 'dm') { lastTyping = Date.now(); api('chatTyping', openId).catch(() => {}); }
+    };
+    q('.ch-mic').onclick = record;
     C.text.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && !isPhone()) { e.preventDefault(); C.form.requestSubmit(); } };
     C.form.onsubmit = async e => {
       e.preventDefault();
@@ -475,6 +492,18 @@
       const people = new Set(msgs.filter(m => !m.mine && Date.now() - m.at < 7 * 86400000).map(m => m.from));
       C.sub.textContent = `Room · ${people.size + 1} ${people.size ? 'people' : 'person'} this week${c.extra.locked ? ' · password' : ''}`;
     } else C.sub.textContent = msgs.some(m => m.via === 'nearby') ? 'Encrypted · also nearby' : 'End-to-end encrypted';
+    const typing = isTyping(c);
+    C.head.classList.toggle('typing', typing);
+    if (typing) C.sub.textContent = 'typing…';
+    let dots = C.list.querySelector('.ch-typing');
+    if (typing && !dots) {
+      dots = make('div', 'ch-msg ch-typing');
+      const bb = make('div', 'ch-bubble'); bb.append(make('i'), make('i'), make('i'));
+      dots.append(bb);
+      C.list.append(dots);
+      const near = C.scroll.scrollHeight - C.scroll.scrollTop - C.scroll.clientHeight < 160;
+      if (near) C.scroll.scrollTop = C.scroll.scrollHeight;
+    } else if (!typing && dots) dots.remove();
     const req = c.extra && c.extra.request;
     C.req.classList.toggle('hidden', !req);
     if (req) C.req.querySelector('span').textContent = `${c.name} isn't in your chats yet.`;
@@ -484,9 +513,9 @@
     if (!openId) return;
     const id = openId;
     let list;
-    try { list = await api('chatMessages', id); } catch (e) { return; }
+    try { list = await api('chatMessages', id, !document.hidden); } catch (e) { return; }
     if (id !== openId || !C) return;
-    const sig = list.map(m => m.id + m.state + (m.deleted ? 'd' : '') + JSON.stringify(m.reacts) + (m.pic ? m.pic.opened : '')).join('|');
+    const sig = list.map(m => m.id + m.state + (m.deleted ? 'd' : '') + JSON.stringify(m.reacts) + (m.pic ? m.pic.opened : '') + (m.file ? m.file.done : '')).join('|');
     msgs = list;
     drawChatHead();
     if (sig === msgSig) return;
@@ -556,6 +585,8 @@
       b.classList.add('has-pic');
       b.append(card);
     }
+    if (m.voice) { b.classList.add('has-voice'); b.append(voiceNote(m)); }
+    if (m.file) { b.classList.add('has-file'); b.append(fileCard(m)); }
     if (m.text) {
       const t = make('div', 'ch-text');
       t.textContent = m.text;
@@ -658,26 +689,13 @@
   }
 
   async function saveToVault(m) {
-    try {
-      const r = await fetch(media(m.pic.mid));
-      if (!r.ok) throw new Error('That picture is gone');
-      const blob = await r.blob();
-      const file = new File([blob], `chat-${m.id}.jpg`, { type: 'image/jpeg' });
-      const input = $('fileInput'), addTab = document.querySelector('header nav button[data-tab="add"]');
-      if (!input || typeof DataTransfer === 'undefined') throw new Error('Saving is not available here');
-      document.querySelectorAll('.ch-viewer').forEach(v => v.remove());
-      if (addTab) addTab.click();
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      input.files = dt.files;
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-      toast('Tag it, and it is in your vault', 'ok');
-    } catch (e) { toast(errMsg(e), 'error'); }
+    return saveFile(media(m.pic.mid), `chat-${m.id}.jpg`, 'image/jpeg');
   }
-
   function attach() {
-    const { body, close } = sheet('Send a picture', 'ch-attach');
+    const { body, close } = sheet('Send', 'ch-attach');
+    const dm = conv(openId) && conv(openId).kind === 'dm';
     body.innerHTML = `
+      <div class="ch-seg"><button type="button" class="on" data-k="pics">Pictures</button><button type="button" data-k="big">Videos &amp; big files</button></div>
       <div class="ch-attach-top">
         <label class="ch-search"><input type="search" placeholder="Search your vault (tags, names)" spellcheck="false"></label>
         <label class="ch-once-opt"><input type="checkbox"><span>View once</span></label>
@@ -713,12 +731,337 @@
     };
     search.oninput = draw;
     draw();
+    // the second page: videos and full-size files, over the direct link (private chats only)
+    const big = make('div', 'ch-page hidden');
+    body.append(big);
+    const segs = body.querySelectorAll('.ch-seg button');
+    segs.forEach(sb => sb.onclick = () => {
+      segs.forEach(x => x.classList.toggle('on', x === sb));
+      const pics = sb.dataset.k === 'pics';
+      for (const el of body.querySelectorAll('.ch-attach-top, .ch-grid, .ch-attach-foot')) el.classList.toggle('hidden', !pics);
+      big.classList.toggle('hidden', pics);
+      if (!pics && !big.dataset.done) drawBig();
+    });
+    function drawBig() {
+      big.dataset.done = '1';
+      if (!dm) { big.append(make('p', 'ch-help', 'Videos and big files go to one person, straight from your device to theirs: open a private chat.')); return; }
+      big.append(make('p', 'ch-help', 'Full size, straight from your device to theirs (not through the relays): they get it while both of you have Lewd Vault open. Each of you sees the other\'s internet address.'));
+      const list = make('div', 'ch-grid');
+      const vids = (typeof library !== 'undefined' && Array.isArray(library) ? library : []).filter(i => i.kind === 'video' || i.kind === 'gif' || i.kind === 'image')
+        .slice().sort((a, b) => (a.kind === 'video' ? -1 : 0) - (b.kind === 'video' ? -1 : 0) || String(b.added || '').localeCompare(String(a.added || ''))).slice(0, 120);
+      for (const it of vids) {
+        const t = make('button', 'ch-tile' + (it.kind === 'video' ? ' vid' : '')); t.type = 'button';
+        const img = make('img'); img.loading = 'lazy'; img.alt = '';
+        img.src = it.thumb ? `${vaultOrigin()}/t/${encodeURIComponent(it.thumb)}?w=220` : vaultUrl(it.id);
+        t.append(img);
+        if (it.kind === 'video' && it.duration) t.append(make('span', 'ch-tile-len', fmtSecs(it.duration)));
+        t.onclick = async () => {
+          close();
+          const size = await itemSize(it.id);
+          if (!size) { toast('Could not read that file', 'error'); return; }
+          const ext = (it.file || '').split('.').pop().toLowerCase();
+          const mime = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', gif: 'image/gif', webp: 'image/webp', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg' }[ext] || 'application/octet-stream';
+          offerFile(openId, { name: it.name || it.file, size, mime, kind: it.kind === 'gif' ? 'image' : it.kind, src: it.id });
+        };
+        list.append(t);
+      }
+      const foot = make('div', 'ch-attach-foot');
+      const pick = make('button', 'btn', 'A video or file from this device…'); pick.type = 'button';
+      const input = make('input'); input.type = 'file'; input.accept = 'video/*,image/*,audio/*'; input.hidden = true;
+      pick.onclick = () => input.click();
+      input.onchange = () => {
+        const f = input.files[0];
+        if (!f) return;
+        close();
+        const kind = f.type.startsWith('video/') ? 'video' : f.type.startsWith('audio/') ? 'audio' : 'image';
+        offerFile(openId, { name: f.name, size: f.size, mime: f.type, kind, src: '' }, f);
+      };
+      foot.append(pick, input);
+      big.append(list, foot);
+    }
   }
 
   async function sendPic(go) {
     toast('Sending the picture…');
     try { await go(); await loadMsgs(true); haptic('light'); }
     catch (e) { toast(errMsg(e), 'error'); }
+  }
+
+  // ---------- voice notes ----------
+  // Recorded here (MediaRecorder: WebM/Opus, or MP4/AAC where that's all there is, as on iPhones), at
+  // most two minutes, then sent like a picture: sealed, in pieces, through the relays.
+  const fmtSecs = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  let recording = null;
+  async function record() {
+    if (recording || !openId) return;
+    if (!navigator.mediaDevices || !window.MediaRecorder) { toast('Recording isn\'t available here', 'error'); return; }
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (e) { toast('Lewd Vault needs the microphone for voice notes', 'error'); return; }
+    const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'].find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
+    const rec = new MediaRecorder(stream, type ? { mimeType: type, audioBitsPerSecond: 32000 } : undefined);
+    const parts = [], cid = openId, started = Date.now();
+    rec.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
+    const bar = F.conv.querySelector('.ch-rec'), time = bar.querySelector('.ch-rec-time'), bars = bar.querySelector('.ch-rec-bars');
+    bars.innerHTML = '';
+    for (let i = 0; i < 28; i++) bars.append(make('i'));
+    // a live level meter
+    let ctx = null, an = null, raf = 0;
+    try { ctx = new (window.AudioContext || window.webkitAudioContext)(); an = ctx.createAnalyser(); an.fftSize = 64; ctx.createMediaStreamSource(stream).connect(an); } catch (e) {}
+    const data = new Uint8Array(32);
+    const tick = () => {
+      const s = (Date.now() - started) / 1000;
+      time.textContent = fmtSecs(s);
+      if (an) { an.getByteFrequencyData(data); [...bars.children].forEach((b, i) => b.style.setProperty('--v', String(Math.max(.12, data[i % 16] / 255)))); }
+      if (s >= 120) finish(true); else raf = requestAnimationFrame(tick);
+    };
+    const finish = send => {
+      if (!recording) return;
+      recording = null;
+      cancelAnimationFrame(raf);
+      bar.classList.add('hidden');
+      C.form.classList.remove('hidden');
+      rec.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        if (ctx) ctx.close().catch(() => {});
+        const secs = (Date.now() - started) / 1000;
+        if (!send || secs < 0.6) return;
+        const blob = new Blob(parts, { type: rec.mimeType || type || 'audio/webm' });
+        haptic('light');
+        try { await api('chatSendVoice', cid, await dataUrl(blob), blob.type, secs); if (cid === openId) await loadMsgs(true); }
+        catch (e) { toast(errMsg(e), 'error'); }
+      };
+      try { rec.stop(); } catch (e) {}
+    };
+    recording = { finish };
+    bar.querySelector('.ch-rec-cancel').onclick = () => finish(false);
+    bar.querySelector('.ch-rec-send').onclick = () => finish(true);
+    C.form.classList.add('hidden');
+    bar.classList.remove('hidden');
+    haptic('medium');
+    rec.start(250);
+    tick();
+  }
+  const dataUrl = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
+
+  // one player for every voice note
+  const player = new Audio();
+  let playing = null;
+  player.addEventListener('timeupdate', () => { if (playing) playing.style.setProperty('--p', String(player.duration ? player.currentTime / player.duration : 0)); });
+  player.addEventListener('ended', () => { if (playing) { playing.classList.remove('on'); playing.style.setProperty('--p', '0'); } playing = null; });
+  function voiceNote(m) {
+    const v = m.voice;
+    const el = make('div', 'ch-voice');
+    const play = make('button', 'ch-play'); play.type = 'button'; play.setAttribute('aria-label', 'Play');
+    const wave = make('span', 'ch-wave');
+    let h = 0; for (const ch of m.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    for (let i = 0; i < 30; i++) { h = (h * 1103515245 + 12345) >>> 0; const b = make('i'); b.style.setProperty('--v', String(.2 + (h % 80) / 100)); wave.append(b); }
+    el.append(play, wave, make('small', 'ch-voice-len', fmtSecs(v.secs || 0)));
+    play.onclick = e => {
+      e.stopPropagation();
+      if (playing === el) { if (player.paused) { player.play().catch(() => {}); el.classList.add('on'); } else { player.pause(); el.classList.remove('on'); } return; }
+      if (playing) { playing.classList.remove('on'); playing.style.setProperty('--p', '0'); }
+      playing = el;
+      player.src = media(v.mid);
+      player.play().then(() => el.classList.add('on')).catch(() => toast('Could not play it', 'error'));
+    };
+    wave.onclick = e => { if (playing === el && player.duration) { const r = wave.getBoundingClientRect(); player.currentTime = player.duration * Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); } };
+    return el;
+  }
+
+  // ---------- big files and videos: straight from one device to the other ----------
+  // The card goes through the relays like a message; the bytes don't. The one receiving taps "Get it":
+  // the two pages make a WebRTC data channel (built into every web view), trading their connection
+  // offers as ephemeral sealed messages (chatSignal), and the sender streams the file over it. That
+  // needs both apps open at the same time, and shows each side the other's internet address.
+  const ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }] };
+  const transfers = new Map(); // fid -> { state, got, size, error, pc }
+  const sources = new Map();   // fid -> a File picked from this device (vault items are fetched again)
+  let fastUntil = 0;           // (poll quickly while a link may be wanted)
+  const fmtSize = n => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' KB';
+  const gathered = pc => new Promise(res => {
+    if (pc.iceGatheringState === 'complete') return res();
+    const t = setTimeout(res, 3500);
+    pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } });
+  });
+  const drawCard = fid => { const el = F && F.conv.querySelector(`.ch-file[data-fid="${fid}"]`); if (el && el.__draw) el.__draw(); };
+
+  function fileCard(m) {
+    const f = m.file;
+    const el = make('div', 'ch-file ' + (f.kind || 'file'));
+    el.dataset.fid = f.fid;
+    const draw = () => {
+      const t = transfers.get(f.fid) || {};
+      el.innerHTML = '';
+      if (f.done && f.mid) {
+        const url = media(f.mid);
+        let view;
+        if (f.kind === 'video') { view = make('video'); view.controls = true; view.preload = 'metadata'; view.playsInline = true; view.src = url; }
+        else if (f.kind === 'audio') { view = make('audio'); view.controls = true; view.src = url; }
+        else { view = make('img'); view.src = url; view.alt = ''; view.onclick = () => viewer({ ...m, pic: { mid: f.mid } }); }
+        el.append(view);
+        const row = make('div', 'ch-file-row');
+        row.append(make('span', 'ch-file-name', f.name));
+        const s = make('button', 'btn small', 'Save to my vault'); s.type = 'button';
+        s.onclick = e => { e.stopPropagation(); saveFile(url, f.name, f.mime); };
+        row.append(s);
+        el.append(row);
+        return;
+      }
+      const head = make('div', 'ch-file-head');
+      head.append(make('span', 'ch-file-ico'), make('span', 'ch-file-name', f.name), make('small', '', fmtSize(f.size)));
+      el.append(head);
+      const pct = t.size ? Math.min(100, Math.round(100 * (t.got || 0) / t.size)) : 0;
+      if (t.state === 'moving') { const bar = make('div', 'ch-file-bar'); bar.style.setProperty('--p', pct + '%'); el.append(bar, make('small', 'ch-file-note', `${m.mine ? 'Sending' : 'Receiving'} · ${pct}%`)); return; }
+      if (t.state === 'connecting') { el.append(make('small', 'ch-file-note', m.mine ? 'Connecting…' : 'Asking their device…')); return; }
+      if (t.state === 'sent') { el.append(make('small', 'ch-file-note', 'Sent ✓')); return; }
+      if (t.error) el.append(make('small', 'ch-file-note bad', t.error));
+      if (m.mine) el.append(make('small', 'ch-file-note', 'Goes straight to them when they tap "Get it" (keep Lewd Vault open)'));
+      else {
+        const get = make('button', 'btn small primary', t.error ? 'Try again' : 'Get it'); get.type = 'button';
+        get.onclick = e => { e.stopPropagation(); getFile(openId, f); };
+        el.append(get, make('small', 'ch-file-note', 'Comes straight from their device: they need Lewd Vault open. They see your internet address.'));
+      }
+    };
+    el.__draw = draw;
+    draw();
+    return el;
+  }
+
+  async function getFile(cid, f) {
+    const old = transfers.get(f.fid);
+    if (old && (old.state === 'connecting' || old.state === 'moving')) return;
+    const T = { state: 'connecting', got: 0, size: f.size };
+    transfers.set(f.fid, T);
+    fastUntil = Date.now() + 60000;
+    drawCard(f.fid);
+    const fail = msg => { if (T.state === 'done') return; T.state = 'failed'; T.error = msg; try { T.pc.close(); } catch (e) {} drawCard(f.fid); };
+    try {
+      const pc = T.pc = new RTCPeerConnection(ICE);
+      const dc = pc.createDataChannel('lv-file', { ordered: true });
+      dc.binaryType = 'arraybuffer';
+      let buf = [], bufLen = 0, first = true, writing = Promise.resolve();
+      const flush = () => {
+        if (!bufLen) return writing;
+        const blob = new Blob(buf), isFirst = first;
+        buf = []; bufLen = 0; first = false;
+        writing = writing.then(async () => api('chatFilePart', cid, f.fid, (await dataUrl(blob)).split(',')[1], isFirst));
+        return writing;
+      };
+      dc.onopen = () => { T.state = 'moving'; drawCard(f.fid); };
+      dc.onmessage = e => {
+        if (typeof e.data === 'string') {
+          let msg = {}; try { msg = JSON.parse(e.data); } catch (err) {}
+          if (msg.error) return fail(msg.error);
+          if (msg.done) {
+            flush().then(() => api('chatFileDone', cid, f.fid)).then(() => {
+              T.state = 'done'; pc.close(); haptic('success');
+              api('chatSignal', cid, f.fid, { kind: 'got' }).catch(() => {});
+              if (cid === openId) { msgSig = ''; loadMsgs(); }
+            }).catch(err => fail(errMsg(err)));
+          }
+          return;
+        }
+        buf.push(e.data); bufLen += e.data.byteLength; T.got += e.data.byteLength;
+        if (bufLen >= 1 << 20) flush().catch(err => fail(errMsg(err)));
+        if (!T.drawn || Date.now() - T.drawn > 250) { T.drawn = Date.now(); drawCard(f.fid); }
+      };
+      pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') fail('The direct link didn\'t work between your two networks. Try on the same Wi-Fi.'); };
+      await pc.setLocalDescription(await pc.createOffer());
+      await gathered(pc);
+      await api('chatSignal', cid, f.fid, { kind: 'offer', sdp: pc.localDescription.sdp });
+      setTimeout(() => { if (T.state === 'connecting') fail('No answer: they need Lewd Vault open to send it. Try again in a bit.'); }, 30000);
+    } catch (e) { fail(errMsg(e)); }
+  }
+
+  // the other side's half of the handshake (polled with the chat)
+  async function takeSignals() {
+    let list = [];
+    try { list = await api('chatSignals'); } catch (e) { return; }
+    for (const { cid, fid, sig } of list || []) {
+      if (!sig) continue;
+      if (sig.kind === 'offer') answerOffer(cid, fid, sig.sdp).catch(() => {});
+      else if (sig.kind === 'answer') { const T = transfers.get(fid); if (T && T.pc && T.state === 'connecting') T.pc.setRemoteDescription({ type: 'answer', sdp: sig.sdp }).catch(() => {}); }
+      else if (sig.kind === 'gone') { const T = transfers.get(fid); if (T) { T.state = 'failed'; T.error = 'They no longer have it to send.'; try { T.pc.close(); } catch (e) {} drawCard(fid); } }
+      else if (sig.kind === 'got') { const T = transfers.get(fid) || {}; T.state = 'sent'; transfers.set(fid, T); drawCard(fid); }
+    }
+  }
+
+  async function answerOffer(cid, fid, sdp) {
+    const card = await api('chatFileInfo', cid, fid).catch(() => null);
+    const file = sources.get(fid);
+    if (!card || (!file && !card.src)) { api('chatSignal', cid, fid, { kind: 'gone' }).catch(() => {}); return; }
+    const T = { state: 'connecting', got: 0, size: card.size };
+    transfers.set(fid, T);
+    fastUntil = Date.now() + 60000;
+    drawCard(fid);
+    const pc = T.pc = new RTCPeerConnection(ICE);
+    pc.ondatachannel = e => {
+      const dc = e.channel;
+      dc.binaryType = 'arraybuffer';
+      const go = async () => {
+        try {
+          const blob = file || await (await fetch(vaultUrl(card.src))).blob();
+          T.state = 'moving'; drawCard(fid);
+          const CH = 64 * 1024;
+          dc.bufferedAmountLowThreshold = 1 << 20;
+          for (let off = 0; off < blob.size; off += CH) {
+            if (dc.readyState !== 'open') throw new Error('The link closed');
+            if (dc.bufferedAmount > 8 << 20) await new Promise(r => { dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; r(); }; });
+            dc.send(await blob.slice(off, off + CH).arrayBuffer());
+            T.got = Math.min(blob.size, off + CH);
+            if (!T.drawn || Date.now() - T.drawn > 250) { T.drawn = Date.now(); drawCard(fid); }
+          }
+          dc.send(JSON.stringify({ done: true }));
+          T.state = 'sent'; drawCard(fid);
+        } catch (err) {
+          try { dc.send(JSON.stringify({ error: 'Sending stopped: ' + errMsg(err) })); } catch (e2) {}
+          T.state = 'failed'; T.error = errMsg(err); drawCard(fid);
+        }
+      };
+      if (dc.readyState === 'open') go(); else dc.onopen = go;
+    };
+    await pc.setRemoteDescription({ type: 'offer', sdp });
+    await pc.setLocalDescription(await pc.createAnswer());
+    await gathered(pc);
+    await api('chatSignal', cid, fid, { kind: 'answer', sdp: pc.localDescription.sdp });
+  }
+
+  async function offerFile(cid, info, file) {
+    try {
+      const fid = await api('chatFileOffer', cid, info);
+      if (file) sources.set(fid, file);
+      fastUntil = Date.now() + 10 * 60000;
+      if (cid === openId) await loadMsgs(true);
+    } catch (e) { toast(errMsg(e), 'error'); }
+  }
+  // a vault item's size, from a one-byte range ("bytes 0-0/<size>")
+  async function itemSize(id) {
+    try {
+      const r = await fetch(vaultUrl(id), { headers: { Range: 'bytes=0-0' } });
+      const cr = r.headers.get('Content-Range') || '';
+      const n = +cr.split('/')[1] || +r.headers.get('Content-Length') || 0;
+      try { r.body && r.body.cancel(); } catch (e) {}
+      return n;
+    } catch (e) { return 0; }
+  }
+
+  async function saveFile(url, name, type) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('That file is gone');
+      const blob = await r.blob();
+      const file = new File([blob], name, { type: type || blob.type });
+      const input = $('fileInput'), addTab = document.querySelector('header nav button[data-tab="add"]');
+      if (!input || typeof DataTransfer === 'undefined') throw new Error('Saving is not available here');
+      document.querySelectorAll('.ch-viewer').forEach(v => v.remove());
+      if (addTab) addTab.click();
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      toast('Tag it, and it is in your vault', 'ok');
+    } catch (e) { toast(errMsg(e), 'error'); }
   }
 
   // ---------- Nearby: phones close by, over Bluetooth (like AirDrop) ----------
@@ -827,6 +1170,10 @@
     if (!started) return;
     let r;
     try { r = await api('chatState', rev); } catch (e) { return; }
+    takeSignals();
+    // ("typing…" fades on its own: redraw when who is typing changes, even if nothing else did)
+    const typingNow = S ? S.convs.filter(isTyping).map(c => c.id).join() : '';
+    if (r && !r.convs && typingNow !== typingSig) { typingSig = typingNow; if (openId) drawChatHead(); if (!tab.classList.contains('hidden') && F) drawList(); }
     if (!r || r.rev === rev && !r.convs) return;
     if (r.convs) { S = r; rev = r.rev; }
     const total = S.convs.filter(c => !c.muted).reduce((n, c) => n + (c.unread || 0), 0);
@@ -841,7 +1188,7 @@
   }
   function schedule() {
     clearTimeout(timer);
-    timer = setTimeout(async () => { await refresh(); schedule(); }, visible() ? 1200 : 9000);
+    timer = setTimeout(async () => { await refresh(); schedule(); }, visible() || Date.now() < fastUntil ? 1200 : 9000);
   }
   function start() {
     started = true;

@@ -14,6 +14,9 @@
   <string>Unlock Lewd Vault with Face ID instead of typing your PIN.</string>
   <key>NSCameraUsageDescription</key>
   <string>Only for the break-in photo: after three wrong PINs, the front camera takes one picture for you to see later.</string>
+  <!-- Chat's voice notes. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>To record voice notes in Chat, only while you are recording one.</string>
   <!-- Chat's Nearby: send to a phone close by over Bluetooth, only while its sheet is open. -->
   <key>NSBluetoothAlwaysUsageDescription</key>
   <string>Chat's Nearby uses Bluetooth to find phones close by and send them messages and pictures, only while you have Nearby open.</string>

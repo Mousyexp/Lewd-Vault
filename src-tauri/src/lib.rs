@@ -1725,14 +1725,6 @@ fn serve(vault: &Vault, req: &HttpRequest<Vec<u8>>) -> Response<Vec<u8>> {
             _ => fail(404, "Not in the inbox".into()),
         };
     }
-    // /chat/<id>: a picture sent or received in a chat (chat.rs)
-    if let Some(rest) = req.uri().path().strip_prefix("/chat/") {
-        return match chat::media(rest) {
-            Some(body) => cors(200).header("Content-Type", "image/jpeg").header("Cache-Control", "no-store")
-                .header("Content-Length", body.len().to_string()).body(body).unwrap(),
-            None => fail(404, "Gone".into()),
-        };
-    }
     // /t/<thumb>?w=<width>: a thumbnail for the grid (see grid_thumb); never changes, so cached for good
     if let Some(rest) = req.uri().path().strip_prefix("/t/") {
         let thumb = percent_decode_str(rest).decode_utf8_lossy().into_owned();
@@ -1769,6 +1761,11 @@ fn serve(vault: &Vault, req: &HttpRequest<Vec<u8>>) -> Response<Vec<u8>> {
         Some(d) => match vault.web.download_path(d) {
             Some(p) => p,
             None => return fail(404, "That download isn't finished".into()),
+        },
+        // /chat/<id>: a picture, voice note or file in a chat (chat.rs)
+        None if id.starts_with("chat/") => match chat::media_file(&id[5..]) {
+            Some(p) => p,
+            None => return fail(404, "Gone".into()),
         },
         None => match vault.resolve(&id) {
             Ok(p) => p,

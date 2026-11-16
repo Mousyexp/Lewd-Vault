@@ -45,6 +45,9 @@ type Res<T> = Result<T, String>;
 const KIND_SEAL: u32 = 13;
 const KIND_RUMOR: u32 = 14;
 const KIND_WRAP: u32 = 1059;
+/// the same wrap, but ephemeral (NIP-16: relays pass it on and keep nothing): "typing", and the direct
+/// link's handshake
+const KIND_WRAP_NOW: u32 = 21059;
 const KIND_ROOM: u32 = 4573;
 const KIND_AUTH: u32 = 22242;
 /// (the same public relays bitchat starts with; editable in the chat's settings)
@@ -53,6 +56,9 @@ const MAX_ENVELOPE: usize = 96 * 1024;
 const PIECE_DM: usize = 14 * 1024;
 const PIECE_ROOM: usize = 24 * 1024;
 const MAX_PICTURE: usize = 420 * 1024;
+const MAX_VOICE: usize = 900 * 1024;
+/// what the direct link takes (it never goes through the relays)
+const MAX_FILE: u64 = 2 * 1024 * 1024 * 1024;
 const KEEP_MESSAGES: usize = 3000;
 const OUTBOX_HOURS: i64 = 24;
 const ROOM_DAYS: i64 = 7;
@@ -199,19 +205,24 @@ fn jittered() -> i64 {
 
 /// A private message, sealed and wrapped for `to` (bitchat's createPrivateMessage).
 pub fn wrap(me: &SigningKey, to: &str, payload: &str) -> Res<Event> {
+    wrap_kind(me, to, payload, KIND_WRAP)
+}
+
+fn wrap_kind(me: &SigningKey, to: &str, payload: &str, kind: u32) -> Res<Event> {
     let my_pub = pub_of(me);
     let mut rumor = Event::new(my_pub.clone(), now(), KIND_RUMOR, vec![], payload.to_string());
     rumor.id = hex(&rumor.hash());
     let seal = Event::new(my_pub, jittered(), KIND_SEAL, vec![], lock_box(&shared_key(me, to)?, rumor.json().as_bytes())).sign(me);
     let once = new_key();
     let wrapped = lock_box(&shared_key(&once, to)?, seal.json().as_bytes());
-    Ok(Event::new(pub_of(&once), jittered(), KIND_WRAP, vec![vec!["p".into(), to.into()]], wrapped).sign(&once))
+    let at = if kind == KIND_WRAP { jittered() } else { now() }; // (an ephemeral one is gone at once anyway)
+    Ok(Event::new(pub_of(&once), at, kind, vec![vec!["p".into(), to.into()]], wrapped).sign(&once))
 }
 
 /// The other way (bitchat's decryptPrivateMessage, with its checks): (sender, time sent, payload).
 pub fn unwrap(me: &SigningKey, ev: &Event) -> Res<(String, i64, String)> {
     let my_pub = pub_of(me);
-    if ev.kind != KIND_WRAP || ev.content.len() > MAX_ENVELOPE * 2 || ev.tags != vec![vec!["p".to_string(), my_pub.clone()]] || !ev.verify() {
+    if !matches!(ev.kind, KIND_WRAP | KIND_WRAP_NOW) || ev.content.len() > MAX_ENVELOPE * 2 || ev.tags != vec![vec!["p".to_string(), my_pub.clone()]] || !ev.verify() {
         return Err("Not a wrap for me".into());
     }
     let seal: Event = serde_json::from_slice(&open_box(&shared_key(me, &ev.pubkey)?, &ev.content)?).map_err(|_| "Bad seal")?;
@@ -311,7 +322,9 @@ struct Saved {
     since_room: i64,
     seen: VecDeque<String>,
     outbox: Vec<Outgoing>,
+    /// send read receipts / show that you are typing (both off unless you say so)
     receipts: bool,
+    typing: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -326,6 +339,29 @@ struct Picture {
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(default)]
+struct Voice {
+    mid: String,
+    secs: f64,
+    mime: String,
+}
+
+/// A file offered over the direct link: the card in both chats. `src` (the sender's side only) is the
+/// vault item it comes from; `mid` the copy received here, once `done`.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+struct FileCard {
+    fid: String,
+    name: String,
+    size: u64,
+    mime: String,
+    kind: String,
+    src: String,
+    mid: String,
+    done: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
 struct Msg {
     id: String,
     from: String,
@@ -333,6 +369,10 @@ struct Msg {
     at: i64,
     text: String,
     pic: Option<Picture>,
+    voice: Option<Voice>,
+    file: Option<FileCard>,
+    /// (theirs: a read receipt went for it)
+    seen: bool,
     reply: String,
     reacts: BTreeMap<String, Vec<String>>,
     mine: bool,
@@ -359,6 +399,10 @@ struct St {
     parts: HashMap<String, Partial>,
     rate: HashMap<String, VecDeque<i64>>,
     open: String,
+    /// someone typing in a chat: when they last said so
+    typing: HashMap<String, i64>,
+    /// the direct link's handshakes, for the page
+    signals: Vec<Value>,
 }
 
 struct RelayLink {
@@ -417,7 +461,7 @@ impl Chat {
         let me = pub_of(&key);
         Arc::new(Chat {
             dir,
-            st: Mutex::new(St { saved, key, me, msgs: HashMap::new(), dirty: HashSet::new(), dirty_state: true, parts: HashMap::new(), rate: HashMap::new(), open: String::new() }),
+            st: Mutex::new(St { saved, key, me, msgs: HashMap::new(), dirty: HashSet::new(), dirty_state: true, parts: HashMap::new(), rate: HashMap::new(), open: String::new(), typing: HashMap::new(), signals: Vec::new() }),
             links: Mutex::new(Vec::new()),
             up: Mutex::new(HashMap::new()),
             rev: AtomicU64::new(1),
@@ -490,8 +534,12 @@ impl Chat {
     fn conv_path(&self, cid: &str) -> PathBuf {
         self.dir.join(format!("c-{}.json", hex(&sha256(cid.as_bytes())[..10])))
     }
+    /// A message's file: m-<id>.<ext> (the extension gives its type to the file server; the first
+    /// pictures had none: .bin)
     fn media_path(&self, mid: &str) -> PathBuf {
-        self.dir.join(format!("m-{}.bin", mid.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>()))
+        let clean: String = mid.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '.').collect();
+        let clean = clean.trim_matches('.');
+        if clean.contains('.') { self.dir.join(format!("m-{clean}")) } else { self.dir.join(format!("m-{clean}.bin")) }
     }
 
     // ---------- the subscriptions every relay is asked for ----------
@@ -499,7 +547,10 @@ impl Chat {
     fn filters(&self) -> Vec<Value> {
         let st = self.st.lock().unwrap();
         // (wraps are back-dated up to 15 minutes, and a phone may be off for a while: two days of margin)
-        let mut f = vec![json!({ "kinds": [KIND_WRAP], "#p": [st.me], "since": st.saved.since_dm - 2 * 86400 })];
+        let mut f = vec![
+            json!({ "kinds": [KIND_WRAP], "#p": [st.me], "since": st.saved.since_dm - 2 * 86400 }),
+            json!({ "kinds": [KIND_WRAP_NOW], "#p": [st.me], "since": now() - 60 }),
+        ];
         if !st.saved.rooms.is_empty() {
             let tags: Vec<&String> = st.saved.rooms.keys().collect();
             f.push(json!({ "kinds": [KIND_ROOM], "#r": tags, "since": st.saved.since_room.max(now() - ROOM_DAYS * 86400) - 600, "limit": 500 }));
@@ -550,7 +601,7 @@ impl Chat {
 
     /// An event from a relay (or a nearby phone). Returns true if it was something for us.
     pub fn take(&self, ev: Event, via: &str) -> bool {
-        if ev.content.len() > MAX_ENVELOPE * 2 || !matches!(ev.kind, KIND_WRAP | KIND_ROOM) {
+        if ev.content.len() > MAX_ENVELOPE * 2 || !matches!(ev.kind, KIND_WRAP | KIND_WRAP_NOW | KIND_ROOM) {
             return false;
         }
         let mut st = self.st.lock().unwrap();
@@ -558,8 +609,10 @@ impl Chat {
             return false;
         }
         let got = match ev.kind {
-            KIND_WRAP => unwrap(&st.key, &ev).ok().map(|(from, at, payload)| {
-                st.saved.since_dm = st.saved.since_dm.max(ev.created_at.min(now()));
+            KIND_WRAP | KIND_WRAP_NOW => unwrap(&st.key, &ev).ok().map(|(from, at, payload)| {
+                if ev.kind == KIND_WRAP {
+                    st.saved.since_dm = st.saved.since_dm.max(ev.created_at.min(now()));
+                }
                 (None, from, at, payload)
             }),
             _ => {
@@ -629,13 +682,15 @@ impl Chat {
                     return false;
                 }
                 let text = clip(p["text"].as_str().unwrap_or(""), 4000);
+                st.typing.remove(&cid);
                 if p["t"] == "hi" && text.is_empty() {
                     return room.is_none() && !mine; // (a hello: the contact appears, nothing to show)
                 }
                 let reply = clip(p["reply"].as_str().unwrap_or(""), 32);
                 add_msg(st, &cid, Msg { id, from: from.into(), nick, at: at_ms, text, reply, mine, state: if mine { "sent".into() } else { "received".into() }, via: via.into(), ..Default::default() })
             }
-            "img" => {
+            "img" | "voice" => {
+                let voice = p["t"] == "voice";
                 let (n, i) = (p["n"].as_u64().unwrap_or(0) as usize, p["i"].as_u64().unwrap_or(0) as usize);
                 if id.is_empty() || n == 0 || n > 64 || i >= n {
                     return false;
@@ -657,17 +712,82 @@ impl Chat {
                 }
                 let part = st.parts.remove(&key).unwrap();
                 let bytes: Vec<u8> = part.pieces.into_iter().flatten().flatten().collect();
-                if bytes.len() > MAX_PICTURE * 2 || image::guess_format(&bytes).is_err() {
+                let f = &part.first;
+                st.typing.remove(&cid);
+                if voice {
+                    let mime = clip(f["mime"].as_str().unwrap_or(""), 40);
+                    if bytes.len() > MAX_VOICE || !mime.starts_with("audio/") {
+                        return false;
+                    }
+                    let mid = format!("{}.{}", new_id(), ext_for(&mime));
+                    if crate::write_atomic(&self.media_path(&mid), &bytes).is_err() {
+                        return false;
+                    }
+                    let v = Voice { mid, secs: f["secs"].as_f64().unwrap_or(0.0).clamp(0.0, 600.0), mime };
+                    return add_msg(st, &cid, Msg { id, from: from.into(), nick, at: part.at, voice: Some(v), mine, state: if mine { "sent".into() } else { "received".into() }, via: via.into(), ..Default::default() });
+                }
+                let Ok(format) = image::guess_format(&bytes) else { return false };
+                if bytes.len() > MAX_PICTURE * 2 {
                     return false;
                 }
-                let mid = new_id();
+                let mid = format!("{}.{}", new_id(), format.extensions_str().first().copied().unwrap_or("jpg"));
                 if crate::write_atomic(&self.media_path(&mid), &bytes).is_err() {
                     return false;
                 }
-                let f = &part.first;
                 let pic = Picture { mid, w: f["w"].as_u64().unwrap_or(0) as u32, h: f["h"].as_u64().unwrap_or(0) as u32, once: f["once"].as_bool().unwrap_or(false), opened: false };
                 let text = clip(f["text"].as_str().unwrap_or(""), 1000);
                 add_msg(st, &cid, Msg { id, from: from.into(), nick, at: part.at, text, pic: Some(pic), mine, state: if mine { "sent".into() } else { "received".into() }, via: via.into(), ..Default::default() })
+            }
+            // someone typing (private chats only; ephemeral)
+            "typing" => {
+                if room.is_some() || mine {
+                    return false;
+                }
+                st.typing.insert(cid, now_ms());
+                true
+            }
+            // a read receipt: your messages they have seen
+            "read" => {
+                if room.is_some() || mine {
+                    return false;
+                }
+                let refs: HashSet<&str> = p["refs"].as_array().map(|a| a.iter().filter_map(|v| v.as_str()).collect()).unwrap_or_default();
+                let mut changed = false;
+                if let Some(list) = st.msgs.get_mut(&cid) {
+                    for m in list.iter_mut().filter(|m| m.mine && refs.contains(m.id.as_str()) && m.state != "read") {
+                        m.state = "read".into();
+                        changed = true;
+                    }
+                }
+                if changed {
+                    st.dirty.insert(cid);
+                }
+                changed
+            }
+            // a file offered over the direct link (the bytes come later, device to device)
+            "file" => {
+                if room.is_some() || mine || id.is_empty() {
+                    return false;
+                }
+                let size = p["size"].as_u64().unwrap_or(0);
+                if size == 0 || size > MAX_FILE {
+                    return false;
+                }
+                let card = FileCard { fid: id.clone(), name: clip(p["name"].as_str().unwrap_or("file"), 120), size, mime: clip(p["mime"].as_str().unwrap_or(""), 60),
+                                      kind: clip(p["kind"].as_str().unwrap_or("file"), 12), ..Default::default() };
+                st.typing.remove(&cid);
+                add_msg(st, &cid, Msg { id, from: from.into(), nick, at: at_ms, file: Some(card), state: "received".into(), via: via.into(), ..Default::default() })
+            }
+            // the direct link's handshake: for the page, which makes the link (WebRTC)
+            "rtc" => {
+                if room.is_some() || mine {
+                    return false;
+                }
+                st.signals.push(json!({ "cid": cid, "fid": clip(p["fid"].as_str().unwrap_or(""), 32), "sig": p["sig"] }));
+                if st.signals.len() > 60 {
+                    st.signals.remove(0);
+                }
+                true
             }
             "react" => {
                 let (r, e) = (p["ref"].as_str().unwrap_or(""), clip(p["e"].as_str().unwrap_or(""), 8));
@@ -765,35 +885,161 @@ impl Chat {
 
     fn send_picture_sized(&self, cid: &str, bytes: &[u8], once: bool, text: &str, small: bool) -> Res<Value> {
         let (w, h, jpeg) = prepare_picture(bytes, small)?;
+        let mid = format!("{}.jpg", new_id());
+        let first = json!({ "w": w, "h": h, "once": once, "text": clip(text, 1000) });
+        let pic = Picture { mid: mid.clone(), w, h, once, opened: false };
+        self.send_pieces(cid, "img", &jpeg, &mid, first, Msg { text: clip(text, 1000), pic: Some(pic), ..Default::default() })
+    }
+
+    /// A voice note (the page records it: WebM/Opus, or MP4/AAC on iPhones).
+    pub fn send_voice(&self, cid: &str, bytes: &[u8], mime: &str, secs: f64) -> Res<Value> {
+        let mime = clip(mime.split(';').next().unwrap_or("").trim(), 40);
+        if !mime.starts_with("audio/") {
+            return Err("That isn't a recording.".into());
+        }
+        if bytes.is_empty() || bytes.len() > MAX_VOICE {
+            return Err("That voice note is too long (about two minutes at most).".into());
+        }
+        let mid = format!("{}.{}", new_id(), ext_for(&mime));
+        let secs = (secs * 10.0).round() / 10.0;
+        let first = json!({ "mime": mime, "secs": secs });
+        let voice = Voice { mid: mid.clone(), secs, mime };
+        self.send_pieces(cid, "voice", bytes, &mid, first, Msg { voice: Some(voice), ..Default::default() })
+    }
+
+    /// Something big for the relays (a picture, a voice note): kept here as `mid`, cut into pieces that
+    /// each travel as a message (`first` rides on the first), and shown at once as `msg`.
+    fn send_pieces(&self, cid: &str, t: &str, bytes: &[u8], mid: &str, first: Value, msg: Msg) -> Res<Value> {
+        crate::write_atomic(&self.media_path(mid), bytes)?;
         let id = new_id();
-        let mid = new_id();
-        crate::write_atomic(&self.media_path(&mid), &jpeg)?;
         let size = if cid.starts_with("r:") { PIECE_ROOM } else { PIECE_DM };
-        let pieces: Vec<&[u8]> = jpeg.chunks(size).collect();
+        let pieces: Vec<&[u8]> = bytes.chunks(size).collect();
         let n = pieces.len();
         let events = {
             let mut st = self.st.lock().unwrap();
             let payloads: Vec<Value> = pieces.iter().enumerate().map(|(i, d)| {
                 let mut extra = json!({ "id": id, "n": n, "i": i, "d": base64::engine::general_purpose::STANDARD.encode(d) });
                 if i == 0 {
-                    extra["w"] = json!(w);
-                    extra["h"] = json!(h);
-                    extra["once"] = json!(once);
-                    extra["text"] = json!(clip(text, 1000));
+                    if let (Some(o), Some(f)) = (extra.as_object_mut(), first.as_object()) {
+                        for (k, v) in f {
+                            o.insert(k.clone(), v.clone());
+                        }
+                    }
                 }
-                self.payload(&st, "img", extra)
+                self.payload(&st, t, extra)
             }).collect();
-            // (no copy for your other devices: a picture is big, and theirs would arrive anyway in a room)
+            // (no copy for your other devices: it is big, and in a room theirs comes anyway)
             let events = self.seal_for(&st, cid, &payloads, false)?;
             let (me, nick) = (st.me.clone(), st.saved.nick.clone());
             accept(&mut st, cid);
-            let pic = Picture { mid, w, h, once, opened: false };
-            add_msg(&mut st, cid, Msg { id: id.clone(), from: me, nick, at: now_ms(), text: clip(text, 1000), pic: Some(pic), mine: true, state: "sending".into(), via: "net".into(), ..Default::default() });
+            add_msg(&mut st, cid, Msg { id: id.clone(), from: me, nick, at: now_ms(), mine: true, state: "sending".into(), via: "net".into(), ..msg });
             events
         };
         self.publish(cid, &id, events);
         self.bump();
         Ok(json!(id))
+    }
+
+    /// Something only worth sending now (typing, the direct link's handshake): an ephemeral wrap to
+    /// the relays connected right now, no outbox, no copy.
+    fn send_now(&self, cid: &str, t: &str, extra: Value) -> Res<()> {
+        if !is_pubkey(cid) {
+            return Err("Only in a private chat".into());
+        }
+        let frame = {
+            let st = self.st.lock().unwrap();
+            let p = self.payload(&st, t, extra);
+            json!(["EVENT", wrap_kind(&st.key, cid, &p.to_string(), KIND_WRAP_NOW)?]).to_string()
+        };
+        for l in self.links.lock().unwrap().iter() {
+            let _ = l.tx.send(frame.clone());
+        }
+        Ok(())
+    }
+
+    /// Read receipts (when you allow them): their messages you have now seen.
+    fn send_receipts(&self, cid: &str) {
+        let refs: Vec<String> = {
+            let mut st = self.st.lock().unwrap();
+            if !st.saved.receipts || !is_pubkey(cid) {
+                return;
+            }
+            let Some(list) = st.msgs.get_mut(cid) else { return };
+            let refs: Vec<String> = list.iter_mut().filter(|m| !m.mine && !m.seen && !m.deleted).map(|m| { m.seen = true; m.id.clone() }).collect();
+            if !refs.is_empty() {
+                st.dirty.insert(cid.to_string());
+            }
+            refs
+        };
+        if !refs.is_empty() {
+            let _ = self.send_quiet(cid, "read", json!({ "refs": refs }));
+        }
+    }
+
+    /// A small stored message with no copy for your other devices (a read receipt).
+    fn send_quiet(&self, cid: &str, t: &str, extra: Value) -> Res<()> {
+        let events = {
+            let st = self.st.lock().unwrap();
+            let p = self.payload(&st, t, extra);
+            self.seal_for(&st, cid, &[p], false)?
+        };
+        self.publish(cid, "", events);
+        Ok(())
+    }
+
+    /// A file for the direct link: the card for both of you; the bytes go device to device later.
+    fn offer_file(&self, cid: &str, f: &Value) -> Res<Value> {
+        if !is_pubkey(cid) {
+            return Err("Big files go to one person: open a private chat.".into());
+        }
+        let size = f["size"].as_u64().unwrap_or(0);
+        if size == 0 || size > MAX_FILE {
+            return Err("That file is too big (2 GB at most).".into());
+        }
+        let id = new_id();
+        let card = FileCard { fid: id.clone(), name: clip(f["name"].as_str().unwrap_or("file"), 120), size, mime: clip(f["mime"].as_str().unwrap_or(""), 60),
+                              kind: clip(f["kind"].as_str().unwrap_or("file"), 12), src: clip(f["src"].as_str().unwrap_or(""), 200), ..Default::default() };
+        let events = {
+            let mut st = self.st.lock().unwrap();
+            let p = self.payload(&st, "file", json!({ "id": id, "name": card.name, "size": size, "mime": card.mime, "kind": card.kind }));
+            let events = self.seal_for(&st, cid, &[p], false)?;
+            let (me, nick) = (st.me.clone(), st.saved.nick.clone());
+            accept(&mut st, cid);
+            add_msg(&mut st, cid, Msg { id: id.clone(), from: me, nick, at: now_ms(), file: Some(card), mine: true, state: "sending".into(), via: "net".into(), ..Default::default() });
+            events
+        };
+        self.publish(cid, &id, events);
+        self.bump();
+        Ok(json!(id))
+    }
+
+    /// A piece of a file arriving over the direct link, written to its place here.
+    fn file_part(&self, cid: &str, fid: &str, data: &[u8], first: bool) -> Res<Value> {
+        let path = {
+            let st = self.st.lock().unwrap();
+            let card = st.msgs.get(cid).and_then(|l| l.iter().find(|m| m.id == fid)).and_then(|m| m.file.clone()).ok_or("No such file")?;
+            self.media_path(&format!("{fid}.{}", ext_for(&card.mime)))
+        };
+        crate::crypt::write_piece(&path, first, None, &mut &data[..]).map_err(|e| e.to_string())?;
+        Ok(json!(true))
+    }
+
+    fn file_done(&self, cid: &str, fid: &str) -> Res<Value> {
+        let mut st = self.st.lock().unwrap();
+        let m = st.msgs.get_mut(cid).and_then(|l| l.iter_mut().find(|m| m.id == fid)).ok_or("No such file")?;
+        let card = m.file.as_mut().ok_or("No such file")?;
+        let mid = format!("{fid}.{}", ext_for(&card.mime));
+        let got = std::fs::metadata(self.media_path(&mid)).map(|x| x.len()).unwrap_or(0);
+        // (an encrypted file has a 16-byte head)
+        if got < card.size {
+            return Err("The file didn't arrive whole.".into());
+        }
+        card.mid = mid;
+        card.done = true;
+        st.dirty.insert(cid.to_string());
+        drop(st);
+        self.bump();
+        Ok(json!(true))
     }
 
     fn send_small(&self, cid: &str, t: &str, extra: Value) -> Res<()> {
@@ -831,8 +1077,9 @@ impl Chat {
                     (if c.nick.is_empty() { format!("Someone {}", &cid[..6]) } else { c.nick.clone() }, "dm", json!({ "fav": c.fav, "request": c.request }))
                 }
             };
+            let typing = st.typing.get(&cid).copied().unwrap_or(0);
             convs.push(json!({ "id": cid, "kind": kind, "name": name, "pinned": meta.pinned, "muted": meta.muted, "unread": meta.unread,
-                               "at": meta.last_at, "last": meta.last, "extra": extra }));
+                               "at": meta.last_at, "last": meta.last, "extra": extra, "typing": typing }));
         }
         let blocked: Vec<Value> = st.saved.contacts.iter().filter(|(_, c)| c.blocked).map(|(k, c)| json!({ "id": k, "nick": c.nick })).collect();
         json!({
@@ -843,6 +1090,8 @@ impl Chat {
             "convs": convs,
             "blocked": blocked,
             "outbox": st.saved.outbox.len(),
+            "prefs": { "receipts": st.saved.receipts, "typing": st.saved.typing },
+            "now": now_ms(),
         })
     }
 
@@ -856,7 +1105,8 @@ impl Chat {
                 st.dirty_state = true;
             }
         }
-        let list = st.msgs.get(cid).cloned().unwrap_or_default();
+        let list: Vec<Msg> = st.msgs.get(cid).cloned().unwrap_or_default();
+        // (the sender's own vault item stays on this device)
         json!(list)
     }
 
@@ -919,6 +1169,7 @@ impl Chat {
         Ok(json!(true))
     }
 
+    #[cfg(test)]
     pub fn media(&self, mid: &str) -> Option<Vec<u8>> {
         crate::crypt::read(&self.media_path(mid)).ok()
     }
@@ -1027,6 +1278,26 @@ fn relays_or_override(saved: Vec<String>) -> Vec<String> {
     }
 }
 
+/// A file extension for a type (the file server serves by extension).
+fn ext_for(mime: &str) -> &'static str {
+    let m = mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    match m.as_str() {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "video/mp4" | "video/x-m4v" => "mp4",
+        "video/quicktime" => "mov",
+        "video/webm" | "audio/webm" => "webm",
+        "audio/mp4" | "audio/x-m4a" | "audio/aac" => "m4a",
+        "audio/mpeg" => "mp3",
+        "audio/ogg" | "audio/opus" => "ogg",
+        "audio/wav" | "audio/x-wav" => "wav",
+        "audio/flac" => "flac",
+        _ => "bin",
+    }
+}
+
 fn accept(st: &mut St, cid: &str) {
     if let Some(c) = st.saved.contacts.get_mut(cid) {
         if c.request {
@@ -1057,7 +1328,15 @@ fn add_msg(st: &mut St, cid: &str, msg: Msg) -> bool {
         }
         return false;
     }
-    let preview = if msg.pic.is_some() { if msg.text.is_empty() { "📷 Picture".to_string() } else { format!("📷 {}", msg.text) } } else { msg.text.clone() };
+    let preview = if msg.pic.is_some() {
+        if msg.text.is_empty() { "📷 Picture".to_string() } else { format!("📷 {}", msg.text) }
+    } else if msg.voice.is_some() {
+        "🎤 Voice note".to_string()
+    } else if let Some(f) = &msg.file {
+        format!("{} {}", if f.kind == "video" { "🎬" } else { "📎" }, f.name)
+    } else {
+        msg.text.clone()
+    };
     let preview = if cid.starts_with("r:") && !msg.mine && !msg.nick.is_empty() { format!("{}: {}", msg.nick, preview) } else { preview };
     let (mine, at) = (msg.mine, msg.at);
     // (in time order: a late arrival goes where it belongs)
@@ -1247,7 +1526,52 @@ pub fn api(dir: &Path, name: &str, args: &[Value], read_item: &dyn Fn(&str) -> R
             let qr = qrcode::QrCode::new(code.as_bytes()).map_err(|e| e.to_string())?;
             Ok(json!(qr.render::<qrcode::render::svg::Color>().min_dimensions(220, 220).quiet_zone(true).build()))
         }
-        "chatMessages" => Ok(chat.messages(&cid)),
+        "chatMessages" => {
+            let list = chat.messages(&cid);
+            // (looked at with the app in front: read receipts, if you send them)
+            if a(1).as_bool() == Some(true) {
+                chat.send_receipts(&cid);
+            }
+            Ok(list)
+        }
+        "chatTyping" => {
+            if chat.st.lock().unwrap().saved.typing {
+                chat.send_now(&cid, "typing", json!({}))?;
+            }
+            Ok(json!(true))
+        }
+        "chatPrefs" => {
+            let p = a(0);
+            let mut st = chat.st.lock().unwrap();
+            if let Some(v) = p["receipts"].as_bool() { st.saved.receipts = v; }
+            if let Some(v) = p["typing"].as_bool() { st.saved.typing = v; }
+            st.dirty_state = true;
+            drop(st);
+            chat.bump();
+            Ok(json!(true))
+        }
+        "chatSendVoice" => {
+            let bytes = base64::engine::general_purpose::STANDARD.decode(s(1).split(',').next_back().unwrap_or("")).map_err(|_| "Bad recording")?;
+            chat.send_voice(&cid, &bytes, &s(2), a(3).as_f64().unwrap_or(0.0))
+        }
+        // the direct link (big files and videos, device to device): the offer, the handshake, the bytes
+        "chatFileOffer" => chat.offer_file(&cid, &a(1)),
+        "chatSignal" => {
+            chat.send_now(&cid, "rtc", json!({ "fid": s(1), "sig": a(2) }))?;
+            Ok(json!(true))
+        }
+        "chatSignals" => Ok(json!(std::mem::take(&mut chat.st.lock().unwrap().signals))),
+        "chatFilePart" => {
+            let bytes = base64::engine::general_purpose::STANDARD.decode(s(2)).map_err(|_| "Bad piece")?;
+            chat.file_part(&cid, &s(1), &bytes, a(3).as_bool().unwrap_or(false))
+        }
+        "chatFileDone" => chat.file_done(&cid, &s(1)),
+        // (the sender's page, asked for one of its files: what it is and where it comes from)
+        "chatFileInfo" => {
+            let st = chat.st.lock().unwrap();
+            let card = st.msgs.get(&cid).and_then(|l| l.iter().find(|m| m.id == s(1) && m.mine)).and_then(|m| m.file.clone());
+            Ok(card.map(|c| json!(c)).unwrap_or(Value::Null))
+        }
         "chatClose" => {
             chat.st.lock().unwrap().open.clear();
             Ok(json!(true))
@@ -1324,9 +1648,9 @@ pub fn api(dir: &Path, name: &str, args: &[Value], read_item: &dyn Fn(&str) -> R
     }
 }
 
-/// /chat/<id>: a picture in a chat (for <img>).
-pub fn media(mid: &str) -> Option<Vec<u8>> {
-    CHAT.lock().unwrap().as_ref().and_then(|c| c.media(mid))
+/// /chat/<id>: a chat's picture, voice note or file, for the file server (which reads it in ranges).
+pub fn media_file(mid: &str) -> Option<PathBuf> {
+    CHAT.lock().unwrap().as_ref().map(|c| c.media_path(mid)).filter(|p| p.exists())
 }
 
 #[cfg(test)]
@@ -1456,6 +1780,40 @@ mod tests {
         { let mut st = b.st.lock().unwrap(); load_conv(&b, &mut st, &room); }
         a.send_text(&room, "hi room", "").unwrap();
         assert!(wait(&|| b.st.lock().unwrap().msgs[&room].iter().any(|m| m.text == "hi room" && m.nick == "Alice")), "the room message arrived");
+        // read receipts (Bob allows them): Alice's message shows "read"
+        b.st.lock().unwrap().saved.receipts = true;
+        let mid2 = a.send_text(&pb, "did you see this?", "").unwrap().as_str().unwrap().to_string();
+        assert!(wait(&|| b.st.lock().unwrap().msgs[&pa].iter().any(|m| m.id == mid2)), "Bob got it");
+        b.messages(&pa);
+        b.send_receipts(&pa);
+        assert!(wait(&|| a.st.lock().unwrap().msgs[&pb].iter().any(|m| m.id == mid2 && m.state == "read")), "Alice sees it read");
+        // typing (Bob allows it): ephemeral, nothing kept by the relay's store matters
+        b.st.lock().unwrap().saved.typing = true;
+        b.send_now(&pa, "typing", json!({})).unwrap();
+        assert!(wait(&|| a.st.lock().unwrap().typing.contains_key(&pb)), "Alice sees Bob typing");
+        // a voice note
+        let rec: Vec<u8> = (0..20000u32).map(|i| (i * 7 % 251) as u8).collect();
+        a.send_voice(&pb, &rec, "audio/webm;codecs=opus", 3.2).unwrap();
+        assert!(wait(&|| b.st.lock().unwrap().msgs[&pa].iter().any(|m| m.voice.as_ref().map(|v| v.secs == 3.2 && v.mid.ends_with(".webm")).unwrap_or(false))), "Bob got the voice note");
+        let v = b.st.lock().unwrap().msgs[&pa].iter().find_map(|m| m.voice.clone()).unwrap();
+        assert_eq!(b.media(&v.mid).unwrap(), rec);
+        // a big file: the card goes through the relay (without the sender's vault item), the bytes don't
+        let fid = a.offer_file(&pb, &json!({ "name": "clip.mp4", "size": 3000, "mime": "video/mp4", "kind": "video", "src": "item-000001" })).unwrap().as_str().unwrap().to_string();
+        assert!(wait(&|| b.st.lock().unwrap().msgs[&pa].iter().any(|m| m.file.as_ref().map(|f| f.fid == fid).unwrap_or(false))), "Bob got the offer");
+        let card = b.st.lock().unwrap().msgs[&pa].iter().find_map(|m| m.file.clone()).unwrap();
+        assert!(card.src.is_empty() && card.size == 3000 && card.kind == "video");
+        // the handshake for the direct link
+        b.send_now(&pa, "rtc", json!({ "fid": fid, "sig": { "kind": "offer", "sdp": "v=0" } })).unwrap();
+        assert!(wait(&|| a.st.lock().unwrap().signals.iter().any(|s| s["fid"] == fid.as_str() && s["sig"]["kind"] == "offer")), "Alice got the handshake");
+        // the bytes, as the page writes them after the direct link
+        let bytes: Vec<u8> = (0..3000u32).map(|i| (i % 256) as u8).collect();
+        b.file_part(&pa, &fid, &bytes[..1000], true).unwrap();
+        assert!(b.file_done(&pa, &fid).is_err(), "not whole yet");
+        b.file_part(&pa, &fid, &bytes[1000..], false).unwrap();
+        b.file_done(&pa, &fid).unwrap();
+        let card = b.st.lock().unwrap().msgs[&pa].iter().find_map(|m| m.file.clone()).unwrap();
+        assert!(card.done && card.mid.ends_with(".mp4"));
+        assert_eq!(b.media(&card.mid).unwrap(), bytes);
         // the files are written, and come back
         a.flush();
         let again = Chat::open(da.clone());
