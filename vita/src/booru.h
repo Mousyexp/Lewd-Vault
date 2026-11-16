@@ -12,6 +12,8 @@ typedef struct {
   const char *page_base; // (posts' own pages, when not on base)
   int hot;               // has a "Hot" order
   int needs_key;         // only answers with an account's API key (user ID and key)
+  const char *icon;      // its tile in the site switcher: app0:sites/<icon>.png
+  const char *about;     // a few words on what it has
 } LvSite;
 extern const LvSite LV_SITES[];
 extern const int LV_NSITES;

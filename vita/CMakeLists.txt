@@ -66,4 +66,17 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sounds/slideshow.wav sounds/slideshow.wav
   FILE sounds/more.wav sounds/more.wav
   FILE sounds/start.wav sounds/start.wav
+  FILE sites/danbooru.png sites/danbooru.png
+  FILE sites/yandere.png sites/yandere.png
+  FILE sites/konachan.png sites/konachan.png
+  FILE sites/e621.png sites/e621.png
+  FILE sites/xbooru.png sites/xbooru.png
+  FILE sites/tbib.png sites/tbib.png
+  FILE sites/hypnohub.png sites/hypnohub.png
+  FILE sites/aibooru.png sites/aibooru.png
+  FILE sites/safebooru.png sites/safebooru.png
+  FILE sites/e926.png sites/e926.png
+  FILE sites/gelbooru.png sites/gelbooru.png
+  FILE sites/rule34.png sites/rule34.png
+  FILE sites/sakugabooru.png sites/sakugabooru.png
 )

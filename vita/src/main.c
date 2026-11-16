@@ -252,7 +252,8 @@ static struct {
   int sounds;       // the interface sounds' volume, 0-100 (0: off)
   int dbltap, glow; // double tap in the full view: 0 zoom, 1 heart; the picture's colours behind it
   int wspan, wfull; // the Browser: Top's span (LV_SPAN_*), saves at full size
-} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0};
+  int hide, tlock;  // SELECT shows: 0 the clock, 1 the calculator; touch lock's time (privacy.c)
+} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0};
 static void cfg_load(void) {
   FILE *f = fopen(DATA "/config.txt", "r");
   if (!f) return;
@@ -280,6 +281,8 @@ static void cfg_load(void) {
     else if (!strcmp(line, "glow")) cfg.glow = atoi(eq) != 0;
     else if (!strcmp(line, "wspan")) cfg.wspan = atoi(eq);
     else if (!strcmp(line, "wfull")) cfg.wfull = atoi(eq) != 0;
+    else if (!strcmp(line, "hide")) cfg.hide = atoi(eq) != 0;
+    else if (!strcmp(line, "tlock")) cfg.tlock = atoi(eq) & 3;
   }
   fclose(f);
   if (cfg.interval < 2 || cfg.interval > 60) cfg.interval = 5;
@@ -297,9 +300,9 @@ static void cfg_load(void) {
 static void cfg_save(void) {
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
-          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull);
+          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -820,7 +823,7 @@ static int ime_poll(char *out, int cap) {
 }
 
 // ---------- screens ----------
-enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI };
+enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI, S_CALC, S_CLEAN, S_HEALTH };
 static int screen = S_PICK, cover_return = S_LIBRARY;
 static char found[16][512];
 static int nfound, pick_sel;
@@ -1096,6 +1099,8 @@ static float chips_scroll;
 #include "show.c"
 #include "drive_ui.c"
 #include "pin.c"
+#include "privacy.c"
+#include "clean.c"
 
 static int last_top_row = -1;
 static void draw_library(void) {
@@ -1740,7 +1745,7 @@ static void draw_settings(void) {
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_STATS, ST_VAULT, ST_CACHE, ST_COVER, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_VAULT, ST_CACHE, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change"},
@@ -1751,10 +1756,13 @@ static void draw_settings(void) {
     {"Wi-Fi transfer", "", "Send pictures and videos from a phone or PC on the same Wi-Fi"},
     {"Lock with a PIN", !pin.on || decoy_session ? "Off" : pin.on_wake ? "On, and when it wakes" : "On, when it starts", pin.on ? "✕ a new PIN · ←→ when · □ turns it off" : "A PIN pad before anything shows"},
     {"Decoy PIN", vd, pin.on ? "Another PIN that opens a harmless vault (←→ which, □ off)" : "Needs the PIN lock on"},
+    {"SELECT hides the app behind", cfg.hide ? "A calculator" : "A clock", cfg.hide ? "It calculates; your PIN and = gets back in (no PIN: hold the display)" : "A plain clock; SELECT again comes back"},
+    {"Touch lock", TL_NAMES[cfg.tlock & 3], "Hold L and R for a second: touch and buttons do nothing (again to unlock)"},
     {"Your stats", "", "What's here and how it's been looked at"},
+    {"Clean up", "", "One at a time: swipe away what you don't want any more"},
+    {"Health check", "", "What's wrong in the vault, and what can be put right"},
     {"Open another vault", "", "The vaults on the memory card"},
     {"Clear the thumbnail cache", "", "They're made again as you scroll"},
-    {"Cover the screen", "SELECT", "A plain screen, at a press, anywhere"},
   };
   int n = ST_N, rh = 47, top = 58, room = H - BAR - top - 4;
   // (the chosen row kept in sight)
@@ -1827,7 +1835,10 @@ static void draw_settings(void) {
           say("Thumbnail cache cleared");
         }
         break;
-      case ST_COVER: if (cross) { cover_return = S_SETTINGS; screen = S_COVER; } break;
+      case ST_COVER: cfg.hide = !cfg.hide; sfx(SFX_TOGGLE); break;
+      case ST_TLOCK: cfg.tlock = (cfg.tlock + d + 4) & 3; sfx(SFX_TOGGLE); break;
+      case ST_CLEAN: if (cross) { sfx(SFX_OPEN); clean_open(); return; } break;
+      case ST_HEALTH: if (cross) { sfx(SFX_OPEN); hc.done = 0; screen = S_HEALTH; return; } break;
     }
     cfg_save();
   }
@@ -1931,6 +1942,14 @@ int main(void) {
     frame_no++;
     read_input();
     if (frame_no < splash_until) { in.pressed = 0; in.tap = 0; in.touching = 0; } // (nothing happens under the loading screen)
+    // touch lock: nothing gets through but SELECT (the disguise still works)
+    if (screen != S_PIN && screen != S_CALC && touch_lock_filter()) {
+      in.pressed &= SCE_CTRL_SELECT;
+      in.now = 0;
+      in.tap = in.dbl = in.touching = in.flicked = 0;
+      in.lx = in.ly = in.bdx = in.bdy = in.drag_dx = in.drag_dy = 0;
+      in.back_on = 0;
+    }
     if (npending) { vita2d_wait_rendering_done(); for (int k = 0; k < npending; k++) vita2d_free_texture(pending_free[k]); npending = 0; }
     videos_close_now();
     if (woke) {
@@ -1975,11 +1994,13 @@ int main(void) {
     // SELECT: the cover, from anywhere (and back)
     if (in.pressed & SCE_CTRL_SELECT) {
       if (screen == S_COVER) screen = cover_return;
-      else if (screen != S_UNLOCKING) {
-        cover_return = screen;
+      else if (screen != S_UNLOCKING && screen != S_CALC) {
         if (vid) lv_video_pause(vid, 1);
         if (wv_vid) lv_video_pause(wv_vid, 1);
-        screen = S_COVER;
+        slideshow = 0;
+        tl_on = 0;
+        if (cfg.hide) calc_open(screen);
+        else { cover_return = screen; screen = S_COVER; }
       }
       in.pressed = 0;
     }
@@ -2001,6 +2022,9 @@ int main(void) {
       case S_PIN: draw_pin(); break;
       case S_STATS: draw_stats(); break;
       case S_WIFI: draw_wifi(); break;
+      case S_CALC: draw_calc(); break;
+      case S_CLEAN: draw_clean(); break;
+      case S_HEALTH: draw_health(); break;
       case S_WEBVIEW: draw_webview(); break;
       case S_COVER: draw_cover_screen(); if (in.tap) { screen = cover_return; } break;
     }
@@ -2010,12 +2034,13 @@ int main(void) {
       int a = frame_no < splash_until ? 255 : (int)(255 * (splash_until + 24 - frame_no) / 24.0f);
       if (screen != S_LOCKED || frame_no < splash_until) draw_splash(screen == S_LOCKED ? "Untraceable vault" : "Opening the vault\u2026", a);
     }
-    if (frame_no < message_until && screen != S_COVER) {
+    if (frame_no < message_until && screen != S_COVER && screen != S_CALC) {
       int w = text_w(16, message) + 40;
       int a = message_until - frame_no < 20 ? (message_until - frame_no) * 12 : 240;
       rrect(W / 2 - w / 2, H - BAR - 56, w, 38, 19, RGBA(0, 0, 0, a * 3 / 4));
       text_center(W / 2, H - BAR - 31, with_alpha(TEXT, a), 16, message);
     }
+    if (screen != S_CALC && screen != S_COVER) draw_touch_lock();
     vita2d_end_drawing();
     vita2d_common_dialog_update();
     vita2d_swap_buffers();

@@ -9,18 +9,19 @@
 
 // No account needed for these, but Gelbooru and Rule34 (the last two) want an account's API key.
 const LvSite LV_SITES[] = {
-  {"Danbooru", BK_DANBOORU, "https://danbooru.donmai.us", NULL, 1},
-  {"Yande.re", BK_MOEBOORU, "https://yande.re", NULL, 0},
-  {"Konachan", BK_MOEBOORU, "https://konachan.com", NULL, 0},
-  {"e621", BK_E621, "https://e621.net", NULL, 1},
-  {"Xbooru", BK_GELBOORU, "https://xbooru.com", NULL, 0},
-  {"TBIB", BK_GELBOORU, "https://tbib.org", NULL, 0},
-  {"Hypnohub", BK_GELBOORU, "https://hypnohub.net", NULL, 0},
-  {"AIBooru", BK_DANBOORU, "https://aibooru.online", NULL, 1},
-  {"Safebooru", BK_GELBOORU, "https://safebooru.org", NULL, 0},
-  {"e926", BK_E621, "https://e926.net", NULL, 1},
-  {"Gelbooru", BK_GELBOORU, "https://gelbooru.com", NULL, 0, 1},
-  {"Rule34", BK_GELBOORU, "https://api.rule34.xxx", "https://rule34.xxx", 0, 1},
+  {"Danbooru", BK_DANBOORU, "https://danbooru.donmai.us", NULL, 1, 0, "danbooru", "Anime art, finely tagged"},
+  {"Yande.re", BK_MOEBOORU, "https://yande.re", NULL, 0, 0, "yandere", "High-resolution anime scans"},
+  {"Konachan", BK_MOEBOORU, "https://konachan.com", NULL, 0, 0, "konachan", "Anime wallpapers"},
+  {"e621", BK_E621, "https://e621.net", NULL, 1, 0, "e621", "Furry art"},
+  {"Xbooru", BK_GELBOORU, "https://xbooru.com", NULL, 0, 0, "xbooru", "Hentai"},
+  {"TBIB", BK_GELBOORU, "https://tbib.org", NULL, 0, 0, "tbib", "The big imageboard"},
+  {"Hypnohub", BK_GELBOORU, "https://hypnohub.net", NULL, 0, 0, "hypnohub", "Hypnosis art"},
+  {"AIBooru", BK_DANBOORU, "https://aibooru.online", NULL, 1, 0, "aibooru", "AI-made anime art"},
+  {"Safebooru", BK_GELBOORU, "https://safebooru.org", NULL, 0, 0, "safebooru", "Anime art, all ages"},
+  {"e926", BK_E621, "https://e926.net", NULL, 1, 0, "e926", "Furry art, all ages"},
+  {"Gelbooru", BK_GELBOORU, "https://gelbooru.com", NULL, 0, 1, "gelbooru", "Anime and hentai (API key)"},
+  {"Rule34", BK_GELBOORU, "https://api.rule34.xxx", "https://rule34.xxx", 0, 1, "rule34", "Rule 34, games and anime (API key)"},
+  {"Sakugabooru", BK_MOEBOORU, "https://www.sakugabooru.com", NULL, 0, 0, "sakugabooru", "Anime animation clips (videos)"},
 };
 const int LV_NSITES = sizeof LV_SITES / sizeof *LV_SITES;
 const char *LV_SORT_NAMES[LV_NSORTS] = {"Latest", "Hot", "Top", "Random"};

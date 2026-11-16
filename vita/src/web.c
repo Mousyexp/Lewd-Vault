@@ -748,25 +748,52 @@ static void ask_previews(const int *list, int n) {
 enum { SH_NONE, SH_SITES, SH_FILTER, SH_SEARCH };
 static int sheet, sheet_sel;
 
-static void draw_sites_sheet(void) {
-  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 150));
-  int w = 300, x = W - w - 12, y = 46, rh = 40;
-  rrect(x, y, w, LV_NSITES * rh + 16, 16, SURF);
-  for (int k = 0; k < LV_NSITES; k++) {
-    int ry = y + 8 + k * rh;
-    int on = k == sheet_sel;
-    if (on) rrect(x + 6, ry, w - 12, rh - 4, 10, SURF2);
-    if (k == cfg.site) circle(x + 22, ry + rh / 2 - 2, 5, ACC);
-    text(x + 36, ry + 25, k == cfg.site ? ACC : TEXT, 17, LV_SITES[k].name);
-    const char *kinds[] = {"Danbooru", "Gelbooru", "Moebooru", "e621"};
-    text(x + w - 18 - text_w(13, kinds[LV_SITES[k].kind]), ry + 24, FAINT, 13, kinds[LV_SITES[k].kind]);
-    if (hit(x, ry, w, rh)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
+// The site switcher: a window of tiles, each site with its icon (sites/*.png, from
+// tools/make-site-icons.py), its name and what it has; the one in use ringed.
+static vita2d_texture *site_tex[32];
+static int site_tex_tried[32];
+static vita2d_texture *site_icon(int k) {
+  if (k < 0 || k >= 32 || !LV_SITES[k].icon) return NULL;
+  if (!site_tex_tried[k]) {
+    site_tex_tried[k] = 1;
+    char p[96];
+    snprintf(p, sizeof p, "app0:sites/%s.png", LV_SITES[k].icon);
+    site_tex[k] = vita2d_load_PNG_file(p);
   }
-  if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
-  if (in.pressed & SCE_CTRL_DOWN) sheet_sel = (sheet_sel + 1) % LV_NSITES;
-  if (in.pressed & SCE_CTRL_UP) sheet_sel = (sheet_sel + LV_NSITES - 1) % LV_NSITES;
+  return site_tex[k];
+}
+static void draw_sites_sheet(void) {
+  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 170));
+  const int cols = 5, tw = 168, th = 132, gap = 10;
+  int rows = (LV_NSITES + cols - 1) / cols;
+  int ww = cols * tw + (cols - 1) * gap + 40, wh = rows * th + (rows - 1) * gap + 78;
+  int wx = (W - ww) / 2, wy = (H - wh) / 2 - 6;
+  rrect(wx, wy, ww, wh, 22, SURF);
+  text(wx + 22, wy + 34, TEXT, 20, "Sites");
+  text(wx + 22 + text_w(20, "Sites") + 14, wy + 34, FAINT, 14, "✕ open  ·  L / R step through them from the grid  ·  ○ close");
+  for (int k = 0; k < LV_NSITES; k++) {
+    int x = wx + 20 + (k % cols) * (tw + gap), y = wy + 52 + (k / cols) * (th + gap);
+    int on = k == sheet_sel, cur = k == cfg.site;
+    if (on) rrect(x - 3, y - 3, tw + 6, th + 6, 18, ACC);
+    rrect(x, y, tw, th, 16, on ? SURF2 : with_alpha(SURF2, 150));
+    vita2d_texture *t = site_icon(k);
+    float s = 62.0f / 112.0f;
+    if (t) vita2d_draw_texture_scale(t, x + tw / 2 - 31, y + 10, s, s);
+    else { circle(x + tw / 2, y + 41, 30, with_alpha(ACC, 140)); text_center(x + tw / 2, y + 50, TEXT, 26, (char[]){LV_SITES[k].name[0], 0}); }
+    text_center(x + tw / 2, y + 95, cur ? ACC : TEXT, 16, LV_SITES[k].name);
+    if (LV_SITES[k].about) text_fit(x + 10, y + 117, FAINT, 12, LV_SITES[k].about, tw - 20);
+    if (cur) { circle(x + tw - 16, y + 16, 9, ACC); text_center(x + tw - 16, y + 21, RGBA(20, 12, 16, 255), 12, "✓"); }
+    if (LV_SITES[k].needs_key && !wkeys[k][0]) { rrect(x + 8, y + 8, 34, 18, 9, RGBA(0, 0, 0, 150)); text_center(x + 25, y + 21, DIM, 11, "key"); }
+    if (hit(x, y, tw, th)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
+  }
+  int col = sheet_sel % cols, row = sheet_sel / cols;
+  if (in.pressed & SCE_CTRL_RIGHT) sheet_sel = sheet_sel + 1 < LV_NSITES ? sheet_sel + 1 : 0;
+  if (in.pressed & SCE_CTRL_LEFT) sheet_sel = sheet_sel > 0 ? sheet_sel - 1 : LV_NSITES - 1;
+  if (in.pressed & SCE_CTRL_DOWN) { row = (row + 1) % rows; sheet_sel = row * cols + col < LV_NSITES ? row * cols + col : col; }
+  if (in.pressed & SCE_CTRL_UP) { row = (row + rows - 1) % rows; while (row * cols + col >= LV_NSITES) row--; sheet_sel = row * cols + col; }
+  if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP | SCE_CTRL_LEFT | SCE_CTRL_RIGHT)) sfx(SFX_TICK);
   if (in.pressed & SCE_CTRL_CROSS) { sfx(SFX_SELECT); sheet = SH_NONE; if (sheet_sel != cfg.site) { cfg.site = sheet_sel; if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST; web_search(); } }
-  else if ((in.pressed & SCE_CTRL_CIRCLE) || (in.tap && !(in.tap_x >= x && in.tap_y < y + LV_NSITES * rh + 16))) { sfx(SFX_CLOSE); sheet = SH_NONE; }
+  else if ((in.pressed & SCE_CTRL_CIRCLE) || (in.tap && !(in.tap_x >= wx && in.tap_x < wx + ww && in.tap_y >= wy && in.tap_y < wy + wh))) { sfx(SFX_CLOSE); sheet = SH_NONE; }
   in.pressed = 0;
   in.tap = 0;
 }
@@ -813,7 +840,7 @@ static void draw_filter_sheet(void) {
     }
     if (hit(x, ry, w, rh)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
-  if (sheet_sel == R_KEY && needs_key) text(x + 20, y + nrows * rh + 40, FAINT, 13, cfg.site == LV_NSITES - 1 ? "rule34.xxx → My Account → Options: API Access Credentials" : "gelbooru.com → My Account → Options: API Access Credentials");
+  if (sheet_sel == R_KEY && needs_key) text(x + 20, y + nrows * rh + 40, FAINT, 13, !strcmp(LV_SITES[cfg.site].name, "Rule34") ? "rule34.xxx → My Account → Options: API Access Credentials" : "gelbooru.com → My Account → Options: API Access Credentials");
   if (sheet_sel == R_HIDDEN) text(x + 20, y + nrows * rh + 40, FAINT, 13, "Posts with any of these tags never show (spaces between)");
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
   if (in.pressed & SCE_CTRL_DOWN) sheet_sel = (sheet_sel + 1) % nrows;

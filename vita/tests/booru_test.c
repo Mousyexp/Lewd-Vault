@@ -93,6 +93,7 @@ int main(void) {
   // (four of these five are tagged "young": never shown)
   check_kind("e621", site("e621"), 1);
   check_kind("gelbooru", site("Safebooru"), 5);
+  check_kind("sakugabooru", site("Sakugabooru"), 5);
 
   // searches: what's never searched for is dropped; ratings and orders become the site's words
   char q[256], url[2048];
