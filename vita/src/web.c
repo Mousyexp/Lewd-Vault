@@ -55,15 +55,120 @@ static int nwdone;
 
 // the full view's job: a sample to fetch, or a save to prepare
 static struct {
-  int post, gen, save, vgen;
+  int post, gen, save, vgen, full;
   uint8_t *raw; // (a save: the sample's bytes, handed over; a video's are in its file)
   size_t rawn;
   char cat[64];
-} big_job = {-1, 0, 0, 0, NULL, 0, ""};
+} big_job = {-1, 0, 0, 0, 0, NULL, 0, ""};
 // the search a page is for, copied when asked (the settings may change while it loads)
-static struct { int site, ratings, sort; char q[128]; } job_q;
+static struct { int site, ratings, sort, span; char q[128], key[200], hidden[512]; } job_q;
 static int saving;
 static const char *save_category(void);
+
+// ---------- what's kept: recent searches, bookmarks, hidden tags, account keys ----------
+// (ux0:data/LWDV00001/web_recent.txt and web_marks.txt: "<site>\t<search>" a line; web_hidden.txt:
+// the hidden tags on one line; web_keys.txt: "<site name>\t<user id> <api key>" a line)
+typedef struct { int site; char q[128]; } WSearch;
+static WSearch wrecent[10], wmarks[30];
+static int nwrecent, nwmarks, wlists_loaded;
+static char whidden[512];
+static char wkeys[32][200]; // (per site)
+static char wkey_user[80];
+static int wkey_ask;
+static void wlist_load(const char *path, WSearch *a, int cap, int *n) {
+  *n = 0;
+  FILE *f = fopen(path, "r");
+  char ln[200];
+  while (f && *n < cap && fgets(ln, sizeof ln, f)) {
+    ln[strcspn(ln, "\r\n")] = 0;
+    char *t = strchr(ln, '\t');
+    if (!t) continue;
+    *t = 0;
+    int s = atoi(ln);
+    if (s < 0 || s >= LV_NSITES) continue;
+    a[*n].site = s;
+    snprintf(a[*n].q, sizeof a[*n].q, "%s", t + 1);
+    (*n)++;
+  }
+  if (f) fclose(f);
+}
+static void wlist_save(const char *path, const WSearch *a, int n) {
+  char part[200];
+  snprintf(part, sizeof part, "%s.part", path);
+  FILE *f = fopen(part, "w");
+  if (!f) return;
+  for (int k = 0; k < n; k++) fprintf(f, "%d\t%s\n", a[k].site, a[k].q);
+  fclose(f);
+  sceIoRemove(path);
+  sceIoRename(part, path);
+}
+static void hidden_save(void) {
+  FILE *f = fopen(DATA "/web_hidden.txt", "w");
+  if (f) { fprintf(f, "%s\n", whidden); fclose(f); }
+}
+static void wkeys_save(void) {
+  FILE *f = fopen(DATA "/web_keys.txt", "w");
+  if (!f) return;
+  for (int k = 0; k < LV_NSITES && k < 32; k++) if (wkeys[k][0]) fprintf(f, "%s\t%s\n", LV_SITES[k].name, wkeys[k]);
+  fclose(f);
+}
+static void wlists_load(void) {
+  if (wlists_loaded) return;
+  wlists_loaded = 1;
+  wlist_load(DATA "/web_recent.txt", wrecent, 10, &nwrecent);
+  wlist_load(DATA "/web_marks.txt", wmarks, 30, &nwmarks);
+  FILE *f = fopen(DATA "/web_hidden.txt", "r");
+  if (f) { if (fgets(whidden, sizeof whidden, f)) whidden[strcspn(whidden, "\r\n")] = 0; fclose(f); }
+  f = fopen(DATA "/web_keys.txt", "r");
+  char ln[300];
+  while (f && fgets(ln, sizeof ln, f)) {
+    ln[strcspn(ln, "\r\n")] = 0;
+    char *t = strchr(ln, '\t');
+    if (!t) continue;
+    *t = 0;
+    for (int k = 0; k < LV_NSITES && k < 32; k++) if (!strcmp(LV_SITES[k].name, ln)) snprintf(wkeys[k], sizeof wkeys[k], "%s", t + 1);
+  }
+  if (f) fclose(f);
+}
+static int wsearch_find(const WSearch *a, int n, int site, const char *q) {
+  for (int k = 0; k < n; k++) if (a[k].site == site && !strcmp(a[k].q, q)) return k;
+  return -1;
+}
+static void recent_add(int site, const char *q) {
+  if (!q[0]) return;
+  int k = wsearch_find(wrecent, nwrecent, site, q);
+  if (k == 0) return;
+  if (k < 0) k = nwrecent < 10 ? nwrecent++ : 9;
+  memmove(&wrecent[1], &wrecent[0], k * sizeof *wrecent);
+  wrecent[0].site = site;
+  snprintf(wrecent[0].q, sizeof wrecent[0].q, "%s", q);
+  wlist_save(DATA "/web_recent.txt", wrecent, nwrecent);
+}
+static void wsearch_drop(WSearch *a, int *n, int k, const char *path) {
+  if (k < 0 || k >= *n) return;
+  memmove(&a[k], &a[k + 1], (*n - k - 1) * sizeof *a);
+  (*n)--;
+  wlist_save(path, a, *n);
+}
+// a post with one of the hidden tags (a whole tag, any case)
+static int has_hidden(const char *tags, const char *hidden) {
+  const char *h = hidden;
+  while (*h) {
+    while (*h == ' ') h++;
+    const char *e = h;
+    while (*e && *e != ' ') e++;
+    size_t n = (size_t)(e - h);
+    for (const char *t = tags; n && *t;) {
+      while (*t == ' ') t++;
+      const char *te = t;
+      while (*te && *te != ' ') te++;
+      if ((size_t)(te - t) == n && !strncasecmp(t, h, n)) return 1;
+      t = te;
+    }
+    h = e;
+  }
+  return 0;
+}
 static volatile float big_progress;
 static volatile int big_cancel;
 static int web_started;
@@ -110,7 +215,9 @@ static void *list_main(void *arg) {
     list_want = 0;
     const LvSite *s = &LV_SITES[job_q.site];
     char url[2048];
-    lv_booru_url(s, job_q.q, ratings, job_q.sort, page, url, sizeof url);
+    lv_booru_url_ex(s, job_q.q, ratings, job_q.sort, job_q.span, job_q.key, page, url, sizeof url);
+    char hidden[512];
+    snprintf(hidden, sizeof hidden, "%s", job_q.hidden);
     pthread_mutex_unlock(&wmx);
     if (!worker_run) break;
     uint8_t *b = NULL;
@@ -119,6 +226,16 @@ static void *list_main(void *arg) {
     int st = lv_http_get(h, url, &b, &n, 8 * 1024 * 1024, NULL, NULL, &err);
     int count = 0;
     LvPost *got = st == 200 ? lv_booru_parse(s, (const char *)b, n, ratings, &count) : NULL;
+    // (the hidden tags: those posts never reach the grid)
+    if (got && hidden[0]) {
+      int kept = 0;
+      for (int k = 0; k < count; k++) {
+        if (has_hidden(got[k].tags, hidden)) { LvPost *q = &got[k]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); continue; }
+        got[kept++] = got[k];
+      }
+      // (a page all hidden still counts as a page: more come)
+      count = kept;
+    }
     // handed over: only the drawing thread changes the list it draws (see web_take_results)
     pthread_mutex_lock(&wmx);
     if (gen == wgen && !page_ready.ready) {
@@ -188,7 +305,7 @@ static void post_copy(const LvPost *s, LvPost *d) {
 }
 
 // A save: the file as the Vita wants it, and a card-sized thumbnail.
-static void prepare_save(LvHttp *h, const LvPost *p, uint8_t *raw, size_t rawn, WDone *d) {
+static void prepare_save(LvHttp *h, const LvPost *p, uint8_t *raw, size_t rawn, WDone *d, int full) {
   int video = lv_post_is_video(p), gif = !strcmp(p->ext, "gif");
   int w = 0, hh = 0;
   if (video || gif) {
@@ -211,7 +328,11 @@ static void prepare_save(LvHttp *h, const LvPost *p, uint8_t *raw, size_t rawn, 
   int landscape = lv_image_size(raw, rawn, &w, &hh) && w >= hh;
   int mw = landscape ? BOX_LONG : BOX_SHORT, mh = landscape ? BOX_SHORT : BOX_LONG;
   snprintf(d->ext, sizeof d->ext, "jpg");
-  if (lv_jpeg_size(raw, rawn, &w, &hh) && w <= mw && hh <= mh) {
+  if (full) {
+    // the original as it is, its own format (the PC opens it at its full size)
+    d->a = raw; d->an = rawn; d->w = w; d->h = hh; raw = NULL;
+    snprintf(d->ext, sizeof d->ext, "%s", !strcmp(p->ext, "jpeg") ? "jpg" : p->ext);
+  } else if (lv_jpeg_size(raw, rawn, &w, &hh) && w <= mw && hh <= mh) {
     // a JPEG that fits: kept byte for byte (no second compression)
     d->a = raw; d->an = rawn; d->w = w; d->h = hh; raw = NULL;
   } else {
@@ -287,7 +408,7 @@ static void *sample_main(void *arg) {
     pthread_mutex_lock(&wmx);
     while (worker_run && big_job.post < 0) pthread_cond_wait(&wcv, &wmx);
     if (!worker_run) { pthread_mutex_unlock(&wmx); break; }
-    int p = big_job.post, gen = big_job.gen, save = big_job.save, vgen_asked = big_job.vgen;
+    int p = big_job.post, gen = big_job.gen, save = big_job.save, vgen_asked = big_job.vgen, full = big_job.full;
     char cat[64];
     snprintf(cat, sizeof cat, "%s", big_job.cat);
     uint8_t *raw = big_job.raw;
@@ -307,7 +428,15 @@ static void *sample_main(void *arg) {
     d.gen = gen;
     if (save) {
       d.kind = WD_SAVE;
-      prepare_save(h, &post, raw, rawn, &d);
+      // full size: the original instead of the sample (pictures; GIFs and videos are whole anyway)
+      if (full && !lv_post_is_video(&post) && strcmp(post.ext, "gif") && strcmp(post.file, post.sample)) {
+        uint8_t *b = NULL;
+        size_t n = 0;
+        const char *err = NULL;
+        if (lv_http_get(h, post.file, &b, &n, 48u * 1024 * 1024, &big_cancel, &big_progress, &err) == 200 && n) { free(raw); raw = b; rawn = n; }
+        else { free(b); full = 0; }
+      }
+      prepare_save(h, &post, raw, rawn, &d, full);
       if (!d.err[0]) write_save(&post, &d, vgen_asked, cat);
       // (the file is on the card now: its bytes needn't wait in memory)
       free(d.a); d.a = NULL;
@@ -397,7 +526,19 @@ static void web_search(void) {
   job_q.site = cfg.site;
   job_q.ratings = cfg.ratings;
   job_q.sort = cfg.wsort;
+  job_q.span = lv_booru_has_spans(&LV_SITES[cfg.site]) ? cfg.wspan : 0;
   snprintf(job_q.q, sizeof job_q.q, "%s", cfg.wquery);
+  wlists_load();
+  snprintf(job_q.key, sizeof job_q.key, "%s", wkeys[cfg.site]);
+  snprintf(job_q.hidden, sizeof job_q.hidden, "%s", whidden);
+  recent_add(cfg.site, cfg.wquery);
+  if (LV_SITES[cfg.site].needs_key && !wkeys[cfg.site][0]) {
+    // (no key: nothing asked, and the grid says where to get one)
+    list_want = 0;
+    wloading = 0;
+    wend = 1;
+    snprintf(werr, sizeof werr, "%s needs your account's API key: \u25a1 Filter \u2192 API key", LV_SITES[cfg.site].name);
+  }
   pthread_cond_broadcast(&wcv);
   pthread_mutex_unlock(&wmx);
   web_clear_textures();
@@ -466,6 +607,7 @@ static void wv_save(void) {
   big_job.gen = wgen;
   big_job.save = 1;
   big_job.vgen = vgen;
+  big_job.full = cfg.wfull;
   snprintf(big_job.cat, sizeof big_job.cat, "%s", save_category());
   big_job.raw = wv_raw; // (handed over: the full view doesn't need them once shown)
   big_job.rawn = wv_rawn;
@@ -603,7 +745,7 @@ static void ask_previews(const int *list, int n) {
 
 // ---------- sheets: the sites, and the filter ----------
 
-enum { SH_NONE, SH_SITES, SH_FILTER };
+enum { SH_NONE, SH_SITES, SH_FILTER, SH_SEARCH };
 static int sheet, sheet_sel;
 
 static void draw_sites_sheet(void) {
@@ -629,41 +771,68 @@ static void draw_sites_sheet(void) {
   in.tap = 0;
 }
 
+static void open_search_sheet(void);
 static void draw_filter_sheet(void) {
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 150));
-  int w = 420, x = W - w - 12, y = 46, rh = 44;
-  enum { R_SEARCH, R_G, R_S, R_Q, R_E, R_CAT, R_N };
-  rrect(x, y, w, R_N * rh + 18, 16, SURF);
-  for (int k = 0; k < R_N; k++) {
+  int needs_key = LV_SITES[cfg.site].needs_key;
+  enum { R_SEARCH, R_G, R_S, R_Q, R_E, R_SPAN, R_CAT, R_FULL, R_HIDDEN, R_KEY, R_N };
+  int nrows = needs_key ? R_N : R_N - 1;
+  int w = 440, x = W - w - 12, y = 46, rh = 42;
+  rrect(x, y, w, nrows * rh + 18, 16, SURF);
+  for (int k = 0; k < nrows; k++) {
     int ry = y + 9 + k * rh;
     if (k == sheet_sel) rrect(x + 6, ry, w - 12, rh - 4, 10, SURF2);
     char v[160];
+    const char *name = "", *val = "";
     if (k == R_SEARCH) {
-      text(x + 20, ry + 26, TEXT, 17, "Search");
-      text_fit(x + 120, ry + 26, cfg.wquery[0] ? ACC : FAINT, 16, cfg.wquery[0] ? cfg.wquery : "tags, like blue_hair smile", w - 140);
+      text(x + 20, ry + 25, TEXT, 17, "Search");
+      text_fit(x + 120, ry + 25, cfg.wquery[0] ? ACC : FAINT, 16, cfg.wquery[0] ? cfg.wquery : "recent, bookmarks, tags here…", w - 140);
     } else if (k <= R_E) {
       int bit = 1 << (k - R_G);
-      text(x + 20, ry + 26, TEXT, 17, RATING_NAMES[k - R_G]);
+      text(x + 20, ry + 25, TEXT, 17, RATING_NAMES[k - R_G]);
       int on = (cfg.ratings & bit) != 0;
       rrect(x + w - 66, ry + 8, 44, 24, 12, on ? ACC : SURF2);
       circle(on ? x + w - 34 : x + w - 54, ry + 20, 9, TEXT);
     } else {
-      text(x + 20, ry + 26, TEXT, 17, "Save into");
-      snprintf(v, sizeof v, "‹ %s ›", save_category());
-      text(x + w - 22 - text_w(16, v), ry + 26, ACC, 16, v);
+      switch (k) {
+        case R_SPAN: name = "Top of"; val = lv_booru_has_spans(&LV_SITES[cfg.site]) ? LV_SPAN_NAMES[cfg.wspan] : "All time (this site)"; break;
+        case R_CAT: name = "Save into"; snprintf(v, sizeof v, "‹ %s ›", save_category()); val = v; break;
+        case R_FULL: name = "Saves"; val = cfg.wfull ? "Full size (the original)" : "Vita size (smaller)"; break;
+        case R_HIDDEN: {
+          int nh = 0;
+          for (const char *p = whidden; *p;) { while (*p == ' ') p++; if (*p) nh++; while (*p && *p != ' ') p++; }
+          name = "Hidden tags";
+          if (nh) snprintf(v, sizeof v, "%d", nh); else snprintf(v, sizeof v, "none");
+          val = v;
+          break;
+        }
+        case R_KEY: name = "API key"; val = wkeys[cfg.site][0] ? "set (✕ to change)" : "needed: ✕"; break;
+      }
+      text(x + 20, ry + 25, TEXT, 17, name);
+      text(x + w - 22 - text_w(15, val), ry + 25, k == R_SPAN && cfg.wsort != LV_SORT_TOP ? FAINT : ACC, 15, val);
     }
     if (hit(x, ry, w, rh)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
+  if (sheet_sel == R_KEY && needs_key) text(x + 20, y + nrows * rh + 40, FAINT, 13, cfg.site == LV_NSITES - 1 ? "rule34.xxx → My Account → Options: API Access Credentials" : "gelbooru.com → My Account → Options: API Access Credentials");
+  if (sheet_sel == R_HIDDEN) text(x + 20, y + nrows * rh + 40, FAINT, 13, "Posts with any of these tags never show (spaces between)");
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
-  if (in.pressed & SCE_CTRL_DOWN) sheet_sel = (sheet_sel + 1) % R_N;
-  if (in.pressed & SCE_CTRL_UP) sheet_sel = (sheet_sel + R_N - 1) % R_N;
+  if (in.pressed & SCE_CTRL_DOWN) sheet_sel = (sheet_sel + 1) % nrows;
+  if (in.pressed & SCE_CTRL_UP) sheet_sel = (sheet_sel + nrows - 1) % nrows;
   int d = (in.pressed & SCE_CTRL_RIGHT) ? 1 : (in.pressed & SCE_CTRL_LEFT) ? -1 : (in.pressed & SCE_CTRL_CROSS) ? 1 : 0;
   if (d) {
-    if (sheet_sel == R_SEARCH && (in.pressed & SCE_CTRL_CROSS) && !ime_open) ime_start(3, "Search tags", cfg.wquery, 0);
+    if (sheet_sel == R_SEARCH && (in.pressed & SCE_CTRL_CROSS)) { in.pressed = 0; open_search_sheet(); return; }
     else if (sheet_sel >= R_G && sheet_sel <= R_E && (in.pressed & SCE_CTRL_CROSS)) {
       int bit = 1 << (sheet_sel - R_G);
       if ((cfg.ratings & ~bit) & LV_R_ALL || !(cfg.ratings & bit)) { sfx(SFX_TOGGLE); cfg.ratings ^= bit; web_search(); }
       else { sfx(SFX_ERROR); say("At least one rating stays on"); }
+    } else if (sheet_sel == R_SPAN) {
+      if (!lv_booru_has_spans(&LV_SITES[cfg.site])) { sfx(SFX_ERROR); say("This site can't pick a time span"); }
+      else {
+        sfx(SFX_TOGGLE);
+        cfg.wspan = (cfg.wspan + d + LV_NSPANS) % LV_NSPANS;
+        if (cfg.wsort != LV_SORT_TOP) cfg.wsort = LV_SORT_TOP;
+        web_search();
+      }
     } else if (sheet_sel == R_CAT) {
       // the site's name, then the vault's categories
       int cur = -1;
@@ -673,11 +842,147 @@ static void draw_filter_sheet(void) {
       else snprintf(cfg.save_cat, sizeof cfg.save_cat, "%s", vault.cats[nx]);
       sfx(SFX_TOGGLE);
       cfg_save();
-    }
+    } else if (sheet_sel == R_FULL) { sfx(SFX_TOGGLE); cfg.wfull = !cfg.wfull; cfg_save(); }
+    else if (sheet_sel == R_HIDDEN && (in.pressed & SCE_CTRL_CROSS) && !ime_open) { sheet = SH_NONE; ime_start(9, "Hidden tags (spaces between)", whidden, 0); }
+    else if (sheet_sel == R_KEY && (in.pressed & SCE_CTRL_CROSS) && !ime_open) { sheet = SH_NONE; ime_start(10, "User ID (a number)", "", 0); }
   }
-  if ((in.pressed & SCE_CTRL_CIRCLE) || (in.pressed & SCE_CTRL_SQUARE) || (in.tap && !(in.tap_x >= x && in.tap_y < y + R_N * rh + 18))) { sfx(SFX_CLOSE); sheet = SH_NONE; }
+  if ((in.pressed & SCE_CTRL_CIRCLE) || (in.pressed & SCE_CTRL_SQUARE) || (in.tap && !(in.tap_x >= x && in.tap_y < y + nrows * rh + 18))) { sfx(SFX_CLOSE); sheet = SH_NONE; }
   in.pressed = 0;
   in.tap = 0;
+}
+
+// ---------- the search sheet: type one, bookmark it, the tags in these results, recent, bookmarks ----------
+typedef struct { char t[48]; int n; } WTagCount;
+static WTagCount wtags[12];
+static int nwtags;
+// The tags most found in the loaded posts (not those already searched for)
+static void wcount_tags(void) {
+  enum { CAP = 4096 };
+  WTagCount *tab = calloc(CAP, sizeof *tab);
+  nwtags = 0;
+  if (!tab) return;
+  for (int k = 0; k < nposts; k++) {
+    for (const char *t = posts[k].tags; t && *t;) {
+      while (*t == ' ') t++;
+      const char *e = t;
+      while (*e && *e != ' ') e++;
+      size_t n = (size_t)(e - t);
+      if (n && n < 48) {
+        unsigned h = 2166136261u;
+        for (size_t i = 0; i < n; i++) h = (h ^ (unsigned char)t[i]) * 16777619u;
+        for (unsigned i = h & (CAP - 1), probes = 0; probes < 64; i = (i + 1) & (CAP - 1), probes++) {
+          if (!tab[i].n) { memcpy(tab[i].t, t, n); tab[i].t[n] = 0; tab[i].n = 1; break; }
+          if (strlen(tab[i].t) == n && !memcmp(tab[i].t, t, n)) { tab[i].n++; break; }
+        }
+      }
+      t = e;
+    }
+  }
+  for (int i = 0; i < CAP; i++) {
+    if (tab[i].n < 2 || has_hidden(tab[i].t, cfg.wquery)) continue;
+    // (kept: the 12 most found, in order)
+    int at = nwtags < 12 ? nwtags++ : 11;
+    if (at == 11 && nwtags == 12 && tab[i].n <= wtags[11].n) continue;
+    wtags[at] = tab[i];
+    while (at > 0 && wtags[at].n > wtags[at - 1].n) { WTagCount x = wtags[at]; wtags[at] = wtags[at - 1]; wtags[at - 1] = x; at--; }
+  }
+  free(tab);
+}
+enum { SR_TYPE, SR_MARK, SR_CLEAR, SR_HEAD, SR_TAG, SR_RECENT, SR_BMARK };
+typedef struct { int kind, i; } SRow;
+static float ssheet_scroll;
+static void web_add_tag(const char *t, int minus) {
+  char q[160];
+  snprintf(q, sizeof q, "%s%s%s%s", cfg.wquery, cfg.wquery[0] ? " " : "", minus ? "-" : "", t);
+  char clean[128];
+  snprintf(cfg.wquery, sizeof cfg.wquery, "%s", lv_booru_clean(q, clean, sizeof clean));
+}
+static void draw_search_sheet(void) {
+  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 150));
+  SRow rows[64];
+  int n = 0;
+  rows[n++] = (SRow){SR_TYPE, 0};
+  if (cfg.wquery[0]) { rows[n++] = (SRow){SR_MARK, 0}; rows[n++] = (SRow){SR_CLEAR, 0}; }
+  if (nwtags) { rows[n++] = (SRow){SR_HEAD, 0}; for (int k = 0; k < nwtags; k++) rows[n++] = (SRow){SR_TAG, k}; }
+  if (nwrecent) { rows[n++] = (SRow){SR_HEAD, 1}; for (int k = 0; k < nwrecent && n < 60; k++) rows[n++] = (SRow){SR_RECENT, k}; }
+  if (nwmarks) { rows[n++] = (SRow){SR_HEAD, 2}; for (int k = 0; k < nwmarks && n < 64; k++) rows[n++] = (SRow){SR_BMARK, k}; }
+  if (sheet_sel >= n) sheet_sel = n - 1;
+  while (sheet_sel > 0 && rows[sheet_sel].kind == SR_HEAD) sheet_sel--;
+  int w = 520, x = W - w - 12, y = 46, rh = 34, view = H - BAR - y - 10;
+  rrect(x, y, w, view, 16, SURF);
+  // (the chosen row kept in sight)
+  float want = sheet_sel * rh;
+  if (want - ssheet_scroll > view - rh * 2) ssheet_scroll = want - (view - rh * 2);
+  if (want - ssheet_scroll < rh) ssheet_scroll = want - rh;
+  if (ssheet_scroll < 0) ssheet_scroll = 0;
+  int marked = cfg.wquery[0] && wsearch_find(wmarks, nwmarks, cfg.site, cfg.wquery) >= 0;
+  for (int k = 0; k < n; k++) {
+    int ry = y + 8 + k * rh - (int)ssheet_scroll;
+    if (ry < y || ry + rh > y + view) continue;
+    SRow r = rows[k];
+    if (r.kind == SR_HEAD) {
+      static const char *heads[] = {"Tags in these results  (✕ add, □ leave out)", "Recent  (□ forgets one)", "Bookmarks  (□ removes one)"};
+      text(x + 20, ry + 24, FAINT, 14, heads[r.i]);
+      continue;
+    }
+    if (k == sheet_sel) rrect(x + 6, ry, w - 12, rh - 4, 10, SURF2);
+    char b[200];
+    switch (r.kind) {
+      case SR_TYPE: text(x + 20, ry + 22, TEXT, 16, "Search"); text_fit(x + 110, ry + 22, cfg.wquery[0] ? ACC : FAINT, 15, cfg.wquery[0] ? cfg.wquery : "type tags, like blue_hair smile", w - 130); break;
+      case SR_MARK: text(x + 20, ry + 22, TEXT, 16, marked ? "★ Bookmarked (✕ to remove)" : "☆ Bookmark this search"); break;
+      case SR_CLEAR: text(x + 20, ry + 22, TEXT, 16, "Clear the search"); break;
+      case SR_TAG: text(x + 30, ry + 22, TEXT, 16, wtags[r.i].t); snprintf(b, sizeof b, "%d", wtags[r.i].n); text(x + w - 26 - text_w(14, b), ry + 22, FAINT, 14, b); break;
+      case SR_RECENT: case SR_BMARK: {
+        const WSearch *s = r.kind == SR_RECENT ? &wrecent[r.i] : &wmarks[r.i];
+        text_fit(x + 30, ry + 22, TEXT, 16, s->q, w - 170);
+        text(x + w - 26 - text_w(13, LV_SITES[s->site].name), ry + 22, FAINT, 13, LV_SITES[s->site].name);
+        break;
+      }
+    }
+    if (hit(x, ry, w, rh)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
+  }
+  if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
+  if (in.pressed & SCE_CTRL_DOWN) do sheet_sel = (sheet_sel + 1) % n; while (rows[sheet_sel].kind == SR_HEAD);
+  if (in.pressed & SCE_CTRL_UP) do sheet_sel = (sheet_sel + n - 1) % n; while (rows[sheet_sel].kind == SR_HEAD);
+  SRow r = rows[sheet_sel];
+  int go = (in.pressed & SCE_CTRL_CROSS) != 0, sq = (in.pressed & SCE_CTRL_SQUARE) != 0;
+  if (go || sq) {
+    switch (r.kind) {
+      case SR_TYPE: if (go && !ime_open) { sheet = SH_NONE; ime_start(3, "Search tags", cfg.wquery, 0); } break;
+      case SR_MARK:
+        if (!go) break;
+        if (marked) wsearch_drop(wmarks, &nwmarks, wsearch_find(wmarks, nwmarks, cfg.site, cfg.wquery), DATA "/web_marks.txt");
+        else if (nwmarks < 30) { wmarks[nwmarks].site = cfg.site; snprintf(wmarks[nwmarks].q, sizeof wmarks[nwmarks].q, "%s", cfg.wquery); nwmarks++; wlist_save(DATA "/web_marks.txt", wmarks, nwmarks); }
+        sfx(marked ? SFX_CLOSE : SFX_DONE);
+        break;
+      case SR_CLEAR: if (go) { sfx(SFX_CLOSE); cfg.wquery[0] = 0; sheet = SH_NONE; web_search(); } break;
+      case SR_TAG: sfx(SFX_SELECT); web_add_tag(wtags[r.i].t, sq); sheet = SH_NONE; web_search(); break;
+      case SR_RECENT: case SR_BMARK: {
+        WSearch *a = r.kind == SR_RECENT ? wrecent : wmarks;
+        int *na = r.kind == SR_RECENT ? &nwrecent : &nwmarks;
+        if (sq) { sfx(SFX_DELETE); wsearch_drop(a, na, r.i, r.kind == SR_RECENT ? DATA "/web_recent.txt" : DATA "/web_marks.txt"); break; }
+        sfx(SFX_SELECT);
+        WSearch s = a[r.i];
+        cfg.site = s.site;
+        snprintf(cfg.wquery, sizeof cfg.wquery, "%s", s.q);
+        if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST;
+        sheet = SH_NONE;
+        web_search();
+        break;
+      }
+    }
+  }
+  if ((in.pressed & SCE_CTRL_CIRCLE) || (in.tap && in.tap_x < x)) { sfx(SFX_CLOSE); sheet = SH_NONE; }
+  in.pressed = 0;
+  in.tap = 0;
+}
+static void open_search_sheet(void) {
+  wlists_load();
+  wcount_tags();
+  sheet = SH_SEARCH;
+  sheet_sel = 0;
+  ssheet_scroll = 0;
+  sfx(SFX_OPEN);
 }
 
 // ---------- the grid ----------
@@ -804,7 +1109,7 @@ static void draw_web(void) {
   if (wq > W - 32) wq = W - 32;
   rrect(16, 38, wq, 24, 12, SURF2);
   text_fit(30, 55, cfg.wquery[0] ? TEXT : FAINT, 15, q, wq - 28);
-  if (!sheet_open && hit(16, 36, wq, 30) && !ime_open) ime_start(3, "Search tags", cfg.wquery, 0);
+  if (!sheet_open && hit(16, 36, wq, 30) && !ime_open) open_search_sheet();
   if (cfg.wquery[0]) {
     int cx = 16 + wq + 6;
     rrect(cx, 38, 26, 24, 12, SURF2);
@@ -830,6 +1135,8 @@ static void draw_web(void) {
   draw_bar();
   if (sheet == SH_SITES) draw_sites_sheet();
   else if (sheet == SH_FILTER) draw_filter_sheet();
+  else if (sheet == SH_SEARCH) draw_search_sheet();
+  if (wkey_ask && !ime_open) { wkey_ask = 0; ime_start(11, "API key", "", 0); }
 }
 
 // ---------- the full view's drawing ----------

@@ -57,6 +57,21 @@ static void check_kind(const char *file, const LvSite *s, int want) {
 }
 
 int main(void) {
+  // Top's spans and an account's key
+  {
+    char u[1024];
+    lv_booru_url_ex(site("Danbooru"), "blue_hair", LV_R_ALL, LV_SORT_TOP, LV_SPAN_WEEK, NULL, 1, u, sizeof u);
+    CHECK(strstr(u, "order%3Ascore+age%3A%3C1w"), "danbooru's week: %s", u);
+    lv_booru_url_ex(site("e621"), "", LV_R_ALL, LV_SORT_TOP, LV_SPAN_DAY, NULL, 1, u, sizeof u);
+    CHECK(strstr(u, "date%3Aday"), "e621's day: %s", u);
+    lv_booru_url_ex(site("Yande.re"), "", LV_R_ALL, LV_SORT_TOP, LV_SPAN_MONTH, NULL, 1, u, sizeof u);
+    CHECK(strstr(u, "date%3A%3E%3D20"), "moebooru's month: %s", u);
+    lv_booru_url_ex(site("Danbooru"), "x", LV_R_ALL, LV_SORT_LATEST, LV_SPAN_WEEK, NULL, 1, u, sizeof u);
+    CHECK(!strstr(u, "age%3A"), "a span only for Top: %s", u);
+    lv_booru_url_ex(site("Gelbooru"), "x", LV_R_ALL, LV_SORT_LATEST, 0, "12345 abc+def", 2, u, sizeof u);
+    CHECK(strstr(u, "https://gelbooru.com/index.php?page=dapi") && strstr(u, "&pid=1") && strstr(u, "&user_id=12345&api_key=abc%2Bdef"), "gelbooru's key: %s", u);
+    CHECK(site("Rule34") && site("Rule34")->needs_key && !site("Danbooru")->needs_key, "which need a key");
+  }
   // the JSON reader
   const char *js = "{\"a\":[1,2,{\"b\":\"x\\u00e9\\\"y\"}],\"c\":-3.5,\"d\":true,\"e\":null,\"f\":\"\\ud83d\\ude00\"}";
   Json j;

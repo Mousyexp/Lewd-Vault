@@ -5,8 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
-// No account needed for any of these (Gelbooru and Rule34 want an API key, so they aren't here).
+// No account needed for these, but Gelbooru and Rule34 (the last two) want an account's API key.
 const LvSite LV_SITES[] = {
   {"Danbooru", BK_DANBOORU, "https://danbooru.donmai.us", NULL, 1},
   {"Yande.re", BK_MOEBOORU, "https://yande.re", NULL, 0},
@@ -18,9 +19,13 @@ const LvSite LV_SITES[] = {
   {"AIBooru", BK_DANBOORU, "https://aibooru.online", NULL, 1},
   {"Safebooru", BK_GELBOORU, "https://safebooru.org", NULL, 0},
   {"e926", BK_E621, "https://e926.net", NULL, 1},
+  {"Gelbooru", BK_GELBOORU, "https://gelbooru.com", NULL, 0, 1},
+  {"Rule34", BK_GELBOORU, "https://api.rule34.xxx", "https://rule34.xxx", 0, 1},
 };
 const int LV_NSITES = sizeof LV_SITES / sizeof *LV_SITES;
 const char *LV_SORT_NAMES[LV_NSORTS] = {"Latest", "Hot", "Top", "Random"};
+const char *LV_SPAN_NAMES[LV_NSPANS] = {"All time", "Today", "This week", "This month"};
+int lv_booru_has_spans(const LvSite *s) { return s->kind != BK_GELBOORU; }
 
 // never shown, never searched for: sexual content involving minors (each site's own word for it),
 // the same list as the desktop app's (ui/discover.js, NEVER)
@@ -75,6 +80,9 @@ static void enc(const char *s, char *out, size_t cap) {
 }
 
 void lv_booru_url(const LvSite *s, const char *tags, int ratings, int sort, int page, char *out, size_t cap) {
+  lv_booru_url_ex(s, tags, ratings, sort, LV_SPAN_ALL, NULL, page, out, cap);
+}
+void lv_booru_url_ex(const LvSite *s, const char *tags, int ratings, int sort, int span, const char *key, int page, char *out, size_t cap) {
   char q[1024], clean[512];
   lv_booru_clean(tags, clean, sizeof clean);
   snprintf(q, sizeof q, "%s", clean);
@@ -106,6 +114,20 @@ void lv_booru_url(const LvSite *s, const char *tags, int ratings, int sort, int 
     case LV_SORT_RANDOM: order = s->kind == BK_GELBOORU ? " sort:random" : " order:random"; break;
   }
   strncat(q, order, sizeof q - strlen(q) - 1);
+  // Top's span: Danbooru's age, e621's date, Moebooru's date from (Gelbooru's kind has none)
+  if (sort == LV_SORT_TOP && span > LV_SPAN_ALL && span < LV_NSPANS) {
+    char sp[48] = "";
+    static const char *age[] = {"", "1d", "1w", "1mo"}, *e6[] = {"", "day", "week", "month"};
+    if (s->kind == BK_DANBOORU) snprintf(sp, sizeof sp, " age:<%s", age[span]);
+    else if (s->kind == BK_E621) snprintf(sp, sizeof sp, " date:%s", e6[span]);
+    else if (s->kind == BK_MOEBOORU) {
+      time_t t = time(NULL) - (span == LV_SPAN_DAY ? 86400 : span == LV_SPAN_WEEK ? 7 * 86400 : 30 * 86400);
+      struct tm g;
+      gmtime_r(&t, &g);
+      strftime(sp, sizeof sp, " date:>=%Y-%m-%d", &g);
+    }
+    strncat(q, sp, sizeof q - strlen(q) - 1);
+  }
   const char *t = q;
   while (*t == ' ') t++;
   char e[2048];
@@ -117,6 +139,17 @@ void lv_booru_url(const LvSite *s, const char *tags, int ratings, int sort, int 
       snprintf(out, cap, "%s/post.json?limit=%d&page=%d&tags=%s", s->base, LV_PAGE, page, e); break;
     default:
       snprintf(out, cap, "%s/index.php?page=dapi&s=post&q=index&json=1&limit=%d&pid=%d&tags=%s", s->base, LV_PAGE, page - 1, e);
+  }
+  // an account's key: "<user id> <api key>"
+  if (key && *key) {
+    char user[64] = "", api[160] = "";
+    if (sscanf(key, "%63s %159s", user, api) == 2) {
+      char ue[200], ae[400];
+      enc(user, ue, sizeof ue);
+      enc(api, ae, sizeof ae);
+      size_t n = strlen(out);
+      snprintf(out + n, cap > n ? cap - n : 0, "&user_id=%s&api_key=%s", ue, ae);
+    }
   }
 }
 

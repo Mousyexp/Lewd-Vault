@@ -63,8 +63,15 @@ their JSON APIs (the same four kinds of site as the desktop's Discover: `src/boo
 loads. The grid is the Library's; the site button is the tab bar (L/R step through it), Filter picks
 the ratings (General, Sensitive, Questionable, Explicit), the search and which category saves go into,
 and the sort is Latest, Hot (where the site has it), Top or Random. More results load as you scroll.
-Gelbooru and Rule34 aren't there: they need an API key. As on the desktop, posts tagged as sexual
-content involving minors are never shown or searched for.
+Gelbooru and Rule34 are there too, with your account's API key (Filter → API key: the user ID and the
+key from the site's My Account → Options). As on the desktop, posts tagged as sexual content involving
+minors are never shown or searched for.
+
+The search box opens the search sheet: type a search, bookmark it, the tags most found in the results
+so far (✕ adds one, □ leaves it out), recent searches and bookmarks (on any site). Filter also has
+**Top of** (today, this week, this month: Danbooru's `age:`, e621's `date:`, Moebooru's `date:>=`),
+**Hidden tags** (posts with any of them never show), and **Saves**: Vita size, or the original at full
+size.
 
 **Light on the network and the card.** The grid loads each site's small preview (150-360 px), the full
 view its sample (~850-1500 px, made for screens), never the original. Saving keeps a JPEG sample as it

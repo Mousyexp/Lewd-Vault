@@ -43,6 +43,7 @@
 #include "vault.h"
 #include "video.h"
 #include "json.h"
+#include "booru.h"
 #include "drive.h"
 #include "net.h"
 #include <psp2/kernel/clib.h>
@@ -250,7 +251,8 @@ static struct {
   int wpages, wsel; // where the Browser was: pages loaded, the post picked (it picks up there)
   int sounds;       // the interface sounds' volume, 0-100 (0: off)
   int dbltap, glow; // double tap in the full view: 0 zoom, 1 heart; the picture's colours behind it
-} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1};
+  int wspan, wfull; // the Browser: Top's span (LV_SPAN_*), saves at full size
+} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0};
 static void cfg_load(void) {
   FILE *f = fopen(DATA "/config.txt", "r");
   if (!f) return;
@@ -276,6 +278,8 @@ static void cfg_load(void) {
     else if (!strcmp(line, "sounds")) cfg.sounds = atoi(eq);
     else if (!strcmp(line, "dbltap")) cfg.dbltap = atoi(eq) != 0;
     else if (!strcmp(line, "glow")) cfg.glow = atoi(eq) != 0;
+    else if (!strcmp(line, "wspan")) cfg.wspan = atoi(eq);
+    else if (!strcmp(line, "wfull")) cfg.wfull = atoi(eq) != 0;
   }
   fclose(f);
   if (cfg.interval < 2 || cfg.interval > 60) cfg.interval = 5;
@@ -288,13 +292,14 @@ static void cfg_load(void) {
   if (cfg.sort < 0 || cfg.sort >= 7) cfg.sort = 0;
   if (cfg.wsel < 0) cfg.wsel = 0;
   if (cfg.sounds < 0 || cfg.sounds > 100) cfg.sounds = 70;
+  if (cfg.wspan < 0 || cfg.wspan >= LV_NSPANS) cfg.wspan = 0;
 }
 static void cfg_save(void) {
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
-          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow);
+          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -1876,6 +1881,9 @@ int main(void) {
       if (r == 1 && ime_for == 5 && got[0]) saved_add_current(got);
       if (r == 1 && ime_for == 6) batch_add_tag(got);
       if (r == 1 && ime_for == 7 && got[0]) { snprintf(drive_new_id, sizeof drive_new_id, "%s", got); drive_ask_secret = 1; }
+      if (r == 1 && ime_for == 9) { snprintf(whidden, sizeof whidden, "%s", got); hidden_save(); web_search(); }
+      if (r == 1 && ime_for == 10 && got[0]) { snprintf(wkey_user, sizeof wkey_user, "%s", got); wkey_ask = 1; }
+      if (r == 1 && ime_for == 11 && got[0]) { snprintf(wkeys[cfg.site], sizeof wkeys[cfg.site], "%s %s", wkey_user, got); wkeys_save(); sfx(SFX_DONE); web_search(); }
       if (r == 1 && ime_for == 8 && got[0]) { drive_set_key(drive_new_id, got); sfx(SFX_DONE); say("Key saved: now sign in"); }
       if (r == 1 && ime_for == 2) { lsheet = LS_NONE; snprintf(query, sizeof query, "%s", got); cat = -1; refilter(); sel = 0; scroll = 0; screen = S_LIBRARY; }
       if (r != 0) memset(&in, 0, sizeof in);

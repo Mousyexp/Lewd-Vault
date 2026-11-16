@@ -11,6 +11,7 @@ typedef struct {
   const char *base;
   const char *page_base; // (posts' own pages, when not on base)
   int hot;               // has a "Hot" order
+  int needs_key;         // only answers with an account's API key (user ID and key)
 } LvSite;
 extern const LvSite LV_SITES[];
 extern const int LV_NSITES;
@@ -31,6 +32,12 @@ typedef struct {
 #define LV_PAGE 40
 // The search's address. tags: what was typed (cleaned of what's never searched for).
 void lv_booru_url(const LvSite *s, const char *tags, int ratings, int sort, int page, char *out, size_t cap);
+// The same, with Top's span (LV_SPAN_*: the site's best of the day, week or month, where it can) and
+// an account's key ("<user id> <api key>", or NULL).
+enum { LV_SPAN_ALL, LV_SPAN_DAY, LV_SPAN_WEEK, LV_SPAN_MONTH, LV_NSPANS };
+extern const char *LV_SPAN_NAMES[LV_NSPANS];
+int lv_booru_has_spans(const LvSite *s);
+void lv_booru_url_ex(const LvSite *s, const char *tags, int ratings, int sort, int span, const char *key, int page, char *out, size_t cap);
 // The posts in a page of the site's answer (malloc'd array, *n of them); NULL with *n = 0 when it
 // isn't one. Posts tagged as sexual content involving minors are left out, and so are those whose
 // rating isn't in `ratings` (some sites ignore the rating in the search).
