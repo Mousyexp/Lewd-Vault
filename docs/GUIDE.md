@@ -281,7 +281,9 @@ Untraceable vault stays encrypted and opens with its password. Views, hearts and
 vault's `views.csv` as on the PC. It also edits (stars, levels, categories, tags, delete), has the
 phone's filters and smart albums, the PC's level slideshow, Continue watching (the PC's
 `_app/kv/resume.json`), and syncs with Google Drive like the PC, signed in with a QR code; that needs
-a second key in the same Google Cloud project, of the "TVs and Limited Input devices" type.
+a second key in the same Google Cloud project, of the "TVs and Limited Input devices" type. Files can
+also come over Wi-Fi (an upload page the Vita serves while that screen is open), and the app can be
+locked with a PIN (a decoy PIN opens another vault).
 `vita/README.md` has the details; the VPK comes from Actions → Build PS Vita.
 
 ## The vault folder
