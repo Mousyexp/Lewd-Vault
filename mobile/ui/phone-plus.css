@@ -303,3 +303,51 @@ html.phone .fun-prev { height: 96px; }
 html.phone .fun-keep { position: relative; overflow: hidden; }
 html.phone .fun-keep:has(input:checked)::before { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--accent) 18%, transparent) 50%, transparent 70%) 0 0 / 250% 100%; animation: ph-shimmer 3.5s ease-in-out infinite; pointer-events: none; }
 html.phone .fun-actions .btn { width: 100%; min-height: 54px; font-size: 17px; }
+
+/* =====================================================================================
+   The loading screen, on a phone: the filling heart in a glass app tile, a progress ring round it,
+   soft colour drifting behind, the name in the system font (the PC keeps its own, desktop.css)
+   ===================================================================================== */
+html.phone #splash {
+  background: #0c0810; font-family: -apple-system, "SF Pro Display", system-ui, sans-serif; color: #fff;
+  transition: opacity .5s ease .15s, transform .6s cubic-bezier(.6, 0, .3, 1);
+}
+html.phone #splash::before, html.phone #splash::after {
+  content: ''; position: absolute; width: 90vw; height: 90vw; border-radius: 50%; filter: blur(70px); pointer-events: none; z-index: 0;
+}
+html.phone #splash::before { left: -30vw; top: 8vh; background: radial-gradient(circle, rgba(255, 111, 150, .55), transparent 65%); animation: ph-sp-drift 7s ease-in-out infinite alternate; }
+html.phone #splash::after { right: -35vw; bottom: 6vh; background: radial-gradient(circle, rgba(143, 91, 255, .45), transparent 65%); animation: ph-sp-drift 9s ease-in-out -3s infinite alternate-reverse; }
+@keyframes ph-sp-drift { from { transform: translate(0, 0) scale(1); } to { transform: translate(12vw, -6vh) scale(1.2); } }
+html.phone #splash .sp-float, html.phone #splash .decor-splash { display: none; }
+html.phone #splash .sp-center { z-index: 1; animation: ph-sp-in .7s cubic-bezier(.2, .9, .3, 1.2) both; }
+@keyframes ph-sp-in { from { opacity: 0; transform: scale(.86) translateY(10px); } }
+/* the tile, the heart inside it */
+html.phone #splash .sp-heart {
+  width: 132px; height: 132px; padding: 26px 24px 22px; box-sizing: border-box; border-radius: 36px; overflow: hidden;
+  background: linear-gradient(160deg, rgba(255, 255, 255, .16), rgba(255, 255, 255, .04)); border: 1px solid rgba(255, 255, 255, .18);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6);
+  box-shadow: 0 24px 60px -18px rgba(0, 0, 0, .7), inset 0 1px 0 rgba(255, 255, 255, .25);
+  filter: none; animation: ph-sp-breathe 2.4s ease-in-out infinite;
+}
+@keyframes ph-sp-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.035); } }
+html.phone #splash .sp-outline { stroke: #fff; stroke-opacity: .7; stroke-width: 2.2; }
+html.phone #splash .sp-shell { fill: rgba(255, 255, 255, .06); }
+/* the ring: how far loading has come (phone-plus.js copies the bar's width into --p) */
+html.phone #splash .sp-center::before {
+  content: ''; position: absolute; left: 50%; top: -20px; width: 172px; height: 172px; margin-left: -86px; border-radius: 50%; pointer-events: none;
+  background: conic-gradient(from -90deg, #ffc2d6, #ff6f96 calc(var(--p, 0) * 0.6turn), #b86bff calc(var(--p, 0) * 1turn), rgba(255, 255, 255, .1) 0);
+  -webkit-mask: radial-gradient(circle, transparent 82px, #000 83px); mask: radial-gradient(circle, transparent 82px, #000 83px);
+  filter: drop-shadow(0 0 8px rgba(255, 111, 150, .6)); transition: background .2s;
+}
+html.phone #splash .sp-title {
+  font-family: -apple-system, "SF Pro Display", system-ui, sans-serif !important; margin-top: 46px; font-size: 30px; font-weight: 800; letter-spacing: -.02em; text-transform: none; padding: 0;
+  background: linear-gradient(100deg, #fff 30%, #ffc2d6 50%, #fff 70%) 0 0 / 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+  text-shadow: none; animation: ph-shimmer 3s ease-in-out infinite;
+}
+html.phone #splash .sp-bar { display: none; }
+html.phone #splash .sp-status { margin-top: 8px; font-size: 14px; font-weight: 500; letter-spacing: 0; color: rgba(255, 255, 255, .62); opacity: 1; animation: ph-sp-status .5s ease; }
+@keyframes ph-sp-status { from { opacity: 0; transform: translateY(4px); } }
+/* done: the tile zooms toward you like an app opening, the rest fades */
+html.phone #splash.done { transform: none; }
+html.phone #splash.done .sp-heart { animation: none; transform: scale(2.4); opacity: 0; transition: transform .55s cubic-bezier(.6, 0, .3, 1), opacity .45s ease .1s; }
+html.phone #splash.done .sp-center::before, html.phone #splash.done .sp-title, html.phone #splash.done .sp-status { opacity: 0; transition: opacity .2s; }

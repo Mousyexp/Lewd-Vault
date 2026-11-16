@@ -960,5 +960,11 @@
     }).observe(welcomeEl, { subtree: true, attributes: true, attributeFilter: ['class'], attributeOldValue: true });
   }
 
+  // ---------- the loading screen: its ring follows the bar (desktop.js fills the bar) ----------
+  const spl = $('splash'), spBar = spl && spl.querySelector('.sp-bar-fill'), spStatus = spl && spl.querySelector('.sp-status');
+  if (spBar) new MutationObserver(() => spl.style.setProperty('--p', String((parseFloat(spBar.style.width) || 0) / 100))).observe(spBar, { attributes: true, attributeFilter: ['style'] });
+  // (each new line of the status fades in)
+  if (spStatus) new MutationObserver(() => { spStatus.style.animation = 'none'; void spStatus.offsetWidth; spStatus.style.animation = ''; }).observe(spStatus, { childList: true });
+
   window.vaultPhonePlus = { openSettings, cheer, confetti, hello };
 })();
