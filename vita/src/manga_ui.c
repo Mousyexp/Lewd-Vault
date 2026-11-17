@@ -455,7 +455,7 @@ static void mg_search(void) {
   mg_list_more();
 }
 static void manga_open(int src) {
-  lv_net_init();
+  lv_net_base(); // (the rest on the worker that fetches)
   mg_start_thread();
   if (src != mg.src || !mg.books) { mg.src = src; mg_search(); }
   manga_back = screen == S_MANGA ? manga_back : S_WEB;

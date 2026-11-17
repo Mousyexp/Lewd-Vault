@@ -900,6 +900,7 @@ static vita2d_texture *thumb_of(int i) {
   return NULL;
 }
 static void take_results(void) {
+  if (!ndone) return; // (nothing decoded since: no lock taken)
   pthread_mutex_lock(&mx);
   // (at most six a frame, two while the grid is flung fast: the rest the next, so a flood of them
   //  never holds a frame up; and none more once this frame has spent 3 ms on them)
@@ -1239,12 +1240,6 @@ static volatile int saver_busy, saver_failed;
 static pthread_mutex_t smx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t scv = PTHREAD_COND_INITIALIZER;
 static int saver_started;
-static void *net_warm(void *arg) {
-  (void)arg;
-  pin_to_core(2);
-  lv_net_init();
-  return NULL;
-}
 static void *saver_main(void *arg) {
   pin_to_core(2); // (off the drawing thread's core)
   (void)arg;
@@ -1423,7 +1418,7 @@ static void finish_open(void) {
   query[0] = 0;
   refilter();
   show_opened();
-  web_start();
+  // (the Browser's threads start when it's first opened, not with the vault)
   scroll = scroll_v = 0;
   sel = 0;
   la_update_stats();
@@ -3462,15 +3457,8 @@ int main(void) {
   atlas_init();
   saver_start();
   closer_start();
-  // the network made ready in the background (libcurl and OpenSSL take a moment to start): the
-  // Browser, Drive and the rest find it done
-  {
-    pthread_t nt;
-    pthread_attr_t at;
-    pthread_attr_init(&at);
-    pthread_attr_setstacksize(&at, 256 * 1024);
-    if (pthread_create(&nt, &at, net_warm, NULL) == 0) pthread_detach(nt);
-  }
+  // (no network at start: libcurl and OpenSSL are started by the first thread that fetches, when the
+  //  Browser, Drive or the rest is first used; a Library-only session never starts them)
 
   find_vaults();
   pin_load();
@@ -3515,11 +3503,12 @@ int main(void) {
     }
     videos_close_now();
     PT("videos closed");
-    // (a backup for the sleep callback: the wall clock jumped, but frames don't take seconds)
-    {
+    // (a backup for the sleep callback: the wall clock jumped, but frames don't take seconds;
+    //  looked at twice a second, not every frame)
+    if (frame_no % 30 == 0) {
       static time_t last_wall;
       time_t now_wall = time(NULL);
-      if (last_wall && now_wall - last_wall > 5) woke = 1;
+      if (last_wall && now_wall - last_wall > 6) woke = 1;
       last_wall = now_wall;
     }
     if (woke) {

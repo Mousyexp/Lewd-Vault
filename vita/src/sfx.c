@@ -22,6 +22,7 @@ static Clip clips[SFX_COUNT];
 typedef struct { int clip, pos; } Voice;
 static Voice voices[VOICES];
 static SceKernelLwMutexWork mutex_work;
+static SceUID wake = -1; // (the mixer sleeps on it while nothing plays; a sound wakes it)
 static volatile int volume = 70;
 static uint64_t last[SFX_COUNT];
 static int ready;
@@ -84,7 +85,8 @@ static int mixer(SceSize args, void *argp) {
       any = 1;
     }
     sceKernelUnlockLwMutex(&mutex_work, 1);
-    if (!any) { sceKernelDelayThread(4000); continue; }
+    // (nothing playing: asleep until a sound starts, not waking every few milliseconds to look)
+    if (!any) { if (wake >= 0) sceKernelWaitSema(wake, 1, NULL); else sceKernelDelayThread(4000); continue; }
     for (int i = 0; i < GRAIN * 2; i++) out[i] = (int16_t)(acc[i] > 32767 ? 32767 : acc[i] < -32768 ? -32768 : acc[i]);
     sceAudioOutOutput(port, out);
   }
@@ -95,6 +97,7 @@ void sfx_init(void) {
   for (int k = 0; k < SFX_COUNT; k++) load(k);
   for (int v = 0; v < VOICES; v++) voices[v].clip = -1;
   sceKernelCreateLwMutex(&mutex_work, "lv_sfx", 0, 0, NULL);
+  wake = sceKernelCreateSema("lv_sfx_wake", 0, 0, 1, NULL);
   SceUID t = sceKernelCreateThread("lv_sfx", mixer, 0x10000100 - 10, 0x4000, 0, SCE_KERNEL_CPU_MASK_USER_2, NULL);
   if (t >= 0) sceKernelStartThread(t, 0, NULL);
   ready = 1;
@@ -128,4 +131,5 @@ void sfx(int id) {
   voices[v].clip = id;
   voices[v].pos = 0;
   sceKernelUnlockLwMutex(&mutex_work, 1);
+  if (wake >= 0) sceKernelSignalSema(wake, 1); // (at most 1: an extra signal while it's already awake is refused, harmlessly)
 }

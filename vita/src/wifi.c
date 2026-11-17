@@ -243,7 +243,7 @@ static void *wf_main(void *arg) {
 
 static void wf_start(void) {
   if (wf_run) return;
-  lv_net_init();
+  lv_net_base(); // (the rest on the worker that fetches)
   SceNetCtlInfo info;
   memset(&info, 0, sizeof info);
   if (sceNetCtlInetGetInfo(SCE_NETCTL_INFO_GET_IP_ADDRESS, &info) >= 0) snprintf(wf_ip, sizeof wf_ip, "%s", info.ip_address);
@@ -264,8 +264,12 @@ static void wf_stop(void) {
 }
 // (on the drawing thread: what came in, into the loaded vault)
 static void wf_take(void) {
+  // (nothing from the Wi-Fi page: back at once, no lock: most frames, and every one while it's off)
+  int keys = 0;
+  for (int s = 0; s < CV_N; s++) keys |= wf_key_set[s];
+  if (!nwf_done && !keys) return;
   pthread_mutex_lock(&wfmx);
-  if (!conv_loaded) conv_keys_load(); // (the others kept: saving writes them all)
+  if (keys && !conv_loaded) conv_keys_load(); // (the others kept: saving writes them all)
   for (int s = 0; s < CV_N; s++)
     if (wf_key_set[s]) { wf_key_set[s] = 0; snprintf(conv_keys[s], sizeof conv_keys[s], "%s", wf_key[s]); conv_keys_save(); sfx(SFX_DONE); say(conv_keys[s][0] ? "A conversion key came from the Wi-Fi page" : "A conversion key was removed"); }
   int n = nwf_done;

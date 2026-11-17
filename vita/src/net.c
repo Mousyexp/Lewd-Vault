@@ -40,37 +40,50 @@ static char proxy[256], cafile[256] = "app0:cacert.pem";
 #include <pthread.h>
 static pthread_mutex_t init_mx = PTHREAD_MUTEX_INITIALIZER;
 static int net_init_locked(void);
-// (once, whoever asks first: a warm-up thread at start, or the first screen that needs it)
+static int base_up;
+// The Vita's own network, quickly (its module, sceNetInit, sceNetCtlInit): enough for the online
+// light and the Wi-Fi page's server. Once.
+int lv_net_base(void) {
+  if (base_up) return 0;
+  pthread_mutex_lock(&init_mx);
+  if (!base_up) {
+    sceSysmoduleLoadModule(SCE_SYSMODULE_NET);
+    static char mem[1024 * 1024]; // (sceNetInit's memory: it keeps using it)
+    SceNetInitParam p = {mem, sizeof mem, 0};
+    int r = sceNetInit(&p);
+    if (r >= 0 || r == (int)0x80410201) { sceNetCtlInit(); base_up = 1; } // (0x80410201: already)
+#ifdef LV_DEBUG
+    // (debug builds in an emulator behind a proxy: its address, and its authority for HTTPS)
+    FILE *f = fopen("ux0:data/LWDV00001/debug_proxy.txt", "r");
+    if (f) {
+      if (fgets(proxy, sizeof proxy, f)) proxy[strcspn(proxy, "\r\n")] = 0;
+      fclose(f);
+      snprintf(cafile, sizeof cafile, "ux0:data/LWDV00001/debug_ca.pem");
+    }
+#endif
+  }
+  pthread_mutex_unlock(&init_mx);
+  return base_up ? 0 : -1;
+}
+// All of it, with libcurl and OpenSSL (seconds on a cold start): only ever on the threads that fetch,
+// the first time one does (perform), never on the drawing thread, and never before anything's fetched
 int lv_net_init(void) {
   if (up) return 0;
+  if (lv_net_base() < 0) return -1;
   pthread_mutex_lock(&init_mx);
   int r = up ? 0 : net_init_locked();
   pthread_mutex_unlock(&init_mx);
   return r;
 }
 static int net_init_locked(void) {
-  sceSysmoduleLoadModule(SCE_SYSMODULE_NET);
-  static char mem[1024 * 1024];
-  SceNetInitParam p = {mem, sizeof mem, 0};
-  int r = sceNetInit(&p);
-  if (r < 0 && r != (int)0x80410201) return -1; // (already: fine)
-  sceNetCtlInit();
   curl_global_init(CURL_GLOBAL_ALL);
-#ifdef LV_DEBUG
-  // (debug builds in an emulator behind a proxy: its address, and its authority for HTTPS)
-  FILE *f = fopen("ux0:data/LWDV00001/debug_proxy.txt", "r");
-  if (f) {
-    if (fgets(proxy, sizeof proxy, f)) proxy[strcspn(proxy, "\r\n")] = 0;
-    fclose(f);
-    snprintf(cafile, sizeof cafile, "ux0:data/LWDV00001/debug_ca.pem");
-  }
-#endif
   up = 1;
   return 0;
 }
 
 int lv_net_online(void) {
   int state = 0;
+  if (lv_net_base() < 0) return 0;
   if (sceNetCtlInetGetState(&state) < 0) return proxy[0] != 0;
   return state == SCE_NETCTL_STATE_CONNECTED || proxy[0];
 }
@@ -80,6 +93,7 @@ static volatile int net_gen;
 void lv_net_reset(void) { net_gen++; }
 static volatile int no_compress;
 LvHttp *lv_http_new(void) {
+  lv_net_init(); // (libcurl ready before its first handle: on the worker that asks)
   LvHttp *h = calloc(1, sizeof *h);
   if (!h) return NULL;
   h->c = curl_easy_init();
@@ -235,6 +249,7 @@ static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const
   Sink s0 = *sp;
   why[0] = 0;
   if (err) *err = why;
+  if (!up) lv_net_init(); // (the first request: libcurl and OpenSSL started here, on this worker)
   if (!up || !h) { snprintf(why, sizeof why, "No network"); return -1; }
   // (no Wi-Fi: said at once, rather than each request waiting out its connect timeout)
   if (!lv_net_online()) { snprintf(why, sizeof why, "Offline: turn on Wi-Fi in the Vita's settings"); return -1; }

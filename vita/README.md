@@ -332,8 +332,14 @@ the compiler inlines across them); textures are only freed after the frame that 
   third of the 4 MB pool, in turn. Textures are freed three frames after their last use (or after
   `vita2d_wait_rendering_done()`). The frame waits for vblank with `sceDisplayWaitVblankStartCB()`.
   Every drawing call refuses a coordinate that isn't a number or is absurdly far off.
-- **Network:** the Net module, `sceNetInit` (its 1 MB buffer static), then `sceNetCtlInit`; curl and
-  OpenSSL start on a background thread, and no SceSsl/SceHttp module is loaded. Each request first
+- **Lean:** nothing runs that isn't needed. Network threads start when the Browser, Drive and so on
+  are first used, not at launch or when a vault opens. The sound mixer sleeps until a sound plays.
+  Each frame's hand-offs from the workers are skipped without locking when nothing is waiting. The
+  AI-made check runs once per post as it's read (and once over favourites when they load), never
+  per frame.
+- **Network:** the Net module, `sceNetInit` (its 1 MB buffer static), then `sceNetCtlInit`, quickly
+  and only when something needs it. libcurl and OpenSSL (seconds on a cold start) start on the first
+  worker thread that fetches, never on the drawing thread. No SceSsl/SceHttp module is loaded. Each request first
   checks `sceNetCtlInetGetState`: with no Wi-Fi it fails at once ("Offline"). TLS is libcurl with
   OpenSSL and the bundled Mozilla CA list (`cacert.pem`), with verification always on. A certificate
   that looks expired or not yet valid gets a message to set the Vita's date and time. Connect times

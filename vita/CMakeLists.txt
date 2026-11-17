@@ -114,6 +114,7 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE ui/chev_l.png ui/chev_l.png
   FILE ui/chev_r.png ui/chev_r.png
   FILE ui/refresh.png ui/refresh.png
+  FILE ui/all.png ui/all.png
   FILE ui/tag.png ui/tag.png
   FILE ui/wifi.png ui/wifi.png
   FILE ui/back.png ui/back.png

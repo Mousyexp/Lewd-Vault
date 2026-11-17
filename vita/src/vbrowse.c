@@ -281,7 +281,7 @@ static void vb_clear(void) {
   vb_y = 0;
 }
 static void vb_open(int k) {
-  lv_net_init();
+  lv_net_base(); // (the rest on the worker that fetches)
   wlists_load();
   pthread_mutex_lock(&vbmx);
   vb_gen++;

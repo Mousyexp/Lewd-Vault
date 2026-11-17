@@ -5,7 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-int lv_net_init(void); // 0 when the network is up
+int lv_net_init(void); // 0 when the network is up (libcurl too: slow the first time, for worker threads)
+int lv_net_base(void); // the Vita's network only (quick): the online light, the Wi-Fi page's server
 int lv_net_online(void); // 1 when connected (Wi-Fi)
 typedef struct LvHttp LvHttp;
 LvHttp *lv_http_new(void);

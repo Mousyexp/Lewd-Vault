@@ -53,6 +53,8 @@ const ICONS = {
   chev_l: `<path d="M14.5 5 L7.5 12 L14.5 19" ${S} stroke-width="2.6"/>`,
   chev_r: `<path d="M9.5 5 L16.5 12 L9.5 19" ${S} stroke-width="2.6"/>`,
   refresh: `<path d="M19.5 12 A7.5 7.5 0 1 1 16.8 6.2 M17.5 2.8 V6.8 H13.5" ${S}/>`,
+  // the Library's "All": a bento of tiles (one tall, two small) with a sparkle in the tall one
+  all: `<path d="M5.4 3 h4.2 a2.6 2.6 0 0 1 2.6 2.6 v12.8 a2.6 2.6 0 0 1 -2.6 2.6 h-4.2 a2.6 2.6 0 0 1 -2.6 -2.6 v-12.8 a2.6 2.6 0 0 1 2.6 -2.6 Z M7.5 6.8 Q8 11.3 10.6 12 Q8 12.7 7.5 17.2 Q7 12.7 4.4 12 Q7 11.3 7.5 6.8 Z" ${F} fill-rule="evenodd"/><rect x="15" y="3.4" width="6" height="7" rx="2.1" ${S}/><rect x="15" y="13.6" width="6" height="7" rx="2.1" ${S}/>`,
   image: `<rect x="3" y="4.5" width="18" height="15" rx="2.8" ${S}/><path d="M5.5 17 l4.5 -4.6 l3.2 3.2 l2.2 -2.2 l3.2 3.4" ${S}/><circle cx="8.6" cy="9.2" r="1.4" ${F}/>`,
 };
 const TAB = ['photos', 'photos_fill', 'compass', 'compass_fill', 'play', 'play_fill', 'gear', 'gear_fill'];

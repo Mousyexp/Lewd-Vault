@@ -36,7 +36,9 @@ static void favs_load(void) {
     snprintf(v->preview, sizeof v->preview, "%s", p[4]);
     snprintf(v->extra, sizeof v->extra, "%s", p[5]);
     v->length = atoi(p[6]);
-    if (v->page[0]) nfavs++;
+    // (checked once, here: one AI-made by its title, kept from before that was checked, is left out;
+    //  new ones come from posts already checked)
+    if (v->page[0] && !lv_ai_made(v->title)) nfavs++;
   }
   if (f) fclose(f);
 }
@@ -198,7 +200,7 @@ static float bar_busy(void) {
 }
 static void fav_thread_start(void) {
   if (!fav_thread_on) {
-    lv_net_init();
+    lv_net_base(); // (the rest on the worker that fetches)
     pthread_t t;
     pthread_attr_t at;
     pthread_attr_init(&at);
@@ -237,7 +239,7 @@ static void favs_open(int tab) {
   fav_tab = tab; fav_sel = 0; fav_scroll = 0;
   fav_back = screen == S_FAVS ? fav_back : screen;
   if (!fav_thread_on) {
-    lv_net_init();
+    lv_net_base(); // (the rest on the worker that fetches)
     pthread_t t;
     pthread_attr_t at;
     pthread_attr_init(&at);
@@ -250,8 +252,7 @@ static void favs_open(int tab) {
 // (the favourites of the tab, in order: their places in favs)
 static int fav_list(int tab, int *out) {
   int m = 0;
-  // (one AI-made, by its title, isn't shown: kept from before that was checked, it stays out of sight)
-  for (int k = 0; k < nfavs; k++) if (favs[k].kind == (tab ? FAV_COMIC : FAV_VIDEO) && !lv_ai_made(favs[k].title)) out[m++] = k;
+  for (int k = 0; k < nfavs; k++) if (favs[k].kind == (tab ? FAV_COMIC : FAV_VIDEO)) out[m++] = k;
   return m;
 }
 static int site_named(const char *name) {
@@ -312,7 +313,7 @@ static void fav_play(int at, int offline) {
 static void fav_read(int at, int offline) {
   const Fav *v = &favs[at];
   int src = !strcmp(v->site, "E-Hentai") ? MS_EHENTAI : MS_MANGADEX;
-  lv_net_init();
+  lv_net_base(); // (the rest on the worker that fetches)
   mg_start_thread();
   mg.src = src;
   mg_search_cancel();

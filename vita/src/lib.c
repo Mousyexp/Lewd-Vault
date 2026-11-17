@@ -66,7 +66,7 @@ static void lib_prepare(void) {
 // Pictures leaves comics' pages out; Comics shows one card per book (its first page, its pages
 // counted), and a book opens at its first page, or where it was left.
 static const char *LMODES[] = {"All", "Pictures", "Videos", "Comics"};
-static const char *LMODE_ICONS[] = {"photos", "image", "film", "book"};
+static const char *LMODE_ICONS[] = {"all", "image", "film", "book"};
 static const char *COMIC_WORDS[] = {"comic", "comics", "manga", "doujinshi", "doujin", "webtoon", "manhwa", "manhua", NULL};
 static unsigned char *comic_flag; // per item: 1 a comic's page
 static int comic_vgen;

@@ -610,7 +610,7 @@ static void web_start(void) {
   if (web_started) return;
   web_started = 1;
   custom_sites_load();
-  lv_net_init();
+  lv_net_base(); // (the rest on the worker that fetches)
   pthread_t t;
   pthread_attr_t at;
   pthread_attr_init(&at);
@@ -770,6 +770,7 @@ static const char *save_category(void) {
 }
 
 static void web_take_results(void) {
+  if (!page_ready.ready && !nwdone) return; // (nothing come: no lock taken, a look at two numbers)
   pthread_mutex_lock(&wmx);
   if (page_ready.ready) {
     LvPost *got = page_ready.posts;
@@ -1155,7 +1156,7 @@ static void find_open(int tab) {
   memcpy(find_sites, LV_SITES, sizeof find_sites); find_nsites = LV_NSITES;
   nvsources(); // (the video sources read here, on this thread: the finder's thread only looks at them)
   pthread_mutex_lock(&fdmx); nfrows = 0; pthread_mutex_unlock(&fdmx);
-  lv_net_init();
+  lv_net_base(); // (the rest on the worker that fetches)
   pthread_t t;
   pthread_attr_t at;
   pthread_attr_init(&at);
@@ -1432,7 +1433,7 @@ static void check_sources(int tab) {
     m++;
   }
   check_jobs = jobs; ncheck_jobs = m; check_left = m;
-  lv_net_init();
+  lv_net_base(); // (the rest on the worker that fetches)
   pthread_t t;
   pthread_attr_t at;
   pthread_attr_init(&at);
