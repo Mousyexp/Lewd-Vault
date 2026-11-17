@@ -695,6 +695,7 @@ static char wv_ext[8];
 static int fav_offline_next; // (post + 1 to make available offline once it's all here: the save page then)
 static int fav_toggle_video(const LvPost *p, int site); // (favs.c)
 static void sw_open(void);
+static void wv_offline(void);
 static int fav_find(int kind, const char *page);
 static LvVideo *wv_vid;
 static const LvGrow *wv_stream; // (the player's download, while it's still coming)
@@ -849,7 +850,7 @@ static void web_take_results(void) {
           else snprintf(wv_err, sizeof wv_err, "This video can't be played on the Vita (it can still be saved)");
         }
         // (asked to be made available offline while it came: the save page, now it's all here)
-        if (fav_offline_next == wv + 1 && !d->err[0]) { fav_offline_next = 0; sw_open(); }
+        if (fav_offline_next == wv + 1 && !d->err[0]) { fav_offline_next = 0; wv_offline(); } // (480p, or refused)
       }
     } else if (d->kind == WD_SAVE) {
       saving = 0;
@@ -1032,8 +1033,7 @@ static volatile int find_cached; // (none read: the last look's, from the card)
 static int find_tab, find_sel;
 static float find_scroll;
 static pthread_mutex_t fdmx = PTHREAD_MUTEX_INITIALIZER;
-// (a site's videos, no bigger than the Vita's screen: its own size search)
-static const char *video_tags_for(int kind) { return kind == BK_DANBOORU ? "filetype:mp4 mpixels:..0.52" : kind == BK_GELBOORU ? "video width:<=960 height:<=960" : "mpixels:..0.52"; }
+static const char *video_tags_for(int kind) { return kind == BK_DANBOORU ? "filetype:mp4" : kind == BK_GELBOORU ? "video" : ""; }
 static void draw_letter_icon(int x, int y, int sz, const char *name);
 static const char *KIND_NAMES[] = {"Danbooru", "Gelbooru", "Moebooru", "e621"};
 static LvSite find_sites[LV_MAX_SITES];
@@ -2197,6 +2197,19 @@ static void wv_btns(int *x1, int *w1, int *x2, int *w2) {
 static void wv_offline(void) {
   if (wv >= nposts) return;
   if (is_saved(&posts[wv])) { say("It's in your vault already"); return; }
+  // (offline copies are 480p: the episode sites give that file; a booru keeps only the original, and
+  //  says its size: bigger than 480p, it isn't made available offline, it stays a favourite)
+  {
+    const LvPost *p = &posts[wv];
+    int w = p->width, h = p->height, small_side = w < h ? w : h;
+    if (lv_site_is_booru(&LV_SITES[wv_site()]) && small_side > 480) {
+      sfx(SFX_ERROR);
+      char m[160];
+      snprintf(m, sizeof m, "This site only has it at %dx%d: offline copies are 480p, so keep it as a favourite", w, h);
+      say(m);
+      return;
+    }
+  }
   if (wv_raw_post == wv) { sw_open(); return; }
   fav_offline_next = wv + 1;
   sfx(SFX_TOGGLE);

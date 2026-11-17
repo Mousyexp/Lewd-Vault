@@ -20,13 +20,11 @@ static const VSource VSRC_BUILTIN[] = {
   {"Rule34Video", "Rule34Video", "hentai", "rule34video", "Hentai animations", 0},
   {"Genshin Impact", "Rule34Video", "genshin-impact", "r34anime", "Genshin animations (Rule34Video)", 0},
   {"Blue Archive", "Rule34Video", "blue-archive", "r34anime", "Blue Archive animations (Rule34Video)", 0},
-  // (the boorus keep only each video's original: their rows ask for ones no bigger than 960 x 540,
-  //  the Vita's screen, by the sites' own size searches)
-  {"Sakugabooru", "Sakugabooru", "mpixels:..0.52", "sakugabooru", "Anime animation clips", 0},
-  {"Rule34", "Rule34", "video -furry -3d -real width:<=960 height:<=960", "rule34", "Hentai videos (API key)", 0},
-  {"Xbooru", "Xbooru", "video width:<=960 height:<=960", "xbooru", "Hentai clips", 0},
-  {"Gelbooru", "Gelbooru", "video width:<=960 height:<=960", "gelbooru", "Anime and hentai clips (key)", 0},
-  {"Danbooru", "Danbooru", "filetype:mp4 mpixels:..0.52", "danbooru", "Anime clips", 0},
+  {"Sakugabooru", "Sakugabooru", "", "sakugabooru", "Anime animation clips", 0},
+  {"Rule34", "Rule34", "video -furry -3d -real", "rule34", "Hentai videos (API key)", 0},
+  {"Xbooru", "Xbooru", "video", "xbooru", "Hentai clips", 0},
+  {"Gelbooru", "Gelbooru", "video", "gelbooru", "Anime and hentai clips (key)", 0},
+  {"Danbooru", "Danbooru", "filetype:mp4", "danbooru", "Anime clips", 0},
   // (both only answer after a Cloudflare browser check, which an app can't pass)
   {"hanime.tv", NULL, NULL, "hanime", "Hentai (browser check)", 1},
   {"MissAV", NULL, NULL, "missav", "JAV (browser check)", 1},
