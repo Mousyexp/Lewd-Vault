@@ -12,10 +12,12 @@ typedef struct {
 #define FAV_MAX 300
 static Fav *favs;
 static int nfavs, favs_loaded;
+static unsigned favs_ver; // (one more each time they change: what's worked out from them is kept till then)
 
 static void fav_clean(char *s) { for (; *s; s++) if (*s == '\t' || *s == '\n' || *s == '\r') *s = ' '; }
 static void favs_load(void) {
   favs_loaded = 1;
+  favs_ver++;
   if (!favs) favs = calloc(FAV_MAX, sizeof *favs);
   if (!favs) return;
   nfavs = 0;
@@ -43,6 +45,7 @@ static void favs_load(void) {
   if (f) fclose(f);
 }
 static void favs_save(void) {
+  favs_ver++;
   FILE *f = fopen(DATA "/favorites.tsv.part", "w");
   if (!f) return;
   for (int k = 0; k < nfavs; k++) {
@@ -178,6 +181,7 @@ static void fav_ask(int k, int w, int h) {
   pthread_mutex_unlock(&fvmx);
 }
 static void fav_take(void) {
+  if (!nfav_done) return; // (nothing come: no lock)
   pthread_mutex_lock(&fvmx);
   int n = nfav_done < 3 ? nfav_done : 3; // (three a frame: the scroll never waits)
   typeof(fav_done[0]) got[8];
@@ -212,12 +216,12 @@ static void fav_thread_start(void) {
 static int fav_list(int tab, int *out);
 static void fav_play(int at, int offline);
 // ---- the video browser's "Up next" row: the favourite videos (vbrowse.c) ----
-// (the list made once a frame: each card asks several things of it)
+// (the list made again only when the favourites change, not each frame)
 static int upnext_list[FAV_MAX], nupnext;
-static unsigned upnext_frame = ~0u;
+static unsigned upnext_ver = ~0u;
 static int upnext_n(void) {
   if (!favs_loaded) favs_load();
-  if (upnext_frame != frame_no) { upnext_frame = frame_no; nupnext = fav_list(0, upnext_list); }
+  if (upnext_ver != favs_ver) { upnext_ver = favs_ver; nupnext = fav_list(0, upnext_list); }
   return nupnext;
 }
 static int upnext_at(int j) { int m = upnext_n(); return j >= 0 && j < m ? upnext_list[j] : -1; }

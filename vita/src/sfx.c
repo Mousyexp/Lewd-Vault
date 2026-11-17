@@ -26,6 +26,7 @@ static SceUID wake = -1; // (the mixer sleeps on it while nothing plays; a sound
 static volatile int volume = 70;
 static uint64_t last[SFX_COUNT];
 static int ready;
+static volatile int clips_loaded; // (the WAVs read the first time a sound plays: none while sounds are off)
 
 // A WAV's samples (16-bit PCM, its data chunk found by name).
 static char pack_dir[48] = "app0:sounds"; // (the pack: the Vita's own, or app0:sounds/<pack>)
@@ -94,7 +95,6 @@ static int mixer(SceSize args, void *argp) {
 }
 
 void sfx_init(void) {
-  for (int k = 0; k < SFX_COUNT; k++) load(k);
   for (int v = 0; v < VOICES; v++) voices[v].clip = -1;
   sceKernelCreateLwMutex(&mutex_work, "lv_sfx", 0, 0, NULL);
   wake = sceKernelCreateSema("lv_sfx_wake", 0, 0, 1, NULL);
@@ -108,6 +108,7 @@ void sfx_pack(const char *pack) {
   Clip fresh[SFX_COUNT], old[SFX_COUNT];
   memset(fresh, 0, sizeof fresh);
   snprintf(pack_dir, sizeof pack_dir, "%s%s%s", "app0:sounds", pack && pack[0] ? "/" : "", pack ? pack : "");
+  if (!clips_loaded) return; // (nothing read yet: the first sound reads this pack)
   for (int k = 0; k < SFX_COUNT; k++) load_into(fresh, k); // (apart: the mixer still plays the old ones)
   if (ready) sceKernelLockLwMutex(&mutex_work, 1, NULL);
   memcpy(old, clips, sizeof clips);
@@ -119,7 +120,9 @@ void sfx_pack(const char *pack) {
 void sfx_volume(int percent) { volume = percent < 0 ? 0 : percent > 100 ? 100 : percent; }
 
 void sfx(int id) {
-  if (!ready || id < 0 || id >= SFX_COUNT || !clips[id].pcm || volume == 0) return;
+  if (!ready || id < 0 || id >= SFX_COUNT || volume == 0) return;
+  if (!clips_loaded) { for (int k = 0; k < SFX_COUNT; k++) load(k); clips_loaded = 1; } // (the first sound: the pack read now)
+  if (!clips[id].pcm) return;
   uint64_t now = sceKernelGetProcessTimeWide() / 1000;
   if (now - last[id] < (uint64_t)GAP[id]) return;
   last[id] = now;

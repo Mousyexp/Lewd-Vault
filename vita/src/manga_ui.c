@@ -502,6 +502,7 @@ static void mg_want_page(int page, int hi) {
   mg_push(MJ_PAGE, page, hi, mg.pages[page]);
 }
 static void mg_take(void) {
+  if (!nmdone) return; // (nothing come: no lock)
   pthread_mutex_lock(&mgmx);
   int n = nmdone < 6 ? nmdone : 6;
   MDone got[16];

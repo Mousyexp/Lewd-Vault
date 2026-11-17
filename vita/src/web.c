@@ -884,6 +884,14 @@ static vita2d_texture *preview_of(int p) {
   return NULL;
 }
 static void ask_previews(const int *list, int n) {
+  static int last[48], nlast = -1, last_gen = -1;
+  if (n == nlast && last_gen == wgen && !memcmp(list, last, n * sizeof *list)) { // (as last frame)
+    int unasked = 0;
+    for (int k = 0; k < n && !unasked; k++) unasked = list[k] < nposts && wstate[list[k]] == 0;
+    if (!unasked) return;
+  }
+  nlast = n < 48 ? n : 48; last_gen = wgen;
+  memcpy(last, list, nlast * sizeof *list);
   pthread_mutex_lock(&wmx);
   for (int k = 0; k < nwwant; k++) if (wwant[k] < nposts && wstate[wwant[k]] == 1) wstate[wwant[k]] = 0;
   nwwant = 0;

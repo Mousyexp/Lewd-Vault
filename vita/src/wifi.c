@@ -297,7 +297,9 @@ static void draw_wifi(void) {
   snprintf(url, sizeof url, "http://%s:%d", wf_ip[0] ? wf_ip : "?", WF_PORT);
   if (wf_ip[0] && wf_run) draw_qr(url, 30, 76, 300);
   int x = wf_ip[0] && wf_run ? 360 : 30;
-  if (!lv_net_online() && !wf_ip[0]) text(x, 110, ACC2, 18, "Not connected: turn on Wi-Fi in the Vita's settings");
+  static int online = 1;
+  if (frame_no % 60 == 0) online = lv_net_online(); // (once a second, not every frame)
+  if (!online && !wf_ip[0]) text(x, 110, ACC2, 18, "Not connected: turn on Wi-Fi in the Vita's settings");
   else if (!wf_run) text(x, 110, ACC2, 18, wf_last[0] ? wf_last : "It couldn't start");
   else {
     text(x, 110, DIM, 17, "On a phone or PC on the same Wi-Fi, open");

@@ -507,7 +507,7 @@ static void cfg_load(void) {
   if (cfg.acc_v < 25 || cfg.acc_v > 100) cfg.acc_v = 100;
   if (cfg.bgstyle < 0 || cfg.bgstyle > 3) cfg.bgstyle = 0;
   if (cfg.sndpack < 0 || cfg.sndpack > 3) cfg.sndpack = 0;
-  if (cfg.sort < 0 || cfg.sort >= 7) cfg.sort = 0;
+  if (cfg.sort < 0 || cfg.sort >= 10) cfg.sort = 0;
   if (cfg.wsel < 0) cfg.wsel = 0;
   if (cfg.sounds < 0 || cfg.sounds > 100) cfg.sounds = 70;
   if (cfg.wspan < 0 || cfg.wspan >= LV_NSPANS) cfg.wspan = 0;
@@ -530,8 +530,10 @@ static int *shown, nshown;     // indices into vault.items
 static float scroll, scroll_v; // (the Library's)
 static int cat = -1;           // -1: every category
 static char query[128];
-static const char *SORTS[] = {"Newest", "Oldest", "Most viewed", "Top rated", "Most hearted", "Shuffle", "For you"};
-#define NSORTS 7
+// (their numbers are kept in config.txt: new ones only ever go on the end)
+static const char *SORTS[] = {"Newest", "Oldest", "Most viewed", "Top rated", "Most appreciated", "Shuffle", "For you",
+                              "Least viewed", "Recently viewed", "Most time spent"};
+#define NSORTS 10
 static int lib_pass(int i);
 static void lib_prepare(void);
 static int mode_pass(int i);
@@ -561,14 +563,24 @@ static int cmp_items(const void *a, const void *b) {
     case 2: d = views_at(y->view) - views_at(x->view); break;
     case 3: d = (int)y->quality - (int)x->quality; break;
     case 4: d = likes_at(y->view) - likes_at(x->view); break;
+    case 7: d = views_at(x->view) - views_at(y->view); break; // (least viewed first)
+    case 8: { // (the one looked at last first; never looked at: last)
+      const char *lx = x->view >= 0 && vault.views[x->view].last ? vault.views[x->view].last : "";
+      const char *ly = y->view >= 0 && vault.views[y->view].last ? vault.views[y->view].last : "";
+      int c = strcmp(ly, lx);
+      if (c) return c;
+      break;
+    }
+    case 9: { double sx = x->view >= 0 ? vault.views[x->view].seconds : 0, sy = y->view >= 0 ? vault.views[y->view].seconds : 0; d = sy > sx ? 1 : sy < sx ? -1 : 0; break; }
   }
   if (d) return d > 0 ? 1 : -1;
   d = y->added - x->added;
   return d > 0 ? 1 : d < 0 ? -1 : 0;
 }
 static Grid lgrid;
+static int is_cover_in_all(int i); // (lib.c)
 static float lib_aspect(int k) {
-  if (book_shelf) return 0.7f; // (every book the same shape, as on a shelf)
+  if (book_shelf || is_cover_in_all(shown[k])) return 0.7f; // (a book: a cover's shape)
   const LvItem *it = &vault.items[shown[k]];
   float a = it->width > 0 && it->height > 0 ? (float)it->width / it->height : 0.75f;
   return a < 0.5f ? 0.5f : a; // (a webtoon's strip: a card, not a sliver; the card shows its top)
@@ -957,12 +969,23 @@ static void want_size(int item, float w, float h) {
   tsize_h[item] = (unsigned short)(h * s + 0.5f);
 }
 static void ask_thumbs(const int *items, int n) {
+  // (the same list as last frame, the usual case: nothing to do, no lock)
+  static int last[64], nlast = -1;
+  if (n == nlast && !memcmp(items, last, n * sizeof *items)) {
+    int unasked = 0; // (one let go meanwhile, its request dropped: asked again)
+    for (int k = 0; k < n && !unasked; k++) unasked = tstate[items[k]] == 0;
+    if (!unasked) return;
+  }
+  nlast = n < 64 ? n : 64;
+  memcpy(last, items, nlast * sizeof *items);
   pthread_mutex_lock(&mx);
   for (int k = 0; k < nwant; k++) if (tstate[want[k]] == 1) tstate[want[k]] = 0;
   nwant = 0;
-  for (int k = 0; k < n && nwant < 64; k++)
-    if (tstate[items[k]] == 0) { tstate[items[k]] = 1; want[nwant++] = items[k]; }
-  if (nwant) pthread_cond_signal(&cv);
+  int fresh = 0;
+  for (int k = 0; k < n && nwant < 64; k++) {
+    if (tstate[items[k]] == 0) { tstate[items[k]] = 1; want[nwant++] = items[k]; fresh = 1; }
+  }
+  if (fresh) pthread_cond_signal(&cv); // (the worker woken only when there's something for it)
   pthread_mutex_unlock(&mx);
 }
 static int big_hi, big_hi_item = -1;
@@ -1771,6 +1794,8 @@ static int online_button(int right) {
 static int cats_x; // (where the categories' list opens)
 static void favs_open(int tab); // (favs.c)
 #include "lib.c"
+static void vc_tri(float cx, float cy, float s, unsigned c);
+static int text_wrap(int x, int y, unsigned c, int size, const char *s, int w, int lh);
 #include "show.c"
 #include "drive_ui.c"
 #include "pin.c"
@@ -1778,15 +1803,15 @@ static void favs_open(int tab); // (favs.c)
 #include "clean.c"
 #include "livearea.c"
 
-// ----- the hero row over All: Continue watching, then Recently hearted -----
+// ----- the hero row over All: Continue watching, then Recently appreciated (♥) -----
 // Up to sixteen of what's shown: videos stopped part way, then the ones given a heart most lately. It
 // sits above the grid as part of the page (the grid's cards move down by its height), so it scrolls
 // away with it. ↑ from the first row goes into it; ←→ along; ✕ opens; ↓ back to the grid.
-static void vc_tri(float cx, float cy, float s, unsigned c);
 #define LHERO_H 150
 #define LHERO_CW 176
 #define LHERO_CH 99
 static int lhero[16], lhero_kind[16], nlhero, lhero_on, lhero_sel;
+static float lhero_done[16]; // (how far each was watched: found when the row's made, not each frame)
 static float lhero_x;
 static int cmp_last_like(const void *a, const void *b) {
   const LvItem *x = &vault.items[*(const int *)a], *y = &vault.items[*(const int *)b];
@@ -1812,6 +1837,10 @@ static void lhero_build(void) {
       if (!dup) { lhero_kind[nlhero] = 1; lhero[nlhero++] = liked[k]; }
     }
     if (nlhero < 2) nlhero = 0; // (one alone isn't a row)
+  }
+  for (int k = 0; k < nlhero; k++) {
+    const LvItem *it = &vault.items[lhero[k]];
+    lhero_done[k] = lhero_kind[k] == 0 && it->duration > 0 ? fminf(1, resume_of(it) / (float)it->duration) : 0;
   }
   if (!nlhero) lhero_on = 0;
   if (lhero_sel >= nlhero) lhero_sel = nlhero ? nlhero - 1 : 0;
@@ -1846,7 +1875,7 @@ static int lhero_input(void) {
   in.pressed &= ~(SCE_CTRL_RIGHT | SCE_CTRL_LEFT | SCE_CTRL_DOWN | SCE_CTRL_UP | SCE_CTRL_CROSS | SCE_CTRL_CIRCLE | SCE_CTRL_SQUARE | SCE_CTRL_TRIANGLE);
   scroll += (0 - scroll) * 0.3f; // (in sight)
   if (open) {
-    for (int k = 0; k < nshown; k++) if (shown[k] == lhero[lhero_sel]) { sfx(SFX_SELECT); lhero_on = 0; open_viewer(k, 0); return 2; }
+    for (int k = 0; k < nshown; k++) if (shown[k] == lhero[lhero_sel]) { lhero_on = 0; lib_open(k); return 2; }
   }
   return 1;
 }
@@ -1872,7 +1901,7 @@ static int lhero_draw(float y, int *want, int nwant_max) {
   for (int k = 0; k < nlhero; k++) {
     float x = JMARGIN + k * (LHERO_CW + 12) - lhero_x, cy = y + 24;
     if (k == 0 || lhero_kind[k] != lhero_kind[k - 1]) {
-      const char *ttl = lhero_kind[k] == 0 ? "Continue watching" : "Recently hearted";
+      const char *ttl = lhero_kind[k] == 0 ? "Continue watching" : "Recently appreciated";
       float tx = fmaxf(JMARGIN, x);
       if (tx < W) text(tx, y + 16, DIM, 15, ttl);
     }
@@ -1887,7 +1916,7 @@ static int lhero_draw(float y, int *want, int nwant_max) {
     const LvItem *it = &vault.items[i];
     if (lhero_kind[k] == 0 && it->duration > 0) {
       // how far it got
-      float f = fminf(1, resume_of(it) / (float)it->duration);
+      float f = lhero_done[k];
       rrect(x, cy + LHERO_CH - 4, LHERO_CW, 4, 2, RGBA(0, 0, 0, 160));
       rrect(x, cy + LHERO_CH - 4, LHERO_CW * f, 4, 2, ACC);
       circle(x + 18, cy + LHERO_CH - 22, 12, RGBA(0, 0, 0, 150));
@@ -1895,7 +1924,7 @@ static int lhero_draw(float y, int *want, int nwant_max) {
     } else heart(x + 16, cy + LHERO_CH - 16, 6, ACC);
     if (lhero_on && k == lhero_sel) { ring_x = x; ring_y = cy; }
     if (hit((int)x, (int)cy, LHERO_CW, LHERO_CH) && in.tap_y > TOP && in.tap_y < H - BAR) {
-      for (int j = 0; j < nshown; j++) if (shown[j] == i) { sfx(SFX_SELECT); lhero_on = 0; open_viewer(j, 0); return -1; }
+      for (int j = 0; j < nshown; j++) if (shown[j] == i) { lhero_on = 0; lib_open(j); return -1; }
     }
   }
   if (ring_x > -1) focus_ring(ring_x, ring_y, LHERO_CW, LHERO_CH);
@@ -2009,8 +2038,10 @@ static void draw_library(void) {
     int on = k == sel && !in.touching && !lhero_on;
     float grow = on ? 3 : 0;
     if (on) { fr_x = x - grow; fr_y = y - grow; fr_w = cw + 2 * grow; fr_h = ch + 2 * grow; }
-    if (book_shelf) { // (the pages' edges behind it, a book's thickness)
-      int pages = book_count[i] > 40 ? 4 : book_count[i] > 12 ? 3 : 2;
+    int in_all_book = !book_shelf && is_cover_in_all(i);
+    if (book_shelf || in_all_book) { // (the pages' edges behind it, a book's thickness)
+      int bp = book_shelf ? book_count[i] : cover_pages ? cover_pages[i] : 1;
+      int pages = bp > 40 ? 4 : bp > 12 ? 3 : 2;
       for (int e = pages; e >= 1; e--) rrect(x - grow + e * 3, y - grow + e * 3, cw + 2 * grow, ch + 2 * grow, 6, e & 1 ? RGBA(238, 232, 224, 255) : RGBA(180, 172, 164, 255));
     }
     if (t) draw_cover(t, x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, RGBA(255, 255, 255, 255));
@@ -2047,6 +2078,15 @@ static void draw_library(void) {
       rrect(x + cw - tw - 16, y + 6, tw + 12, 20, 10, RGBA(0, 0, 0, 160));
       text(x + cw - tw - 10, y + 21, TEXT, 13, pc);
     }
+    if (in_all_book) { // (a comic in All: its spine, and a badge saying so, with its pages)
+      grad(x, y, 14, ch, RGBA(0, 0, 0, 255), 150, 0, 1);
+      char bl[32];
+      snprintf(bl, sizeof bl, "COMIC \u00b7 %d p", cover_pages ? cover_pages[i] : 0);
+      int bw = text_w(11, bl) + 34;
+      rrect(x + 8, y + 8, bw, 22, 11, with_alpha(ACC, 235));
+      icon("book", x + 21, y + 19, RGBA(20, 12, 16, 255));
+      text(x + 32, y + 23, RGBA(20, 12, 16, 255), 11, bl);
+    }
     if (lv_likes_of(&vault, it) > 0) heart(x + 16, y + ch - 16, 6, ACC);
     if (is_locked(i)) { // (above the level the slideshow session has reached)
       vita2d_draw_rectangle(x, y, cw, ch, RGBA(14, 10, 14, 225));
@@ -2062,8 +2102,7 @@ static void draw_library(void) {
     if (hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR) {
       sel = k;
       if (selecting) { picked[i] ^= 1; npicked += picked[i] ? 1 : -1; sfx(SFX_TOGGLE); }
-      else if (book_shelf) { sfx(SFX_OPEN); open_book(k); in = saved_in; return; }
-      else { sfx(SFX_SELECT); open_viewer(k, 0); in = saved_in; return; }
+      else { lib_open(k); in = saved_in; return; }
     }
   }
   if (fr_x >= 0) focus_ring(fr_x, fr_y, fr_w, fr_h);
@@ -2133,7 +2172,7 @@ static void draw_library(void) {
   }
   if (!book_inside) {
     sx -= head_button(sx, "sort", SORTS[cfg.sort], SURF2, &hb) + 8;
-    if (hb || (!selecting && (in.pressed & SCE_CTRL_TRIANGLE))) { sfx(SFX_TOGGLE); cfg.sort = (cfg.sort + 1) % NSORTS; refilter(); cfg_save(); sel = 0; scroll = 0; }
+    if (hb || (!selecting && (in.pressed & SCE_CTRL_TRIANGLE))) { sfx(SFX_OPEN); lsheet = LS_SORT; lsheet_sel = cfg.sort; }
   }
   sx -= head_button(sx, "sliders", kl, nf ? with_alpha(ACC, 110) : SURF2, &hb) + 8;
   if (hb || (!selecting && (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); lsheet = LS_FILTERS; lsheet_sel = 0; }
@@ -2169,8 +2208,7 @@ static void draw_library(void) {
     if ((in.pressed & SCE_CTRL_TRIANGLE) && npicked) { sfx(SFX_OPEN); lsheet = LS_BATCH; lsheet_sel = 0; delete_armed = 0; }
     if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); selecting = 0; if (picked) memset(picked, 0, vault.n + 1); npicked = 0; in.pressed &= ~SCE_CTRL_CIRCLE; }
   } else {
-    if (open_now && nshown && book_shelf) { sfx(SFX_OPEN); open_book(sel); }
-    else if (open_now && nshown) { sfx(SFX_SELECT); open_viewer(sel, 0); }
+    if (open_now && nshown) lib_open(sel);
     if ((in.pressed & SCE_CTRL_START) && nshown && !book_shelf) { sfx(SFX_SLIDESHOW); open_viewer(sel, 1); }
     if ((in.pressed & SCE_CTRL_CIRCLE) && book_inside) { sfx(SFX_BACK); close_book(); }
     else if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_WEB; } // (○ goes round the tabs: Library, Browser, Settings)
@@ -2188,6 +2226,7 @@ static void draw_library(void) {
   else if (lsheet == LS_QUICK) draw_quick_sheet();
   else if (lsheet == LS_BATCH) draw_batch_sheet();
   else if (lsheet == LS_CATS) draw_cats_sheet();
+  else if (lsheet == LS_SORT) draw_sort_sheet();
   draw_side();
 }
 
@@ -2559,6 +2598,7 @@ static void close_viewer(void) {
     Rect r = lgrid.r[sel];
     if (r.y < scroll || r.y + r.h > scroll + H - TOP - BAR) scroll = r.y - 40;
   }
+  book_back_to_all(); // (a book opened from All: back there, at its card)
 }
 
 static void fmt_time(uint64_t ms, char *o, size_t n) { int s = (int)(ms / 1000); snprintf(o, n, "%d:%02d", s / 60, s % 60); }
@@ -3297,63 +3337,130 @@ static int text_wrap(int x, int y, unsigned c, int size, const char *s, int w, i
   if (n) { line[n] = 0; text(x, y, c, size, line); y += lh; }
   return y;
 }
+// the three cards' pictures, drawn (no image files): k the card, in the panel at (x, y, w, h)
+static void onboard_art(int k, float x, float y, float w, float h) {
+  float cx = x + w / 2, cy = y + h / 2, t = frame_no * 0.03f;
+  // the panel: the accent's two colours, soft circles floating in it
+  rrect(x, y, w, h, 22, with_alpha(ACC, 255));
+  grad(x, y, w, h, ACC2, 0, 230, 1);
+  grad(x, y + h * 0.4f, w, h * 0.6f, RGBA(0, 0, 0, 255), 0, 90, 0);
+  circle(x + w * 0.18f + sinf(t) * 6, y + h * 0.22f, 46, RGBA(255, 255, 255, 26));
+  circle(x + w * 0.85f, y + h * 0.8f + cosf(t * 0.8f) * 6, 64, RGBA(255, 255, 255, 20));
+  unsigned ink = RGBA(255, 255, 255, 255), shade = RGBA(0, 0, 0, 60);
+  if (k == 0) {
+    // a vault: three cards fanned, a heart on the front one, a lock on its corner
+    for (int c = 2; c >= 0; c--) {
+      float ox = (c - 1) * 34, oy = c == 1 ? -10 : 6;
+      rrect(cx - 60 + ox + 4, cy - 70 + oy + 6, 120, 150, 16, shade);
+      rrect(cx - 60 + ox, cy - 70 + oy, 120, 150, 16, c == 1 ? ink : RGBA(255, 255, 255, 150 + c * 20));
+    }
+    rrect(cx - 46, cy - 66, 92, 86, 10, with_alpha(ACC, 90));
+    circle(cx - 18, cy - 40, 9, RGBA(255, 255, 255, 220));
+    heart(cx - 34, cy + 54, 8, ACC);
+    rrect(cx - 10, cy + 46, 50, 8, 4, with_alpha(ACC, 120));
+    circle(cx + 52, cy - 70, 22, RGBA(20, 12, 16, 230));
+    rrect(cx + 44, cy - 72, 16, 13, 3, ink);
+    circle(cx + 52, cy - 74, 6, ink);
+    circle(cx + 52, cy - 74, 3, RGBA(20, 12, 16, 230));
+  } else if (k == 1) {
+    // a Vita: its screen with a finger swiping across, and three dots for the three-finger tap
+    rrect(cx - 120 + 4, cy - 62 + 6, 240, 124, 40, shade);
+    rrect(cx - 120, cy - 62, 240, 124, 40, RGBA(20, 12, 16, 235));
+    rrect(cx - 78, cy - 46, 156, 92, 8, with_alpha(ink, 40));
+    circle(cx - 100, cy - 10, 8, with_alpha(ink, 90));
+    circle(cx + 100, cy - 10, 8, with_alpha(ink, 90));
+    float sw = fmodf(t * 30, 90);
+    circle(cx - 40 + sw, cy - 8, 13, with_alpha(ink, 230));
+    for (int d = 1; d < 4; d++) circle(cx - 40 + sw - d * 12, cy - 8, 6 - d, with_alpha(ink, 90 - d * 20));
+    for (int d = 0; d < 3; d++) circle(cx - 28 + d * 28, cy + 26, 7, with_alpha(ink, 160 + 30 * (((int)(t * 2) + d) % 3 == 0)));
+  } else {
+    // a phone sending to the Vita over Wi-Fi
+    rrect(cx - 128 + 3, cy - 64 + 5, 74, 128, 14, shade);
+    rrect(cx - 128, cy - 64, 74, 128, 14, ink);
+    rrect(cx - 120, cy - 52, 58, 96, 6, with_alpha(ACC, 120));
+    rrect(cx + 20 + 4, cy - 40 + 6, 120, 70, 24, shade);
+    rrect(cx + 20, cy - 40, 120, 70, 24, RGBA(20, 12, 16, 235));
+    rrect(cx + 44, cy - 30, 72, 50, 5, with_alpha(ink, 50));
+    // the waves between, moving
+    for (int d = 0; d < 3; d++) {
+      float p = fmodf(t * 0.6f + d / 3.0f, 1.0f);
+      circle(cx - 36 + p * 50, cy - 4, 5, with_alpha(ink, (int)(230 * (1 - p))));
+    }
+    icon("wifi", cx - 16, cy - 56, ink);
+  }
+}
 static void draw_onboarding(void) {
   static int page;
-  static float slide; // (the cards' place: page, eased; a finger drags it)
-  static const struct { const char *icon, *title, *body; } CARDS[3] = {
-    {"photos", "Your vault",
-     "Lewd Vault keeps pictures, videos and comics in a vault: a folder on the memory card, the same as on the PC and the phones, so a vault moves between them as it is. "
-     "Next, pick one on the card, or start a new one. A PIN can lock it, and a decoy PIN can open a harmless one (Settings, Privacy)."},
-    {"sliders", "Gestures",
-     "Swipe across a picture for the next one; swipe it down to close it.\n"
-     "Pinch the Library for bigger or smaller cards.\n"
-     "Double tap the left or right of a video: ten seconds back or on.\n"
-     "Tap with three fingers together, or press SELECT: a calculator covers everything at once.\n"
-     "Hold L and R: touch lock."},
-    {"wifi", "Send from a phone or PC",
-     "Settings, Wi-Fi transfer shows an address. Open it in a browser on a phone or PC on the same Wi-Fi and drop pictures and videos in: they arrive in the vault. "
-     "The Browser finds more on the sites you choose, and Favourites keeps long videos as links."},
+  static float slide;
+  static const struct { const char *kicker, *title, *body; } CARDS[3] = {
+    {"WELCOME", "Your vault",
+     "Pictures, videos and comics, kept in a folder on the memory card: the same vault as on the PC and the phones, so it moves between them as it is.\n"
+     "Next, pick one or start a new one. A PIN can lock it, and a decoy PIN opens a harmless one."},
+    {"HOW IT MOVES", "Gestures", NULL},
+    {"FROM ANYWHERE", "Send from a phone or PC",
+     "Settings · Wi-Fi transfer shows an address. Open it in a browser on the same Wi-Fi and drop pictures and videos in: they land in the vault.\n"
+     "The Browser finds more on the sites you choose; Favourites keeps long videos as links."},
+  };
+  static const struct { const char *icon, *text; } MOVES[] = {
+    {"chev_r", "Swipe across: the next one. Swipe down: close it"},
+    {"photos", "Pinch the Library: bigger or smaller cards"},
+    {"refresh", "Double tap a video's side: ten seconds back or on"},
+    {"info", "Three fingers, or SELECT: the calculator covers it"},
+    {"tag", "Hold L and R: touch lock"},
   };
   vita2d_draw_rectangle(0, 0, W, H, BG);
-  // a soft glow of the accent behind
-  circle(W / 2, H / 2 - 20, 260, with_alpha(ACC, 18));
-  circle(W / 2, H / 2 - 20, 170, with_alpha(ACC2, 14));
   static int was_touching;
-  if (in.touching) slide -= in.drag_dx / (float)(W - 160);
+  if (in.touching) slide -= in.drag_dx / (float)(W - 120);
   else {
-    if (was_touching) { // (let go: a flick turns the page, else the nearest)
-      if (in.flicked && fabsf(in.fvx) > 6) page += in.fvx < 0 ? 1 : -1;
-      else page = (int)roundf(slide);
-    }
+    if (was_touching) { if (in.flicked && fabsf(in.fvx) > 6) page += in.fvx < 0 ? 1 : -1; else page = (int)roundf(slide); }
     if (page < 0) page = 0;
     if (page > 2) page = 2;
-    slide += (page - slide) * 0.22f;
+    slide += (page - slide) * 0.2f;
   }
   was_touching = in.touching;
+  int done = 0;
   if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_CROSS | SCE_CTRL_RTRIGGER)) {
-    if (page == 2 && (in.pressed & SCE_CTRL_CROSS)) { sfx(SFX_DONE); cfg.onboarded = 1; cfg_save(); return; }
-    if (page < 2) { page++; sfx(SFX_TICK); }
+    if (page == 2 && (in.pressed & SCE_CTRL_CROSS)) done = 1;
+    else if (page < 2) { page++; sfx(SFX_TICK); }
   }
   if ((in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER | SCE_CTRL_CIRCLE)) && page > 0) { page--; sfx(SFX_TICK); }
-  const int cw = W - 220, ch = 380, cy = 50;
+  const int cw = W - 120, ch = 400, cy = 34;
   for (int k = 0; k < 3; k++) {
     float x = W / 2 - cw / 2 + (k - slide) * (cw + 40);
     if (x > W || x + cw < 0) continue;
-    rrect(x, cy, cw, ch, 26, SURF);
-    circle(x + 70, cy + 76, 36, ACC);
-    icon(CARDS[k].icon, x + 70, cy + 76, RGBA(20, 12, 16, 255));
-    text(x + 126, cy + 88, TEXT, 30, CARDS[k].title);
-    textf(x + cw - 70, cy + 52, FAINT, 14, "%d / 3", k + 1);
-    text_wrap(x + 40, cy + 150, DIM, 17, CARDS[k].body, cw - 80, 27);
+    rrect(x + 4, cy + 8, cw, ch, 28, RGBA(0, 0, 0, 70));
+    rrect(x, cy, cw, ch, 28, SURF);
+    float pw = cw * 0.44f;
+    onboard_art(k, x + 14, cy + 14, pw, ch - 28);
+    float tx = x + pw + 44, tw = cw - pw - 76;
+    text(tx, cy + 58, ACC, 13, CARDS[k].kicker);
+    text(tx, cy + 100, TEXT, 32, CARDS[k].title);
+    rrect(tx, cy + 116, 40, 4, 2, ACC);
+    if (CARDS[k].body) text_wrap(tx, cy + 152, DIM, 16, CARDS[k].body, tw, 25);
+    else
+      for (int m = 0; m < 5; m++) {
+        float ry = cy + 136 + m * 48;
+        rrect(tx, ry, 34, 34, 11, with_alpha(ACC, 50));
+        icon(MOVES[m].icon, tx + 17, ry + 17, ACC);
+        text_wrap(tx + 48, ry + 22, DIM, 15, MOVES[m].text, tw - 48, 20);
+      }
   }
-  // the dots, and the button
-  for (int k = 0; k < 3; k++) rrect(W / 2 - 34 + k * 24 - (k == page ? 6 : 0), cy + ch + 26, k == page ? 22 : 10, 10, 5, k == page ? ACC : with_alpha(TEXT, 60));
-  const char *btn = page == 2 ? "Start  ✕" : "Next  ✕";
-  int bw = text_w(18, btn) + 50, bx = W - 60 - bw, by = cy + ch + 12;
+  // the dots, Skip, and the button
+  int by = cy + ch + 22;
+  for (int k = 0; k < 3; k++) {
+    float on = 1 - fminf(1, fabsf(slide - k));
+    float w = 10 + 18 * on;
+    float x = W / 2 - 40 + k * 28 - (w - 10) / 2;
+    rrect(x, by + 17, w, 10, 5, on > 0.5f ? ACC : with_alpha(TEXT, 60));
+  }
+  const char *btn = page == 2 ? "Get started" : "Next";
+  int bw = text_w(18, btn) + 64, bx = W - 60 - bw;
   rrect(bx, by, bw, 44, 22, ACC);
-  text_center(bx + bw / 2, by + 29, RGBA(20, 12, 16, 255), 18, btn);
-  if (hit(bx, by, bw, 44)) { if (page == 2) { sfx(SFX_DONE); cfg.onboarded = 1; cfg_save(); return; } page++; sfx(SFX_TICK); }
-  if (page < 2) { text(60, by + 29, FAINT, 15, "Skip"); if (hit(40, by, 90, 44)) { sfx(SFX_DONE); cfg.onboarded = 1; cfg_save(); } }
+  text_center(bx + bw / 2 - 8, by + 29, RGBA(20, 12, 16, 255), 18, btn);
+  text(bx + bw - 30, by + 29, RGBA(20, 12, 16, 255), 16, "✕");
+  if (hit(bx, by, bw, 44)) { if (page == 2) done = 1; else { page++; sfx(SFX_TICK); } }
+  if (page < 2) { text(64, by + 29, FAINT, 15, "Skip"); if (hit(44, by, 90, 44)) done = 1; }
+  if (done) { sfx(SFX_DONE); cfg.onboarded = 1; cfg_save(); }
 }
 
 // ----- the cover: a plain clock, nothing of the vault (SELECT, from anywhere) -----
@@ -3430,8 +3537,7 @@ int main(void) {
   make_disc();
   make_ring();
   splash_tex = vita2d_load_PNG_file("app0:splash.png");
-  sfx_init();
-  sfx_volume(70);
+  sfx_init(); // (no sounds read yet: the first one played reads the pack chosen, below)
   lv_video_release_texture = free_later;
   vita2d_set_clear_color(BG);
   vita2d_set_vblank_wait(0); // (main's loop waits with sceDisplayWaitVblankStartCB)
@@ -3441,7 +3547,7 @@ int main(void) {
   cfg_load();
   apply_theme(); // (the background and accent chosen, from the first screen on)
   vita2d_set_clear_color(BG);
-  if (cfg.sndpack) sfx_pack(SND_PACKS[cfg.sndpack]);
+  sfx_pack(SND_PACKS[cfg.sndpack]); // (just where to read from: nothing's read until a sound plays)
   show_load();
   drive_load();
   sfx_volume(cfg.sounds);

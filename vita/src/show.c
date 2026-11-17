@@ -149,6 +149,12 @@ static int has_level(int lo, int hi) {
 }
 // The stages from the plan: [lo .. first], then each level up to hi; the empty ones left out.
 static void make_stages(void) {
+  // (the plan's page asks every frame: worked out again only when the levels, the Library's list or
+  //  the vault changed, not with a pass over every item for each level, sixty times a second)
+  static int k_lo = -1, k_hi, k_first, k_n, k_vgen, k_vn;
+  static const int *k_shown;
+  if (k_lo == so.lo && k_hi == so.hi && k_first == so.first && k_n == nshown && k_shown == shown && k_vgen == vgen && k_vn == vault.n && ss.nst) return;
+  k_lo = so.lo; k_hi = so.hi; k_first = so.first; k_n = nshown; k_shown = shown; k_vgen = vgen; k_vn = vault.n;
   int lo = so.lo < so.hi ? so.lo : so.hi, hi = so.lo < so.hi ? so.hi : so.lo;
   int first = so.first < lo ? lo : so.first > hi ? hi : so.first;
   ss.nst = 0;
@@ -260,101 +266,157 @@ static int show_tick(int playing) {
 
 // ---------- the Slideshow tab: the plan ----------
 
+// The slideshow's page: on the left a card of what it will show (a few of the pictures, the kind,
+// the levels as a bar, where the session is) with Start under it; on the right its settings as tiles,
+// two across, each its name small and its value big with ‹ › either side. ↑↓ go through the tiles
+// (Kind first, Start last), ←→ change one, ✕ or START starts; a tap on a tile's left or right half
+// changes it down or up, a tap on a kind picks it.
 static void draw_show_plan(void) {
-  text(30, 44, TEXT, 26, "Slideshow");
   int levels = so.preset != PRE_SIMPLE;
   if (levels) make_stages();
+  // --- the tiles ---
+  enum { R_PRESET, R_FROM, R_FIRST, R_TO, R_MIN, R_PACE, R_MIX, R_INTERVAL, R_SHUFFLE, R_MOTION, R_FADE, R_SLEEP };
+  struct { const char *name, *icon; char value[40]; int id; } t[12];
+  int n = 0;
+#define TILE(nm, ic, id_, ...) do { t[n].name = nm; t[n].icon = ic; t[n].id = id_; snprintf(t[n].value, sizeof t[n].value, __VA_ARGS__); n++; } while (0)
+  if (levels) {
+    TILE("Levels", "sliders", R_FROM, "%d to %d", so.lo, so.hi);
+    TILE("First stage", "tag", R_FIRST, "up to %d", so.first);
+    TILE("Each level", "refresh", R_MIN, "%g min", so.minutes);
+    TILE("Each slide", "play", R_PACE, "%g → %g s", so.s0, so.s1);
+    TILE("Show", "photos", R_MIX, "%s", so.below ? "It and below" : "That level");
+  } else {
+    TILE("Each picture", "refresh", R_INTERVAL, "%d s", cfg.interval);
+    TILE("Order", "sort", R_SHUFFLE, "%s", cfg.shuffle ? "Shuffled" : "In order");
+  }
+  TILE("Motion", "image", R_MOTION, "%s", MOTIONS[so.motion]);
+  TILE("Fade", "film", R_FADE, "%s", so.fade ? "On" : "Off");
+  if (so.sleep) TILE("Sleep timer", "info", R_SLEEP, "%d min", SLEEPS[so.sleep]);
+  else TILE("Sleep timer", "info", R_SLEEP, "Off");
+#undef TILE
+  // focus: 0 the kind, 1..n the tiles, n + 1 Start
+  int nf = n + 2;
+  if (plan_sel >= nf) plan_sel = nf - 1;
+  if (plan_sel < 0) plan_sel = 0;
+
+  // --- the left card ---
+  const int cx = 24, cy = 18, cw = 400, ch = H - BAR - 30;
+  rrect(cx, cy, cw, ch, 22, SURF);
+  // a mosaic of what's in it: the first pictures shown (their thumbnails, when made)
+  {
+    const int mh = 138;
+    for (int k = 0; k < 3; k++) {
+      float x = cx + 12 + k * ((cw - 24 - 16) / 3.0f + 8), w = (cw - 24 - 16) / 3.0f;
+      int item = k < nshown ? shown[(k * 7) % (nshown ? nshown : 1)] : -1;
+      vita2d_texture *th = item >= 0 ? thumb_of(item) : NULL;
+      if (th) draw_cover(th, x, cy + 12, w, mh, RGBA(255, 255, 255, 255));
+      else rrect(x, cy + 12, w, mh, 12, with_alpha(k & 1 ? ACC2 : ACC, 50));
+    }
+    grad(cx + 12, cy + 12 + mh - 60, cw - 24, 60, SURF, 0, 255, 0);
+    // the play mark over it
+    circle(cx + cw / 2, cy + 12 + mh / 2, 30, RGBA(0, 0, 0, 140));
+    vc_tri(cx + cw / 2 + 4, cy + 12 + mh / 2, 15, TEXT);
+  }
+  // the kinds, as a segmented control
+  int ky = cy + 162, segw = cw - 24, sw4 = segw / 4;
+  rrect(cx + 12, ky, segw, 36, 18, SURF2);
+  rrect(cx + 12 + 3 + so.preset * sw4, ky + 3, sw4 - 6, 30, 15, ACC);
+  for (int k = 0; k < 4; k++) {
+    text_center(cx + 12 + k * sw4 + sw4 / 2, ky + 24, k == so.preset ? RGBA(20, 12, 16, 255) : TEXT, 15, PRESETS[k]);
+    if (hit(cx + 12 + k * sw4, ky, sw4, 36) && k != so.preset) {
+      if (ss.on) say("End the session to change its kind");
+      else { sfx(SFX_TOGGLE); preset(k); show_save(); }
+      plan_sel = 0;
+    }
+  }
+  if (plan_sel == 0) focus_ring(cx + 12, ky, segw, 36);
+  // what it will do, or where the session is
   char status[160];
   if (ss.on && ss.nst) {
     int k = stage_now();
     double left = (k + 1) * level_ms() - ss.ms;
-    if (k < ss.nst - 1) snprintf(status, sizeof status, "Session: level %d reached · the next in %d:%02d", ss.st_hi[k], (int)(left / 60000), (int)(left / 1000) % 60);
-    else snprintf(status, sizeof status, "Session: the last level, %d", ss.st_hi[k]);
-  } else if (levels) {
-    snprintf(status, sizeof status, "%d %s · %d min · %.1f s a slide, down to %.1f s", ss.nst, ss.nst == 1 ? "stage" : "stages",
-             (int)(ss.nst * so.minutes + 0.5f), so.s0, so.s1);
-  } else {
-    snprintf(status, sizeof status, "Everything in the Library, %d s each%s", cfg.interval, cfg.shuffle ? ", shuffled" : "");
-  }
-  text(30 + text_w(26, "Slideshow") + 16, 44, ACC, 15, status);
-
-  // the levels, as the PC's stepper: passed ones full, the one now filling, the rest dim
+    if (k < ss.nst - 1) snprintf(status, sizeof status, "Level %d reached · the next in %d:%02d", ss.st_hi[k], (int)(left / 60000), (int)(left / 1000) % 60);
+    else snprintf(status, sizeof status, "The last level, %d", ss.st_hi[k]);
+  } else if (levels) snprintf(status, sizeof status, "%d %s · %d min · %.1f s down to %.1f s", ss.nst, ss.nst == 1 ? "stage" : "stages", (int)(ss.nst * so.minutes + 0.5f), so.s0, so.s1);
+  else snprintf(status, sizeof status, "Everything in the Library · %d s each", cfg.interval);
+  text_fit(cx + 16, ky + 64, DIM, 15, status, cw - 32);
+  // the levels: ten segments, those in the plan lit, those passed full, the one now filling
   if (levels) {
     int k = ss.on ? stage_now() : -1;
     float p = ss.on ? (float)((ss.ms - k * level_ms()) / level_ms()) : 0;
     if (p > 1) p = 1;
+    float lx = cx + 16, lw = (cw - 32 - 9 * 4) / 10.0f, ly = ky + 80;
     for (int l = 1; l <= 10; l++) {
-      int x = 30 + (l - 1) * 90, y = 62;
+      float x = lx + (l - 1) * (lw + 4);
       int in_plan = 0;
-      for (int s = 0; s < ss.nst; s++) if (l >= ss.st_lo[s] && l <= ss.st_hi[s]) in_plan = 1;
+      for (int s2 = 0; s2 < ss.nst; s2++) if (l >= ss.st_lo[s2] && l <= ss.st_hi[s2]) in_plan = 1;
       int passed = ss.on && l < ss.st_lo[k], now = ss.on && l >= ss.st_lo[k] && l <= ss.st_hi[k];
-      rrect(x, y, 84, 26, 13, in_plan ? SURF2 : with_alpha(SURF2, 90));
-      if (passed) rrect(x, y, 84, 26, 13, with_alpha(ACC, 150));
-      if (now) rrect(x, y, 84 * p < 26 ? 26 : 84 * p, 26, 13, ACC);
-      char b[8];
+      rrect(x, ly, lw, 22, 6, in_plan ? SURF2 : with_alpha(SURF2, 80));
+      if (passed) rrect(x, ly, lw, 22, 6, with_alpha(ACC, 160));
+      if (now) rrect(x, ly, lw * (p < 0.3f ? 0.3f : p), 22, 6, ACC);
+      char b[4];
       snprintf(b, sizeof b, "%d", l);
-      text_center(x + 42, y + 19, in_plan ? TEXT : FAINT, 15, b);
+      text_center((int)(x + lw / 2), (int)ly + 16, in_plan ? TEXT : FAINT, 12, b);
     }
   }
-
-  char v[12][48];
-  snprintf(v[0], 48, "%s", PRESETS[so.preset]);
-  int n = 0;
-  struct { const char *name, *value; int id; } rows[12];
-  enum { R_PRESET, R_FROM, R_FIRST, R_TO, R_MIN, R_PACE, R_MIX, R_INTERVAL, R_SHUFFLE, R_MOTION, R_FADE, R_SLEEP };
-  rows[n++] = (typeof(rows[0])){"Kind", v[0], R_PRESET};
-  if (levels) {
-    snprintf(v[1], 48, "%d to %d", so.lo, so.hi);
-    rows[n++] = (typeof(rows[0])){"Levels", v[1], R_FROM};
-    snprintf(v[2], 48, "up to %d", so.first);
-    rows[n++] = (typeof(rows[0])){"The first stage takes levels", v[2], R_FIRST};
-    snprintf(v[3], 48, "%g min", so.minutes);
-    rows[n++] = (typeof(rows[0])){"Each level for", v[3], R_MIN};
-    snprintf(v[4], 48, "%g s → %g s", so.s0, so.s1);
-    rows[n++] = (typeof(rows[0])){"Each slide for", v[4], R_PACE};
-    rows[n++] = (typeof(rows[0])){"At each level, show", so.below ? "It and everything below" : "Only that level", R_MIX};
-  } else {
-    snprintf(v[5], 48, "%d s", cfg.interval);
-    rows[n++] = (typeof(rows[0])){"Each picture for", v[5], R_INTERVAL};
-    rows[n++] = (typeof(rows[0])){"Shuffle", cfg.shuffle ? "On" : "Off", R_SHUFFLE};
+  // what the kind is, in a few words, and how much there is
+  {
+    static const char *const ABOUT[] = {
+      "Everything in the Library, one after another, at one pace.",
+      "Starts low and climbs the levels slowly: 8 minutes a level, slides from 10 s down to 3 s, fading and drifting.",
+      "Climbs the levels steadily: 5 minutes a level, slides from 8 s down to 1.5 s.",
+      "Up the levels quickly: 2 minutes a level, slides from 4 s down to under a second.",
+    };
+    int y = text_wrap(cx + 16, ky + (levels ? 128 : 92), FAINT, 14, ABOUT[so.preset], cw - 32, 20);
+    char cnt[64];
+    snprintf(cnt, sizeof cnt, "%d in the Library now", nshown);
+    if (y < cy + ch - 70) text(cx + 16, y + 4, DIM, 14, cnt);
   }
-  rows[n++] = (typeof(rows[0])){"Motion", MOTIONS[so.motion], R_MOTION};
-  rows[n++] = (typeof(rows[0])){"Fade from one to the next", so.fade ? "On" : "Off", R_FADE};
-  if (so.sleep) snprintf(v[6], 48, "after %d min", SLEEPS[so.sleep]); else snprintf(v[6], 48, "Off");
-  rows[n++] = (typeof(rows[0])){"Sleep timer", v[6], R_SLEEP};
-  if (plan_sel >= n + 1) plan_sel = n;
-  int top = levels ? 98 : 66, rh = levels ? 36 : 44;
-  for (int k = 0; k < n; k++) {
-    int y = top + k * rh;
-    rrect(30, y, W - 60, rh - 4, 10, k == plan_sel ? SURF2 : SURF);
-    if (k == plan_sel) rrect(30, y, 5, rh - 4, 3, ACC);
-    text(50, y + rh / 2 + 3, TEXT, 16, rows[k].name);
-    text(W - 50 - text_w(16, rows[k].value) - 22, y + rh / 2 + 3, ACC, 16, rows[k].value);
-    text(W - 62, y + rh / 2 + 3, FAINT, 16, "‹›");
-    if (hit(30, y, W - 60, rh - 4)) { plan_sel = k; in.pressed |= SCE_CTRL_RIGHT; }
-  }
-  // the buttons: start (or carry on), and end the session
-  int by = top + n * rh + 6;
-  const char *go = ss.on && levels ? "Carry on" : "Start";
-  rrect(30, by, 200, 40, 20, plan_sel == n ? ACC : with_alpha(ACC, 120));
-  text_center(130, by + 27, RGBA(20, 12, 16, 255), 17, go);
-  int start = hit(30, by, 200, 40);
+  // Start (or carry on), and end the session
+  const char *go = ss.on && levels ? "▶  Carry on" : "▶  Start";
+  int bw = ss.on ? (cw - 24 - 10) / 2 : cw - 24, by = cy + ch - 56;
+  rrect(cx + 12, by, bw, 44, 22, ACC);
+  text_center(cx + 12 + bw / 2, by + 29, RGBA(20, 12, 16, 255), 18, go);
+  if (plan_sel == nf - 1) focus_ring(cx + 12, by, bw, 44);
+  int start = hit(cx + 12, by, bw, 44);
   if (ss.on) {
-    rrect(244, by, 200, 40, 20, SURF2);
-    text_center(344, by + 27, TEXT, 16, "End the session");
-    if (hit(244, by, 200, 40)) { sfx(SFX_CLOSE); session_end("Session ended"); }
-    text(462, by + 26, FAINT, 13, "□ ends it  ·  levels above it stay locked till then");
+    rrect(cx + 22 + bw, by, bw, 44, 22, SURF2);
+    text_center(cx + 22 + bw + bw / 2, by + 29, TEXT, 16, "End session  □");
+    if (hit(cx + 22 + bw, by, bw, 44)) { sfx(SFX_CLOSE); session_end("Session ended"); }
   }
 
-  if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
-  if (in.pressed & SCE_CTRL_DOWN) plan_sel = (plan_sel + 1) % (n + 1);
-  if (in.pressed & SCE_CTRL_UP) plan_sel = (plan_sel + n) % (n + 1);
+  // --- the tiles, two across ---
+  const int gx = cx + cw + 16, gw = W - 24 - gx, tw = (gw - 12) / 2;
+  int rows = (n + 1) / 2, th = (ch - (rows - 1) * 12) / rows;
+  if (th > 104) th = 104;
   int d = (in.pressed & SCE_CTRL_RIGHT) ? 1 : (in.pressed & SCE_CTRL_LEFT) ? -1 : 0;
-  if ((in.pressed & SCE_CTRL_CROSS) && plan_sel < n) d = 1;
-  if (d && plan_sel < n) {
+  int tapped = -1, tap_d = 0;
+  for (int k = 0; k < n; k++) {
+    int x = gx + (k % 2) * (tw + 12), y = cy + (k / 2) * (th + 12);
+    int on = plan_sel == k + 1;
+    rrect(x, y, tw, th, 18, on ? SURF2 : SURF);
+    circle(x + 30, y + 30, 16, with_alpha(ACC, on ? 255 : 60));
+    icon(t[k].icon, x + 30, y + 30, on ? RGBA(20, 12, 16, 255) : ACC);
+    text(x + 56, y + 36, DIM, 14, t[k].name);
+    text_fit(x + 18, y + th - 20, TEXT, th > 90 ? 24 : 20, t[k].value, tw - 70);
+    // ‹ › to change it
+    text(x + tw - 50, y + th - 20, on ? ACC : FAINT, 22, "‹");
+    text(x + tw - 26, y + th - 20, on ? ACC : FAINT, 22, "›");
+    if (on) focus_ring(x, y, tw, th);
+    if (hit(x, y, tw, th)) { tapped = k; tap_d = in.tap_x < x + tw / 2 ? -1 : 1; }
+  }
+  if (tapped >= 0) { plan_sel = tapped + 1; d = tap_d; }
+
+  // --- the buttons ---
+  if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
+  if (in.pressed & SCE_CTRL_DOWN) plan_sel = (plan_sel + 1) % nf;
+  if (in.pressed & SCE_CTRL_UP) plan_sel = (plan_sel + nf - 1) % nf;
+  if (d && plan_sel == 0) {
+    if (ss.on) say("End the session to change its kind");
+    else { sfx(SFX_TOGGLE); preset((so.preset + d + 4) % 4); show_save(); }
+  } else if (d && plan_sel >= 1 && plan_sel <= n) {
     sfx(SFX_TOGGLE);
-    switch (rows[plan_sel].id) {
-      case R_PRESET: if (!ss.on) preset((so.preset + d + 4) % 4); else say("End the session to change its kind"); break;
+    switch (t[plan_sel - 1].id) {
       case R_FROM: if (ss.on) { say("These stay until the session ends"); break; }
                    if (in.now & SCE_CTRL_RTRIGGER) so.hi = (so.hi + d + 9) % 10 + 1; else so.lo = (so.lo + d + 9) % 10 + 1;
                    if (so.hi < so.lo) so.hi = so.lo;
@@ -374,10 +436,12 @@ static void draw_show_plan(void) {
     }
     show_save();
   }
-  if (plan_sel == R_FROM && levels) text(30, H - BAR - 12, FAINT, 13, "←→ the first level  ·  hold R for the last one");
-  else if (plan_sel == 4 && levels) text(30, H - BAR - 12, FAINT, 13, "←→ the first slides  ·  hold R for the last ones");
+  // a hint for the two-ended ones
+  int fid = plan_sel >= 1 && plan_sel <= n ? t[plan_sel - 1].id : -1;
+  if (fid == R_FROM) text(gx, H - BAR - 2, FAINT, 13, "←→ the first level  ·  hold R: the last one");
+  else if (fid == R_PACE) text(gx, H - BAR - 2, FAINT, 13, "←→ the first slides  ·  hold R: the last ones");
   if ((in.pressed & SCE_CTRL_SQUARE) && ss.on) { sfx(SFX_CLOSE); session_end("Session ended"); }
-  if (((in.pressed & SCE_CTRL_CROSS) && plan_sel == n) || (in.pressed & SCE_CTRL_START) || start) {
+  if ((in.pressed & SCE_CTRL_CROSS) || (in.pressed & SCE_CTRL_START) || start) {
     if (!nshown) { sfx(SFX_ERROR); say("Nothing in the Library to show"); }
     else if (levels) {
       if (!ss.on) session_start();

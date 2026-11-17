@@ -186,7 +186,9 @@ static void *vb_main(void *arg) {
       if (src >= 0 && vrows[0].state == 0 && !vb_list.ready) { job = 0; vrows[0].state = 1; break; }
       if (vb_hero_state == 1) { vb_hero_state = 4; card = -1; job = 0; break; }
       if (nvb_want) { job = vb_want[nvb_want - 1].row; card = vb_want[nvb_want - 1].card; nvb_want--; break; }
-      for (int d = 0; d < VB_ROWS && src >= 0 && !vb_list.ready; d++) {
+      // (the other rows' lists only while the video browser is on screen: not fetched and checked
+      //  in the background while something else is looked at, or a video from it streams)
+      for (int d = 0; d < VB_ROWS && src >= 0 && !vb_list.ready && screen == S_VIDEOS; d++) {
         int r = (vb_row < VB_ROWS ? vb_row : 0) + d;
         if (r >= VB_ROWS) r -= VB_ROWS;
         if (vrows[r].state == 0) { job = r; vrows[r].state = 1; break; }
@@ -221,6 +223,10 @@ static void *vb_main(void *arg) {
         int shown_n = 0;
         for (int pos = 0, step = 2; pos < count; pos += step, step = 4) {
           int m = count - pos < step ? count - pos : step; // (two first: something to see soonest)
+          // (off screen: paused here until it's back, or another source is opened)
+          pthread_mutex_lock(&vbmx);
+          while (worker_run && gen == vb_gen && screen != S_VIDEOS && shown_n > 0) pthread_cond_wait(&vbcv, &vbmx);
+          pthread_mutex_unlock(&vbmx);
           if (gen != vb_gen || shown_n >= VB_PER) { for (int k = pos; k < count; k++) { LvPost *q = &got[k]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); } break; }
           LvPost *part = malloc(m * sizeof *part);
           if (!part) continue;
@@ -307,6 +313,7 @@ static void vb_open(int k) {
 }
 // (on the drawing thread: lists and pictures in)
 static void vb_take(void) {
+  if (!vb_list.ready && !nvb_done) return; // (nothing come: no lock)
   pthread_mutex_lock(&vbmx);
   if (vb_list.ready) {
     VRow *r = &vrows[vb_list.row];
@@ -398,6 +405,11 @@ static void vb_ask(int r, int k) {
 static void draw_videos(void) {
   vb_take();
   upnext_take();
+  { // (back on screen after being away: the worker carries on with what it paused)
+    static unsigned seen;
+    if (frame_no - seen > 2) { pthread_mutex_lock(&vbmx); pthread_cond_broadcast(&vbcv); pthread_mutex_unlock(&vbmx); }
+    seen = frame_no;
+  }
   int nup = upnext_n();
   if (vb_row > VB_ROWS || (vb_row == VB_ROWS && !nup)) vb_row = 0;
   vita2d_draw_rectangle(0, 0, W, H, RGBA(8, 6, 10, 255));
@@ -409,7 +421,7 @@ static void draw_videos(void) {
   float y0 = -vb_y;
   // ---- the banner: the first trending video, big, fading into the page ----
   VRow *r0 = &vrows[0];
-  if (vb_hero) {
+  if (vb_hero && y0 + HERO_H > 0) { // (not drawn once it's scrolled away)
     // (slowly moving: a little zoomed in, drifting side to side and back, like a trailer)
     float tw = vita2d_texture_get_width(vb_hero), th = vita2d_texture_get_height(vb_hero);
     float u = 0.5f - 0.5f * cosf(frame_no * 6.2832f / 1500), z = 1.1f;

@@ -68,7 +68,9 @@ static void lib_prepare(void) {
 static const char *LMODES[] = {"All", "Pictures", "Videos", "Comics"};
 static const char *LMODE_ICONS[] = {"all", "image", "film", "book"};
 static const char *COMIC_WORDS[] = {"comic", "comics", "manga", "doujinshi", "doujin", "webtoon", "manhwa", "manhua", NULL};
-static unsigned char *comic_flag; // per item: 1 a comic's page
+static unsigned char *comic_flag; // per item: 1 a comic's page, 2 its book's cover (its first page)
+static int *cover_pages;          // per item (a cover): its book's pages
+static void comics_covers(void);
 static int comic_vgen;
 static int comic_word(const char *w, size_t n) {
   for (int k = 0; COMIC_WORDS[k]; k++)
@@ -97,11 +99,12 @@ static void comics_scan(void) {
     if (!it->collection || !it->collection[0] || vault.hot[i].kind == LV_VIDEO) continue;
     comic_flag[i] = has_comic_word(it->category) || has_comic_word(it->tags);
   }
+  comics_covers(); // (once a change of the vault, not each filter)
 }
 static int is_comic(int i) { return comic_flag && i < comic_n && comic_flag[i]; }
 static int mode_pass(int i) {
   switch (cfg.lmode) {
-    case 0: return !is_comic(i); // (All: everything but comics' pages, which have their own mode)
+    case 0: return !is_comic(i) || comic_flag[i] == 2; // (All: a book once, as its cover; its pages in Comics)
     case 1: return vault.hot[i].kind != LV_VIDEO && !is_comic(i);
     case 2: return vault.hot[i].kind == LV_VIDEO;
     case 3: return is_comic(i);
@@ -137,6 +140,24 @@ static int cmp_pages(const void *x, const void *y) {
   c = natcmp(page_key(a), page_key(b));
   return c ? c : *(const int *)x - *(const int *)y;
 }
+// Each book's cover: its first page, as the pages are ordered (cmp_pages), marked 2 in comic_flag
+static void comics_covers(void) {
+  free(cover_pages);
+  cover_pages = calloc(vault.n + 1, sizeof *cover_pages);
+  int *idx = malloc((vault.n + 1) * sizeof *idx), m = 0;
+  if (!idx || !cover_pages) { free(idx); return; }
+  for (int i = 0; i < vault.n; i++) if (comic_flag[i]) idx[m++] = i;
+  qsort(idx, m, sizeof *idx, cmp_pages);
+  for (int k = 0; k < m; ) {
+    int e = k + 1;
+    while (e < m && !strcmp(vault.items[idx[e]].collection, vault.items[idx[k]].collection)) e++;
+    comic_flag[idx[k]] = 2;
+    cover_pages[idx[k]] = e - k;
+    k = e;
+  }
+  free(idx);
+}
+static int is_cover_in_all(int i) { return cfg.lmode == 0 && comic_flag && i < comic_n && comic_flag[i] == 2; }
 static int *book_count; // per item (a book's first page): its pages
 static int *book_read;  // per item (a book's first page): the page last looked at, 1.. (0: not opened)
 static int nbook_count;
@@ -205,6 +226,35 @@ static void open_book(int k) {
   } else at = 0;
   sel = at; scroll = 0;
   if (nshown) open_viewer(at, 0);
+}
+// A book opened from All: read as from the Comics shelf, and back to All (at its card) after
+static int book_from_all, from_all_item;
+static float from_all_scroll;
+static void open_book_from_all(int item) {
+  from_all_item = item; from_all_scroll = scroll;
+  cfg.lmode = 3; lf.coll[0] = 0;
+  refilter();
+  for (int k = 0; k < nshown; k++)
+    if (shown[k] == item) { book_from_all = 1; open_book(k); return; }
+  // (not on the shelf, filtered out there: just its cover)
+  cfg.lmode = 0; refilter();
+  for (int k = 0; k < nshown; k++) if (shown[k] == item) { open_viewer(k, 0); return; }
+}
+static void book_back_to_all(void) {
+  if (!book_from_all) return;
+  book_from_all = 0;
+  lf.coll[0] = 0; cfg.lmode = 0;
+  refilter();
+  sel = 0;
+  for (int k = 0; k < nshown; k++) if (shown[k] == from_all_item) { sel = k; break; }
+  scroll = from_all_scroll;
+}
+// A card opened: a book on the shelf or in All, else the full view
+static void lib_open(int k) {
+  if (k < 0 || k >= nshown) return;
+  if (book_shelf) { sfx(SFX_OPEN); open_book(k); }
+  else if (is_cover_in_all(shown[k])) { sfx(SFX_OPEN); open_book_from_all(shown[k]); }
+  else { sfx(SFX_SELECT); open_viewer(k, 0); }
 }
 static void close_book(void) {
   lf.coll[0] = 0;
@@ -317,7 +367,7 @@ static void saved_apply(int k) {
 }
 
 // ---------- the sheets ----------
-enum { LS_NONE, LS_FILTERS, LS_TAGS, LS_QUICK, LS_BATCH, LS_CATS };
+enum { LS_NONE, LS_FILTERS, LS_TAGS, LS_QUICK, LS_BATCH, LS_CATS, LS_SORT };
 static int lsheet, lsheet_sel, quick_item = -1, delete_armed;
 static unsigned delete_armed_at;
 static unsigned char *picked; // per item: chosen (selecting many)
@@ -402,6 +452,22 @@ static int sheet_nav(int n) {
   return (in.pressed & SCE_CTRL_RIGHT) ? 1 : (in.pressed & SCE_CTRL_LEFT) ? -1 : (in.pressed & SCE_CTRL_CROSS) ? 1 : 0;
 }
 static void sheet_close(void) { sfx(SFX_CLOSE); lsheet = LS_NONE; save_edits_now(); }
+// The order: a list to pick from (△ or the button opens it; ✕ or a tap picks)
+static void draw_sort_sheet(void) {
+  const int rh = 40, w = 300, h = NSORTS * rh + 64, x = W - w - 16, y = TOP + 4;
+  sheet_frame(x, y, w, h);
+  text(x + 20, y + 34, TEXT, 18, "Order");
+  for (int k = 0; k < NSORTS; k++) {
+    int ry = y + 50 + k * rh;
+    sheet_row(k, x, ry, w, rh, SORTS[k], k == cfg.sort ? "\u2713" : "");
+  }
+  sheet_nav(NSORTS);
+  if ((in.pressed & SCE_CTRL_CROSS) && lsheet_sel >= 0 && lsheet_sel < NSORTS) {
+    sfx(SFX_TOGGLE);
+    cfg.sort = lsheet_sel; refilter(); cfg_save(); sel = 0; scroll = 0;
+    lsheet = LS_NONE;
+  } else if ((in.pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_TRIANGLE)) || (in.tap && !(in.tap_x >= x && in.tap_y >= y && in.tap_y < y + h))) sheet_close();
+}
 
 // the vault's collections, for cycling through
 static int coll_next(int d) {

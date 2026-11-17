@@ -52,7 +52,7 @@ video down to close it: it follows the finger, smaller, and flies back into its 
 / ↓ Offline as big buttons.
 
 In **All**, a row over the grid: **Continue watching** (videos stopped part way, with how far) and
-**Recently hearted**; it scrolls away with the page, ↑ from the first row goes into it. Pinch the
+**Recently appreciated** (the ♥ given in the full view, the newest first); it scrolls away with the page, ↑ from the first row goes into it. Pinch the
 Library with two fingers to make the cards a size bigger or smaller (the three sizes of Filters' Card
 size). On the Comics shelf each book has its spine, its pages' edges and a bar for how far it's been read.
 
@@ -70,7 +70,7 @@ Wi-Fi transfer.
 On every screen the chosen card or row has the same ring, gliding from one to the next; a card
 still loading shows its shape with a light passing over it and a small loading ring.
 
-**Modes** (the switch beside the title, or L / R): **All** (everything but comics' pages), **Pictures** (pictures and GIFs, not
+**Modes** (the switch beside the title, or L / R): **All** (everything, a comic once: its cover, marked COMIC with its pages, opening the book, ○ back to All), **Pictures** (pictures and GIFs, not
 comics' pages), **Videos**, and **Comics**: a shelf of books, one card each (its first page, its pages
 counted). A book is a collection whose pages are marked as a comic: the category Comics, Manga,
 Doujinshi, Webtoon or Manhwa, or one of those words as a tag, so comics made on the PC or synced
@@ -92,7 +92,13 @@ first stage up to a level, then one level at a time, each for some minutes, with
 faster and faster (Gentle, Standard and Fast are the PC's presets), and what's above the level reached
 is locked in the Library until the session gets there. Only time with the app open counts; a session
 left for six hours ends. Simple is the old one (a few seconds each, shuffled or not). Both have motion
-(slow pan, slow zoom, breathing), a fade from one to the next and a sleep timer.
+(slow pan, slow zoom, breathing), a fade from one to the next and a sleep timer. Its page is one
+screen: a card on the left (a few of the pictures, the kind as a four-way switch, what it will do, the
+levels as a bar, Start), the settings as tiles on the right, two across, each value big with ‹ ›.
+↑↓ go through them, ←→ change one (tap a tile's left or right half), ✕ or START starts.
+
+**Order** (△ or its button: a list): newest, oldest, most viewed, least viewed, recently viewed, most
+time spent, top rated (the stars), most appreciated (♥), shuffle, for you.
 
 **PIN lock** (Settings, `src/pin.c`): a PIN pad when the app starts, and, if chosen, when the Vita
 wakes. A decoy PIN opens another vault on the card instead, and changes nothing about the lock or which
