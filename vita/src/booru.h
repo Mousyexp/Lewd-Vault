@@ -4,7 +4,11 @@
 #pragma once
 #include <stddef.h>
 
-enum { BK_DANBOORU, BK_GELBOORU, BK_MOEBOORU, BK_E621, BK_KVS, BK_ESHUU, BK_BOORUIO, BK_XV };
+enum { BK_DANBOORU, BK_GELBOORU, BK_MOEBOORU, BK_E621, BK_KVS, BK_ESHUU, BK_BOORUIO, BK_XV, BK_HWORLD, BK_HCLOUD };
+// (BK_HWORLD, BK_HCLOUD: hentai episode sites, hentaiworld.tv and hentaicloud.com, read as HTML. Their
+//  lists say little, so each episode's own page is read before it's shown (lv_item_check): its title,
+//  description and categories checked against the never-shown words, its MP4 found there.)
+
 // (BK_XV: xvideos' search, its hentai only, long ones: list pages as HTML, each video's MP4 from its
 //  page (lv_xv_video), with its keywords checked)
 // (BK_ESHUU, BK_BOORUIO: image sites that aren't boorus, each with its own JSON: e-shuushuu.net
@@ -74,6 +78,9 @@ void lv_posts_free(LvPost *p, int n);
 // Cleans a search: drops the tags that are never searched for. Returns out.
 char *lv_booru_clean(const char *query, char *out, size_t cap);
 int lv_post_is_video(const LvPost *p);
+int lv_site_checks_items(const LvSite *s);
+// An episode's page: 1 when it may be shown (and post->file set to its MP4 where the page names one).
+int lv_item_check(const LvSite *s, LvPost *post, const char *html);
 // A KVS video page: the address of its MP4 (the smallest, the first it names), and 1
 // in *never when its tags carry one of the never-shown words. 0, or -1 when there's no video.
 int lv_kvs_video(const char *html, char *out, size_t cap, int *never);

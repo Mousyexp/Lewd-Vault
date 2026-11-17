@@ -32,11 +32,14 @@ LvSite LV_SITES[LV_MAX_SITES] = {
   {"booru.io", BK_BOORUIO, "https://booru.io", NULL, 0, 0, "booruio", "Anime and hentai art"},
   // (whole hentai episodes: only in the video browser)
   {"XVideos Hentai", BK_XV, "https://www.xvideos.com", NULL, 1, 0, "xvideos", "Hentai episodes, 10 min and longer", "hentai", 1},
+  {"HentaiWorld", BK_HWORLD, "https://hentaiworld.tv", NULL, 1, 0, "hentaiworld", "Hentai episodes", NULL, 1},
+  {"HentaiCloud", BK_HCLOUD, "https://www.hentaicloud.com", NULL, 1, 0, "hentaicloud", "Hentai episodes", NULL, 1},
 };
-const int LV_NBUILTIN = 17;
-int LV_NSITES = 17;
-int lv_is_long(const LvSite *s, const LvPost *p) { return lv_post_is_video(p) && (p->duration >= LV_LONG_VIDEO || (s && s->kind == BK_XV)); }
-int lv_site_is_booru(const LvSite *s) { return s->kind != BK_ESHUU && s->kind != BK_BOORUIO && s->kind != BK_KVS && s->kind != BK_XV; }
+const int LV_NBUILTIN = 19;
+int LV_NSITES = 19;
+int lv_site_checks_items(const LvSite *s) { return s->kind == BK_HWORLD || s->kind == BK_HCLOUD; }
+int lv_is_long(const LvSite *s, const LvPost *p) { return lv_post_is_video(p) && (p->duration >= LV_LONG_VIDEO || (s && (s->kind == BK_XV || s->kind == BK_HWORLD || s->kind == BK_HCLOUD))); }
+int lv_site_is_booru(const LvSite *s) { return s->kind <= BK_E621; }
 // (the strings of the sites added by hand, kept here)
 static char added_names[LV_MAX_SITES][48], added_bases[LV_MAX_SITES][160];
 int lv_booru_add_site(const char *name, int kind, const char *base) {
@@ -209,6 +212,21 @@ void lv_booru_url_ex(const LvSite *s, const char *tags, int ratings, int sort, i
       char e[400];
       enc(w, e, sizeof e);
       snprintf(out, cap, "%s/api/legacy/query/entity?query=%s", s->base, e);
+    }
+    return;
+  }
+  if (s->kind == BK_HWORLD || s->kind == BK_HCLOUD) {
+    char e[400];
+    enc(clean, e, sizeof e);
+    int pg = sort == LV_SORT_RANDOM ? 1 + (int)(time(NULL) / 60 % 30) + page - 1 : page;
+    if (pg < 1) pg = 1;
+    if (s->kind == BK_HWORLD) {
+      if (clean[0]) snprintf(out, cap, "%s/search?q=%s&page=%d", s->base, e, pg);
+      else snprintf(out, cap, "%s/%s?page=%d", s->base, sort == LV_SORT_HOT ? "trending" : sort == LV_SORT_TOP ? "most-viewed" : "new-releases", pg);
+    } else {
+      // (its search has one page: past it, the end)
+      if (clean[0]) { if (page > 1) { out[0] = 0; return; } snprintf(out, cap, "%s/search?search_query=%s&search_type=videos", s->base, e); }
+      else snprintf(out, cap, "%s/videos?o=%s&page=%d", s->base, sort == LV_SORT_HOT ? "mv" : sort == LV_SORT_TOP ? "tr" : "mr", pg);
     }
     return;
   }
@@ -452,6 +470,112 @@ static LvPost *xv_parse(const char *text, size_t len, int *n) {
   }
   return out;
 }
+// ---------- the episode sites: their list cards, then each episode's page ----------
+static int dur_of(const char *t) { int a = 0, b = 0, c = 0, n = sscanf(t, "%d:%d:%d", &a, &b, &c); return n == 3 ? a * 3600 + b * 60 + c : n == 2 ? a * 60 + b : 0; }
+static void words_of(const char *in, char *out, size_t cap) {
+  size_t o = 0;
+  for (const char *c = in; *c && o + 2 < cap; c++) { unsigned char ch = (unsigned char)*c; out[o++] = isalnum(ch) ? (char)tolower(ch) : ' '; }
+  out[o] = 0;
+}
+static LvPost *episodes_parse(const LvSite *s, const char *text, int *n) {
+  const char *mark = s->kind == BK_HWORLD ? "<article" : "id=\"playvideo_";
+  int cap = 0;
+  for (const char *p = strstr(text, mark); p; p = strstr(p + 1, mark)) cap++;
+  LvPost *out = calloc(cap + 1, sizeof *out);
+  if (!out) return NULL;
+  for (const char *p = strstr(text, mark); p; ) {
+    const char *next = strstr(p + 1, mark);
+    const char *end = next ? next : text + strlen(text);
+    LvPost q;
+    memset(&q, 0, sizeof q);
+    char href[400] = "", img[600] = "", title[300] = "", dur[24] = "", file[600] = "";
+    if (s->kind == BK_HWORLD) {
+      attr(p, end, "aria-label=", title, sizeof title);
+      attr(p, end, "href=", href, sizeof href);
+      attr(p, end, "src=", img, sizeof img);
+      // (the smaller cover: 268 wide, near a card's size)
+      char *c5 = strstr(img, "cover-536.webp");
+      if (c5) memcpy(c5, "cover-268", 9);
+      const char *d = strstr(p, "tabular-nums\">");
+      if (d && d < end) { d += 14; size_t k = 0; while (d[k] && d[k] != '<' && k < sizeof dur - 1) { dur[k] = d[k]; k++; } dur[k] = 0; }
+      q.duration = dur_of(dur);
+      q.width = 268; q.height = 394;
+      unsigned long long h = 1469598103934665603ull;
+      for (const char *x = href; *x; x++) h = (h ^ (unsigned char)*x) * 1099511628211ull;
+      q.id = (long long)(h >> 1);
+    } else {
+      char id[24] = "";
+      sscanf(p + strlen(mark), "%23[0-9]", id);
+      q.id = atoll(id);
+      attr(p, end, "href=", href, sizeof href);
+      const char *im = strstr(p, "<img");
+      if (im && im < end) { char rel[300] = ""; attr(im, end, "src=", rel, sizeof rel); snprintf(img, sizeof img, "%s%s", rel[0] == '/' ? s->base : "", rel); attr(im, end, "title=", title, sizeof title); }
+      // ("16 Min": the last of the card's details)
+      const char *m = strstr(p, " Min<");
+      if (m && m < end) { const char *b = m; while (b > p && isdigit((unsigned char)b[-1])) b--; q.duration = atoi(b) * 60; }
+      snprintf(file, sizeof file, "%s/media/videos/iphone/%lld.mp4", s->base, q.id); // (the small copy, made for phones)
+      q.width = 276; q.height = 460;
+    }
+    p = next;
+    unent(title);
+    if (!q.id || href[0] != '/' || strncmp(img, "http", 4)) continue;
+    char tags[600];
+    words_of(title, tags, sizeof tags);
+    if (any_never(tags)) continue;
+    char page[600];
+    snprintf(page, sizeof page, "%s%s", s->base, href);
+    snprintf(q.ext, sizeof q.ext, "mp4");
+    q.rating = LV_R_EXPLICIT;
+    q.preview = sdup(img); q.sample = sdup(img); q.file = sdup(file[0] ? file : page); q.page = sdup(page); q.source = sdup(dur); q.tags = sdup(tags);
+    if (!q.preview || !q.sample || !q.file || !q.page || !q.source || !q.tags) { free(q.preview); free(q.sample); free(q.file); free(q.page); free(q.source); free(q.tags); continue; }
+    out[(*n)++] = q;
+  }
+  return out;
+}
+int lv_item_check(const LvSite *s, LvPost *post, const char *html) {
+  char text[4000] = "", meta[1200];
+  size_t o = 0;
+  // the page's own words for it: its title, its description, its keywords, and (HentaiCloud) its categories
+  static const char *const metas[] = {"property=\"og:title\" content=", "name=\"description\" content=", "name=\"keywords\" content=", NULL};
+  for (int k = 0; metas[k]; k++) {
+    const char *m = strstr(html, metas[k]);
+    if (!m) continue;
+    attr(m, m + strlen(m), "content=", meta, sizeof meta);
+    o += (size_t)snprintf(text + o, sizeof text - o, " %s", meta);
+    if (o >= sizeof text) o = sizeof text - 1;
+  }
+  const char *cat = strstr(html, "class=\"category\"");
+  if (cat) {
+    const char *ce = strstr(cat, "</ul>");
+    for (const char *a = strstr(cat, "<a "); a && ce && a < ce && o + 2 < sizeof text; a = strstr(a + 3, "<a ")) {
+      const char *gt = strchr(a, '>');
+      if (!gt || gt > ce) break;
+      gt++;
+      text[o++] = ' '; // (a word apart from what came before: "movies" and "Loli" aren't "moviesloli")
+      while (*gt && *gt != '<' && o + 2 < sizeof text) text[o++] = *gt++;
+      text[o++] = ' ';
+    }
+    text[o] = 0;
+  }
+  unent(text);
+  char words[4000];
+  words_of(text, words, sizeof words);
+  if (any_never(words)) return 0;
+  // the MP4, where the page names it (HentaiWorld: its og:video)
+  if (s->kind == BK_HWORLD) {
+    const char *v = strstr(html, "property=\"og:video\" content=");
+    char mp4[600] = "";
+    if (v) attr(v, v + strlen(v), "content=", mp4, sizeof mp4);
+    if (strncmp(mp4, "http", 4)) return 0;
+    char *d = malloc(strlen(mp4) + 1);
+    if (!d) return 0;
+    strcpy(d, mp4);
+    free(post->file);
+    post->file = d;
+  }
+  return 1;
+}
+
 // Its video page: the MP4 (the smaller one, quickest to come), and its keywords checked.
 int lv_xv_video(const char *html, char *out, size_t cap, int *nev) {
   *nev = 0;
@@ -650,6 +774,7 @@ LvPost *lv_booru_parse(const LvSite *s, const char *text, size_t len, int rating
   *n = 0;
   if (s->kind == BK_KVS) return kvs_parse(text, len, n);
   if (s->kind == BK_XV) return xv_parse(text, len, n);
+  if (s->kind == BK_HWORLD || s->kind == BK_HCLOUD) return episodes_parse(s, text, n);
   if (s->kind == BK_ESHUU || s->kind == BK_BOORUIO) return image_site_parse(s, text, len, ratings, n);
   Json j;
   if (json_parse(&j, text, len) != 0) return NULL;

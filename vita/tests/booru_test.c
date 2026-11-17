@@ -60,6 +60,46 @@ static void check_kind(const char *file, const LvSite *s, int want) {
 }
 
 int main(void) {
+  // the episode sites: HentaiWorld and HentaiCloud (their lists, then each episode's page)
+  {
+    LvSite hw = {"HentaiWorld", BK_HWORLD, "https://hentaiworld.tv", NULL, 1, 0, NULL, NULL, NULL, 1};
+    LvSite hc = {"HentaiCloud", BK_HCLOUD, "https://www.hentaicloud.com", NULL, 1, 0, NULL, NULL, NULL, 1};
+    CHECK(lv_site_checks_items(&hw) && lv_site_checks_items(&hc) && !lv_site_is_booru(&hw), "episode sites check each item");
+    char u[600];
+    lv_booru_url_ex(&hw, "", LV_R_ALL, LV_SORT_HOT, 0, NULL, 2, u, sizeof u);
+    CHECK(!strcmp(u, "https://hentaiworld.tv/trending?page=2"), "hw url %s", u);
+    lv_booru_url_ex(&hc, "", LV_R_ALL, LV_SORT_LATEST, 0, NULL, 3, u, sizeof u);
+    CHECK(!strcmp(u, "https://www.hentaicloud.com/videos?o=mr&page=3"), "hc url %s", u);
+    size_t n;
+    char *t = slurp("tests/booru/hworld_list.html", &n);
+    int c = 0;
+    LvPost *p = lv_booru_parse(&hw, t, n, LV_R_ALL, &c);
+    CHECK(p && c >= 20, "hw cards %d", c);
+    for (int k = 0; p && k < c; k++) CHECK(strstr(p[k].preview, "cover-268.webp") && !strncmp(p[k].page, "https://hentaiworld.tv/videos/", 30) && p[k].duration > 60 && lv_is_long(&hw, &p[k]), "hw card %d %s %d", k, p[k].preview, p[k].duration);
+    lv_posts_free(p, c);
+    free(t);
+    t = slurp("tests/booru/hworld_episode.html", &n);
+    LvPost q = {0};
+    q.file = strdup("x");
+    CHECK(lv_item_check(&hw, &q, t) == 1 && strstr(q.file, "cdn.hentaiworld.tv/") && strstr(q.file, "video.mp4"), "hw episode mp4 %s", q.file);
+    free(q.file);
+    free(t);
+    t = slurp("tests/booru/hcloud_list.html", &n);
+    p = lv_booru_parse(&hc, t, n, LV_R_ALL, &c);
+    CHECK(p && c >= 20, "hc cards %d", c);
+    for (int k = 0; p && k < c; k++) CHECK(strstr(p[k].file, "/media/videos/iphone/") && strstr(p[k].preview, "/media/videos/tmb/") && p[k].duration >= 60, "hc card %d %s %d", k, p[k].file, p[k].duration);
+    lv_posts_free(p, c);
+    free(t);
+    t = slurp("tests/booru/hcloud_episode.html", &n);
+    q.file = strdup("keep");
+    CHECK(lv_item_check(&hc, &q, t) == 1 && !strcmp(q.file, "keep"), "hc episode ok");
+    // (a category of the never-shown words: not shown)
+    char *bad = malloc(n + 200);
+    const char *cat = strstr(t, "class=\"category\"");
+    snprintf(bad, n + 200, "%.*s<a href=\"/videos/x\">Loli</a>%s", (int)(strstr(cat, "<ul>") + 4 - t), t, strstr(cat, "<ul>") + 4);
+    CHECK(lv_item_check(&hc, &q, bad) == 0, "hc never-shown category");
+    free(bad); free(q.file); free(t);
+  }
   // AI-made: by tag (the boorus) or by title (the video sites)
   CHECK(lv_ai_made("1girl ai-generated solo") && lv_ai_made("cum by snu snu island ai generated") && lv_ai_made("x stable diffusion y"), "ai tags and titles");
   CHECK(!lv_ai_made("1girl aiko solo") && !lv_ai_made("air guitar") && !lv_ai_made("ai"), "not ai: other words");

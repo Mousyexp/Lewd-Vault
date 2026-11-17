@@ -213,6 +213,22 @@ static void saved_add(const char *src) {
 
 // ---------- the threads ----------
 
+// The episode sites: each one's own page read before it's shown (lv_item_check: never-shown words,
+// its MP4); the ones that fail, or don't answer, are left out. Stops when *gen moves on from gen.
+static int check_items(LvHttp *h, const LvSite *s, LvPost *p, int n, volatile int *gen, int g) {
+  int kept = 0, k = 0;
+  for (; k < n && *gen == g; k++) {
+    uint8_t *b = NULL;
+    size_t bn = 0;
+    int ok = lv_http_get(h, p[k].page, &b, &bn, 2u << 20, NULL, NULL, NULL) == 200 && b && lv_item_check(s, &p[k], (char *)b);
+    free(b);
+    if (ok) p[kept++] = p[k];
+    else { LvPost *q = &p[k]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); }
+  }
+  for (; k < n; k++) { LvPost *q = &p[k]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); }
+  return kept;
+}
+
 static void *list_main(void *arg) {
   pin_to_core(2); // (off the drawing thread's core)
   LvHttp *h = lv_http_new();
@@ -251,6 +267,7 @@ static void *list_main(void *arg) {
     if (!url[0]) { b = (uint8_t *)strdup(s->kind == BK_BOORUIO ? "{\"data\":[]}" : "[]"); n = b ? strlen((char *)b) : 0; }
     int count = 0;
     LvPost *got = st == 200 ? lv_booru_parse(s, (const char *)b, n, ratings, &count) : NULL;
+    if (got && lv_site_checks_items(s)) count = check_items(h, s, got, count, &wgen, gen);
     // (the hidden tags: those posts never reach the grid)
     if (got && hidden[0]) {
       int kept = 0;

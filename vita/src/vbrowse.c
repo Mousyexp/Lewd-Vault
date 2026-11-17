@@ -11,6 +11,8 @@ static int vb_src = -1;
 typedef struct { const char *name, *site, *tags, *icon, *about; int blocked; } VSource;
 static const VSource VSRC_BUILTIN[] = {
   // (whole episodes, 10 minutes and longer: kept as a favourite or made available offline)
+  {"HentaiWorld", "HentaiWorld", "", "hentaiworld", "Hentai episodes, new each week", 0},
+  {"HentaiCloud", "HentaiCloud", "", "hentaicloud", "Hentai episodes, English subs", 0},
   {"Hentai Episodes", "XVideos Hentai", "", "xvideos", "Whole episodes, 10 min+", 0},
   {"Uncensored Episodes", "XVideos Hentai", "uncensored", "xvideos", "Uncensored episodes, 10 min+", 0},
   {"R34V Longest", "Rule34Video", "longest", "rule34video", "The longest hentai videos", 0},
@@ -191,6 +193,7 @@ static void *vb_main(void *arg) {
       int st = lv_http_get(h, u, &b, &n, 8u << 20, NULL, NULL, &err);
       int count = 0;
       LvPost *got = st == 200 ? lv_booru_parse(&sc, (const char *)b, n, ratings, &count) : NULL;
+      if (got && lv_site_checks_items(&sc)) count = check_items(h, &sc, got, count, &vb_gen, gen);
       // (videos only: some sites' video tags also have pictures)
       int kept = 0;
       for (int k = 0; got && k < count; k++) {
