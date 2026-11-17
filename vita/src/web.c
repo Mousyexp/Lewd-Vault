@@ -1293,10 +1293,11 @@ static void draw_find_sheet(void) {
 // video sources, opening the video browser); each with its icon (sites/*.png).
 static int sites_tab;      // 0 pictures, 1 videos, 2 manga
 static float sites_scroll;
-static vita2d_texture *site_tex[64];
-static int site_tex_tried[64];
+// (the icons by slot: the sites 0-30, the add tile 31, the video sources 32-63, the comics' 64-95)
+static vita2d_texture *site_tex[96];
+static int site_tex_tried[96];
 static vita2d_texture *site_icon_named(int slot, const char *name) {
-  if (slot < 0 || slot >= 64 || !name) return NULL;
+  if (slot < 0 || slot >= 96 || !name) return NULL;
   if (!site_tex_tried[slot]) {
     site_tex_tried[slot] = 1;
     char p[96];
@@ -1508,7 +1509,7 @@ static void draw_sites_sheet(void) {
     k = ord[k]; // (the k-th tile shows this source)
     int site = !sites_tab && k < nvis ? vis[k] : -1;
     if (add) { name = sites_tab == 2 ? "More comics" : sites_tab ? "Add a source" : "Add a site"; about = "Found for you, one press"; ic = "add"; cur = 0; slot = 31; }
-    else if (sites_tab == 2) { name = msource_name(k); about = msource_about(k); ic = msource_icon(k); cur = screen == S_MANGA && k == mg_src_now(); slot = 48 + k; }
+    else if (sites_tab == 2) { name = msource_name(k); about = msource_about(k); ic = msource_icon(k); cur = screen == S_MANGA && k == mg_src_now(); slot = 64 + k; }
     else if (sites_tab) { name = vsource_name(k); about = vsource_about(k); ic = vsource_icon(k); cur = k == vb_cur; blocked = vsource_blocked(k); slot = 32 + k; }
     else { name = LV_SITES[site].name; about = LV_SITES[site].about; ic = LV_SITES[site].icon; cur = site == cfg.site; slot = site; }
     rrect(x, y, tw, th, 18, on ? SURF2 : with_alpha(SURF2, 140));

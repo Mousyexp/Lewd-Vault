@@ -549,6 +549,7 @@ static float lib_aspect(int k) {
 }
 
 static int cap_shown;
+static void lhero_build(void); // (the hero row over All: after the grid is made, it goes below it)
 static void refilter(void) {
   // (the list's room kept from one filter to the next: grown only when the vault has grown)
   if (!shown || cap_shown < vault.n + 1) {
@@ -572,6 +573,7 @@ static void refilter(void) {
     qsort(shown, nshown, sizeof *shown, cmp_items);
   }
   grid_build(&lgrid, nshown, lib_aspect);
+  lhero_build();
 }
 
 static void now_iso(char *out, size_t cap) {
@@ -1653,6 +1655,130 @@ static void favs_open(int tab); // (favs.c)
 #include "clean.c"
 #include "livearea.c"
 
+// ----- the hero row over All: Continue watching, then Recently hearted -----
+// Up to sixteen of what's shown: videos stopped part way, then the ones given a heart most lately. It
+// sits above the grid as part of the page (the grid's cards move down by its height), so it scrolls
+// away with it. ↑ from the first row goes into it; ←→ along; ✕ opens; ↓ back to the grid.
+static void vc_tri(float cx, float cy, float s, unsigned c);
+#define LHERO_H 150
+#define LHERO_CW 176
+#define LHERO_CH 99
+static int lhero[16], lhero_kind[16], nlhero, lhero_on, lhero_sel;
+static float lhero_x;
+static int cmp_last_like(const void *a, const void *b) {
+  const LvItem *x = &vault.items[*(const int *)a], *y = &vault.items[*(const int *)b];
+  const char *lx = x->view >= 0 && vault.views[x->view].last_like ? vault.views[x->view].last_like : "";
+  const char *ly = y->view >= 0 && vault.views[y->view].last_like ? vault.views[y->view].last_like : "";
+  return strcmp(ly, lx);
+}
+static void lhero_build(void) {
+  int had = nlhero;
+  nlhero = 0;
+  if (cfg.lmode == 0 && cat < 0 && !lsearch.n && !selecting && !book_inside && nshown > 6) {
+    for (int k = 0; k < nshown && nlhero < 8; k++) {
+      const LvItem *it = &vault.items[shown[k]];
+      if (is_video(it) && it->path && resume_of(it) > 0 && !is_locked(shown[k])) { lhero_kind[nlhero] = 0; lhero[nlhero++] = shown[k]; }
+    }
+    int liked[64], nl = 0;
+    for (int k = 0; k < nshown && nl < 64; k++)
+      if (lv_likes_of(&vault, &vault.items[shown[k]]) > 0 && !is_locked(shown[k])) liked[nl++] = shown[k];
+    qsort(liked, nl, sizeof *liked, cmp_last_like);
+    for (int k = 0; k < nl && nlhero < 16; k++) {
+      int dup = 0;
+      for (int j = 0; j < nlhero; j++) dup |= lhero[j] == liked[k];
+      if (!dup) { lhero_kind[nlhero] = 1; lhero[nlhero++] = liked[k]; }
+    }
+    if (nlhero < 2) nlhero = 0; // (one alone isn't a row)
+  }
+  if (!nlhero) lhero_on = 0;
+  if (lhero_sel >= nlhero) lhero_sel = nlhero ? nlhero - 1 : 0;
+  if (nlhero != had) lhero_x = 0;
+  // the grid below it
+  if (nlhero) {
+    for (int k = 0; k < lgrid.n; k++) lgrid.r[k].y += LHERO_H;
+    lgrid.height += LHERO_H;
+  }
+}
+// its input (before the grid's): 1 if it took the buttons this frame
+static int lhero_input(void) {
+  if (!nlhero) return 0;
+  if (!lhero_on) {
+    // (↑ from the first row of the grid: into it)
+    if ((in.pressed & SCE_CTRL_UP) && sel >= 0 && sel < lgrid.n && lgrid.row[sel] == 0) {
+      lhero_on = 1; sfx(SFX_TICK);
+      // (the card nearest above)
+      float cx = lgrid.r[sel].x + lgrid.r[sel].w / 2 + lhero_x;
+      lhero_sel = (int)(cx / (LHERO_CW + 12));
+      if (lhero_sel >= nlhero) lhero_sel = nlhero - 1;
+      in.pressed &= ~SCE_CTRL_UP;
+      return 1;
+    }
+    return 0;
+  }
+  if (in.pressed & SCE_CTRL_RIGHT) { if (lhero_sel < nlhero - 1) { lhero_sel++; sfx(SFX_TICK); } }
+  if (in.pressed & SCE_CTRL_LEFT) { if (lhero_sel > 0) { lhero_sel--; sfx(SFX_TICK); } }
+  if (in.pressed & SCE_CTRL_DOWN) { lhero_on = 0; sfx(SFX_TICK); }
+  if (in.pressed & SCE_CTRL_CIRCLE) { lhero_on = 0; sfx(SFX_BACK); }
+  int open = (in.pressed & SCE_CTRL_CROSS) != 0;
+  in.pressed &= ~(SCE_CTRL_RIGHT | SCE_CTRL_LEFT | SCE_CTRL_DOWN | SCE_CTRL_UP | SCE_CTRL_CROSS | SCE_CTRL_CIRCLE | SCE_CTRL_SQUARE | SCE_CTRL_TRIANGLE);
+  scroll += (0 - scroll) * 0.3f; // (in sight)
+  if (open) {
+    for (int k = 0; k < nshown; k++) if (shown[k] == lhero[lhero_sel]) { sfx(SFX_SELECT); lhero_on = 0; open_viewer(k, 0); return 2; }
+  }
+  return 1;
+}
+// drawn at the top of the page (y: where the page starts on screen); the thumbnails it needs go in want
+static int lhero_draw(float y, int *want, int nwant_max) {
+  if (!nlhero || y + LHERO_H < TOP - 4) return 0;
+  int nw = 0;
+  // where along: the chosen one in sight
+  if (lhero_on) {
+    float want_x = lhero_sel * (LHERO_CW + 12) - (W - 2 * JMARGIN - LHERO_CW) / 2;
+    float maxx = nlhero * (LHERO_CW + 12) - 12 - (W - 2 * JMARGIN);
+    if (want_x > maxx) want_x = maxx;
+    if (want_x < 0) want_x = 0;
+    lhero_x += (want_x - lhero_x) * 0.25f;
+  }
+  if (in.touching && in.down_y > y + 20 && in.down_y < y + 20 + LHERO_CH && abs(in.tx - in.down_x) > abs(in.ty - in.down_y)) {
+    lhero_x -= in.drag_dx;
+  }
+  float maxx = fmaxf(0, nlhero * (LHERO_CW + 12) - 12 - (W - 2 * JMARGIN));
+  if (!in.touching) { if (lhero_x < 0) lhero_x *= 0.7f; if (lhero_x > maxx) lhero_x = maxx + (lhero_x - maxx) * 0.7f; }
+  // the titles: above the first of each kind
+  float ring_x = -1, ring_y = 0;
+  for (int k = 0; k < nlhero; k++) {
+    float x = JMARGIN + k * (LHERO_CW + 12) - lhero_x, cy = y + 24;
+    if (k == 0 || lhero_kind[k] != lhero_kind[k - 1]) {
+      const char *ttl = lhero_kind[k] == 0 ? "Continue watching" : "Recently hearted";
+      float tx = fmaxf(JMARGIN, x);
+      if (tx < W) text(tx, y + 16, DIM, 15, ttl);
+    }
+    if (x > W || x + LHERO_CW < 0) continue;
+    int i = lhero[k];
+    vita2d_texture *t = thumb_of(i);
+    if (t) draw_cover(t, x, cy, LHERO_CW, LHERO_CH, RGBA(255, 255, 255, 255));
+    else {
+      skeleton(x, cy, LHERO_CW, LHERO_CH, 8);
+      if (nw < nwant_max && tstate[i] != 3) { want_size(i, LHERO_CW, LHERO_CH); want[nw++] = i; }
+    }
+    const LvItem *it = &vault.items[i];
+    if (lhero_kind[k] == 0 && it->duration > 0) {
+      // how far it got
+      float f = fminf(1, resume_of(it) / (float)it->duration);
+      rrect(x, cy + LHERO_CH - 4, LHERO_CW, 4, 2, RGBA(0, 0, 0, 160));
+      rrect(x, cy + LHERO_CH - 4, LHERO_CW * f, 4, 2, ACC);
+      circle(x + 18, cy + LHERO_CH - 22, 12, RGBA(0, 0, 0, 150));
+      vc_tri(x + 19, cy + LHERO_CH - 22, 7, TEXT);
+    } else heart(x + 16, cy + LHERO_CH - 16, 6, ACC);
+    if (lhero_on && k == lhero_sel) { ring_x = x; ring_y = cy; }
+    if (hit((int)x, (int)cy, LHERO_CW, LHERO_CH) && in.tap_y > TOP && in.tap_y < H - BAR) {
+      for (int j = 0; j < nshown; j++) if (shown[j] == i) { sfx(SFX_SELECT); lhero_on = 0; open_viewer(j, 0); return -1; }
+    }
+  }
+  if (ring_x > -1) focus_ring(ring_x, ring_y, LHERO_CW, LHERO_CH);
+  return nw;
+}
+
 static int last_top_row = -1;
 static void draw_library(void) {
   float content = lgrid.height + 12;
@@ -1663,12 +1789,47 @@ static void draw_library(void) {
   Input saved_in = in;
   int sheet_up = lsheet != LS_NONE || side_open || side_t > 0;
   if (sheet_up) { in.pressed = 0; in.tap = 0; in.touching = 0; in.flicked = 0; in.ly = 0; in.dbl = 0; }
+  if (!sheet_up && lhero_input() == 2) { in = saved_in; return; }
   int open_now = sheet_up ? 0 : lib_cross();
   int fast = sheet_up ? 0 : fast_scroll(max_scroll, view_h);
   if (fast) { in.touching = 0; in.tap = 0; }
 
   // --- moving: touch drag and flick, the stick, the D-pad selection ---
-  if (in.touching && in.ty > TOP && in.ty < H - BAR) { scroll -= in.drag_dy; scroll_v = 0; }
+  // (two fingers pinched apart or together: the cards a size bigger or smaller, the three sizes the
+  //  previews are made for; the card between the fingers stays where it is)
+  {
+    static float pd0;
+    if (!sheet_up && in.tcount >= 2 && !book_shelf) {
+      float d = hypotf(in.t2x - in.tx, in.t2y - in.ty);
+      if (pd0 <= 0) pd0 = d;
+      else if (d > pd0 * 1.35f || d < pd0 * 0.74f) {
+        int step = d > pd0 ? 1 : -1, ns = lf.size + step;
+        pd0 = d;
+        if (ns >= 0 && ns <= 2) {
+          float mx = (in.tx + in.t2x) / 2.0f, my = (in.ty + in.t2y) / 2.0f;
+          // the card under the fingers, and where it is on screen
+          int anchor = -1;
+          float ay = my;
+          for (int k = grid_first(&lgrid, scroll - 8); k < lgrid.n; k++) {
+            Rect r = lgrid.r[k];
+            float ry = TOP + 6 + r.y - scroll;
+            if (ry > H) break;
+            if (mx >= r.x && mx < r.x + r.w && my >= ry && my < ry + r.h) { anchor = k; ay = ry; break; }
+          }
+          if (anchor < 0) anchor = sel;
+          lf.size = ns;
+          refilter();
+          if (anchor >= 0 && anchor < lgrid.n) { scroll = TOP + 6 + lgrid.r[anchor].y - ay; sel = anchor; }
+          sfx(SFX_TOGGLE);
+          say(SIZES[ns]);
+        }
+      }
+      in.touching = 0; in.tap = 0; in.flicked = 0; // (a pinch isn't a scroll or a tap)
+    } else if (in.tcount < 2) pd0 = 0;
+  }
+  // (a sideways drag in the hero row moves it, not the page)
+  int hero_drag = nlhero && in.touching && in.down_y > TOP + 6 - scroll + 24 && in.down_y < TOP + 6 - scroll + 24 + LHERO_CH && abs(in.tx - in.down_x) > abs(in.ty - in.down_y);
+  if (in.touching && in.ty > TOP && in.ty < H - BAR && !hero_drag) { scroll -= in.drag_dy; scroll_v = 0; }
   if (in.flicked && in.down_y > TOP) scroll_v = -in.fvy * 1.6f;
   scroll += scroll_v;
   scroll_v *= 0.94f;
@@ -1708,6 +1869,11 @@ static void draw_library(void) {
   //  their loading rings; what's in view is asked for as it slows)
   int flinging = fabsf(scroll_v) > 30 || fast;
   float fr_x = -1, fr_y = 0, fr_w = 0, fr_h = 0;
+  {
+    int hn = lhero_draw(TOP + 6 - scroll, wanted, 16);
+    if (hn < 0) { in = saved_in; return; }
+    nw += hn;
+  }
   for (int k = first; k < nshown && k < lgrid.n; k++) {
     int i = shown[k];
     Rect rc = lgrid.r[k];
@@ -1717,9 +1883,13 @@ static void draw_library(void) {
     if (y + ch < TOP - 4) continue;
     LvItem *it = &vault.items[i];
     vita2d_texture *t = thumb_of(i);
-    int on = k == sel && !in.touching;
+    int on = k == sel && !in.touching && !lhero_on;
     float grow = on ? 3 : 0;
     if (on) { fr_x = x - grow; fr_y = y - grow; fr_w = cw + 2 * grow; fr_h = ch + 2 * grow; }
+    if (book_shelf) { // (the pages' edges behind it, a book's thickness)
+      int pages = book_count[i] > 40 ? 4 : book_count[i] > 12 ? 3 : 2;
+      for (int e = pages; e >= 1; e--) rrect(x - grow + e * 3, y - grow + e * 3, cw + 2 * grow, ch + 2 * grow, 6, e & 1 ? RGBA(238, 232, 224, 255) : RGBA(180, 172, 164, 255));
+    }
     if (t) draw_cover(t, x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, RGBA(255, 255, 255, 255));
     else {
       if (tstate[i] == 3) { rrect(x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, 8, SURF); text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No picture"); }
@@ -1739,6 +1909,13 @@ static void draw_library(void) {
       text(x + cw - tw - 10, y + ch - 11, TEXT, 13, d);
     }
     if (book_shelf) { // (a book: its name across the foot, its pages in the corner)
+      // a book's look: its spine at the left (a shade and a light line), and how far it's been read
+      grad(x, y, 14, ch, RGBA(0, 0, 0, 255), 150, 0, 1);
+      vita2d_draw_rectangle(x + 14, y + 4, 1, ch - 8, RGBA(255, 255, 255, 40));
+      if (book_read && book_read[i] > 0 && book_count[i] > 0) {
+        float f = fminf(1, book_read[i] / (float)book_count[i]);
+        rrect(x + 6, y + ch - 5, (cw - 12) * f, 3, 1, ACC);
+      }
       grad(x, y + ch - 46, cw, 46, RGBA(0, 0, 0, 255), 0, 200, 0);
       text_fit((int)x + 8, (int)(y + ch - 10), TEXT, 14, it->collection, (int)cw - 16);
       char pc[24];

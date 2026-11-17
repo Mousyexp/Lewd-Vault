@@ -138,6 +138,7 @@ static int cmp_pages(const void *x, const void *y) {
   return c ? c : *(const int *)x - *(const int *)y;
 }
 static int *book_count; // per item (a book's first page): its pages
+static int *book_read;  // per item (a book's first page): the page last looked at, 1.. (0: not opened)
 static int nbook_count;
 // The Comics mode's list: the books (one card each), or the pages of the book open. 0: not that mode.
 static int lib_books(void) {
@@ -156,13 +157,24 @@ static int lib_books(void) {
   if (nbook_count < vault.n + 1) {
     int *nb = realloc(book_count, (vault.n + 1) * sizeof *nb);
     if (!nb) { nshown = m; return 1; }
-    book_count = nb; nbook_count = vault.n + 1;
+    book_count = nb;
+    int *nr = realloc(book_read, (vault.n + 1) * sizeof *nr);
+    if (!nr) { nshown = m; return 1; }
+    book_read = nr; nbook_count = vault.n + 1;
   }
   nshown = 0;
   for (int k = 0; k < m; ) {
     int e = k + 1;
     while (e < m && !strcmp(vault.items[shown[e]].collection, vault.items[shown[k]].collection)) e++;
     book_count[shown[k]] = e - k;
+    // (how far it's been read: the page looked at last)
+    const char *best = "";
+    int at = 0;
+    for (int j = k; j < e; j++) {
+      const LvItem *p = &vault.items[shown[j]];
+      if (p->view >= 0 && vault.views[p->view].last && strcmp(vault.views[p->view].last, best) > 0) { best = vault.views[p->view].last; at = j - k + 1; }
+    }
+    book_read[shown[k]] = at;
     shown[nshown++] = shown[k];
     k = e;
   }

@@ -51,6 +51,11 @@ video down to close it: it follows the finger, smaller, and flies back into its 
 (a long video) shows its card while it loads or is paused: its name, length and site, and ♥ Favorite
 / ↓ Offline as big buttons.
 
+In **All**, a row over the grid: **Continue watching** (videos stopped part way, with how far) and
+**Recently hearted**; it scrolls away with the page, ↑ from the first row goes into it. Pinch the
+Library with two fingers to make the cards a size bigger or smaller (the three sizes of Filters' Card
+size). On the Comics shelf each book has its spine, its pages' edges and a bar for how far it's been read.
+
 On every screen the chosen card or row has the same ring, gliding from one to the next; a card
 still loading shows its shape with a light passing over it and a small loading ring.
 

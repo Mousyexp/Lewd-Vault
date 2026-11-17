@@ -32,7 +32,7 @@ static const VSource VSRC_BUILTIN[] = {
 #define NVSRC_BUILTIN ((int)(sizeof VSRC_BUILTIN / sizeof *VSRC_BUILTIN))
 // The sources offered: the built-in ones that answer, the ones added (the site finder, web.c: saved
 // in ux0:data/LWDV00001/video_sources.txt, "<site name>\t<tags>" a line), then the locked ones.
-#define VSRC_MAX 16
+#define VSRC_MAX 32 // (the built-in ones, 16 now, and room for as many added: icon slots 32-63)
 static VSource VSRC[VSRC_MAX];
 static int NVSRC, vsrc_built, nvs_added;
 static char vs_name[VSRC_MAX][48], vs_tags[VSRC_MAX][64];
@@ -41,7 +41,7 @@ static void vsrc_build(void) {
   pthread_mutex_lock(&vbmx);
   vsrc_built = 1;
   // (the switcher's icons are kept by place: the places may have moved)
-  for (int k = 32; k < 48; k++) { if (site_tex[k]) release_tex(site_tex[k]); site_tex[k] = NULL; site_tex_tried[k] = 0; }
+  for (int k = 32; k < 32 + VSRC_MAX; k++) { if (site_tex[k]) release_tex(site_tex[k]); site_tex[k] = NULL; site_tex_tried[k] = 0; }
   NVSRC = 0;
   for (int k = 0; k < NVSRC_BUILTIN; k++) if (!VSRC_BUILTIN[k].blocked) VSRC[NVSRC++] = VSRC_BUILTIN[k];
   for (int k = 0; k < nvs_added && NVSRC < VSRC_MAX - 2; k++) {
