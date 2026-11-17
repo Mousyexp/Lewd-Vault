@@ -57,6 +57,25 @@ static void check_kind(const char *file, const LvSite *s, int want) {
 }
 
 int main(void) {
+  // working out what kind a site added by hand is, from its answers
+  {
+    size_t n1, n2, n3;
+    char *e6 = slurp("tests/booru/e621.json", &n1), *dan = slurp("tests/booru/danbooru.json", &n2), *moe = slurp("tests/booru/moebooru.json", &n3);
+    CHECK(lv_booru_probe(BK_E621, e6, n1) && !lv_booru_probe(BK_DANBOORU, e6, n1), "e621's answer is e621's kind only");
+    CHECK(lv_booru_probe(BK_DANBOORU, dan, n2) && !lv_booru_probe(BK_E621, dan, n2), "danbooru's answer is danbooru's kind");
+    CHECK(lv_booru_probe(BK_MOEBOORU, moe, n3), "moebooru's");
+    CHECK(!lv_booru_probe(BK_GELBOORU, "<html>", 6), "a web page is no kind");
+    free(e6); free(dan); free(moe);
+    char u[256];
+    lv_booru_probe_url(BK_GELBOORU, "https://example.org", u, sizeof u);
+    CHECK(!strcmp(u, "https://example.org/index.php?page=dapi&s=post&q=index&json=1&limit=1"), "probe url: %s", u);
+    int before = LV_NSITES;
+    CHECK(lv_booru_add_site("My booru", BK_MOEBOORU, "https://my.example/") == 0 && LV_NSITES == before + 1, "added");
+    CHECK(!strcmp(LV_SITES[before].base, "https://my.example") && !strcmp(LV_SITES[before].name, "My booru"), "its address, trimmed");
+    lv_booru_url(&LV_SITES[before], "x", LV_R_ALL, LV_SORT_LATEST, 1, u, sizeof u);
+    CHECK(!strncmp(u, "https://my.example/post.json?", 29), "its searches: %s", u);
+    LV_NSITES = before;
+  }
   // Top's spans and an account's key
   {
     char u[1024];

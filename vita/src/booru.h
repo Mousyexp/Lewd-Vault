@@ -15,8 +15,17 @@ typedef struct {
   const char *icon;      // its tile in the site switcher: app0:sites/<icon>.png
   const char *about;     // a few words on what it has
 } LvSite;
-extern const LvSite LV_SITES[];
-extern const int LV_NSITES;
+// The built-in sites, then the ones added on the Vita (lv_booru_add_site), up to LV_MAX_SITES.
+#define LV_MAX_SITES 24
+extern LvSite LV_SITES[LV_MAX_SITES];
+extern int LV_NSITES;
+extern const int LV_NBUILTIN;
+// A site added by hand: 0, or -1 when there's no room. name and base are copied.
+int lv_booru_add_site(const char *name, int kind, const char *base);
+// What kind of site answers at base, from a page of its answer to each kind's search (the caller
+// fetches them: url_for(kind) gives the address to try). -1: none of them.
+void lv_booru_probe_url(int kind, const char *base, char *out, size_t cap);
+int lv_booru_probe(int kind, const char *json, size_t len);
 
 enum { LV_SORT_LATEST, LV_SORT_HOT, LV_SORT_TOP, LV_SORT_RANDOM, LV_NSORTS };
 extern const char *LV_SORT_NAMES[LV_NSORTS];

@@ -827,7 +827,7 @@ static int ime_poll(char *out, int cap) {
 }
 
 // ---------- screens ----------
-enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI, S_CALC, S_CLEAN, S_HEALTH };
+enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI, S_CALC, S_CLEAN, S_HEALTH, S_VIDEOS };
 static int screen = S_PICK, cover_return = S_LIBRARY;
 static char found[16][512];
 static int nfound, pick_sel;
@@ -1097,7 +1097,7 @@ static float pill_sel_x = -1;
 static int tab_of_screen(void) {
   switch (screen) {
     case S_LIBRARY: return 0;
-    case S_WEB: return 1;
+    case S_WEB: case S_VIDEOS: return 1;
     case S_SHOW: return 2;
     case S_SETTINGS: case S_DRIVE: case S_WIFI: case S_STATS: case S_HEALTH: return 3;
   }
@@ -1945,6 +1945,7 @@ static void library_grew(int before) {
 
 #include "web.c"
 #include "wifi.c"
+#include "vbrowse.c"
 
 int main(void) {
   sceIoMkdir("ux0:data", 0777);
@@ -2039,6 +2040,7 @@ int main(void) {
       if (r == 1 && ime_for == 5 && got[0]) saved_add_current(got);
       if (r == 1 && ime_for == 6) batch_add_tag(got);
       if (r == 1 && ime_for == 7 && got[0]) { snprintf(drive_new_id, sizeof drive_new_id, "%s", got); drive_ask_secret = 1; }
+      if (r == 1 && ime_for == 14 && got[0]) add_site_start(got);
       if (r == 1 && ime_for == 9) { snprintf(whidden, sizeof whidden, "%s", got); hidden_save(); web_search(); }
       if (r == 1 && ime_for == 10 && got[0]) { snprintf(wkey_user, sizeof wkey_user, "%s", got); wkey_ask = 1; }
       if (r == 1 && ime_for == 11 && got[0]) { snprintf(wkeys[cfg.site], sizeof wkeys[cfg.site], "%s %s", wkey_user, got); wkeys_save(); sfx(SFX_DONE); web_search(); }
@@ -2087,6 +2089,7 @@ int main(void) {
       case S_CALC: draw_calc(); break;
       case S_CLEAN: draw_clean(); break;
       case S_HEALTH: draw_health(); break;
+      case S_VIDEOS: draw_videos(); break;
       case S_WEBVIEW: draw_webview(); break;
       case S_COVER: draw_cover_screen(); if (in.tap) { screen = cover_return; } break;
     }

@@ -102,4 +102,7 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sites/gelbooru.png sites/gelbooru.png
   FILE sites/rule34.png sites/rule34.png
   FILE sites/sakugabooru.png sites/sakugabooru.png
+  FILE sites/hanime.png sites/hanime.png
+  FILE sites/missav.png sites/missav.png
+  FILE sites/add.png sites/add.png
 )

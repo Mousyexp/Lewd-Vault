@@ -8,7 +8,7 @@
 #include <time.h>
 
 // No account needed for these, but Gelbooru and Rule34 (the last two) want an account's API key.
-const LvSite LV_SITES[] = {
+LvSite LV_SITES[LV_MAX_SITES] = {
   {"Danbooru", BK_DANBOORU, "https://danbooru.donmai.us", NULL, 1, 0, "danbooru", "Anime art, finely tagged"},
   {"Yande.re", BK_MOEBOORU, "https://yande.re", NULL, 0, 0, "yandere", "High-resolution anime scans"},
   {"Konachan", BK_MOEBOORU, "https://konachan.com", NULL, 0, 0, "konachan", "Anime wallpapers"},
@@ -23,7 +23,38 @@ const LvSite LV_SITES[] = {
   {"Rule34", BK_GELBOORU, "https://api.rule34.xxx", "https://rule34.xxx", 0, 1, "rule34", "Rule 34, games and anime (API key)"},
   {"Sakugabooru", BK_MOEBOORU, "https://www.sakugabooru.com", NULL, 0, 0, "sakugabooru", "Anime animation clips (videos)"},
 };
-const int LV_NSITES = sizeof LV_SITES / sizeof *LV_SITES;
+const int LV_NBUILTIN = 13;
+int LV_NSITES = 13;
+// (the strings of the sites added by hand, kept here)
+static char added_names[LV_MAX_SITES][48], added_bases[LV_MAX_SITES][160];
+int lv_booru_add_site(const char *name, int kind, const char *base) {
+  if (LV_NSITES >= LV_MAX_SITES || kind < BK_DANBOORU || kind > BK_E621) return -1;
+  int k = LV_NSITES;
+  snprintf(added_names[k], sizeof added_names[k], "%s", name);
+  snprintf(added_bases[k], sizeof added_bases[k], "%s", base);
+  size_t n = strlen(added_bases[k]);
+  while (n && added_bases[k][n - 1] == '/') added_bases[k][--n] = 0;
+  LV_SITES[k] = (LvSite){added_names[k], kind, added_bases[k], NULL, kind == BK_DANBOORU || kind == BK_E621, 0, NULL, "Added by you"};
+  LV_NSITES++;
+  return 0;
+}
+void lv_booru_probe_url(int kind, const char *base, char *out, size_t cap) {
+  switch (kind) {
+    case BK_DANBOORU: snprintf(out, cap, "%s/posts.json?limit=1", base); break;
+    case BK_MOEBOORU: snprintf(out, cap, "%s/post.json?limit=1", base); break;
+    case BK_E621: snprintf(out, cap, "%s/posts.json?limit=1", base); break;
+    default: snprintf(out, cap, "%s/index.php?page=dapi&s=post&q=index&json=1&limit=1", base);
+  }
+}
+// 1 when the answer is a page of posts this kind reads
+int lv_booru_probe(int kind, const char *json, size_t len) {
+  LvSite s = {"probe", kind, "https://x", NULL, 0, 0, NULL, NULL};
+  int n = 0;
+  LvPost *p = lv_booru_parse(&s, json, len, LV_R_ALL, &n);
+  int ok = p != NULL;
+  lv_posts_free(p, n);
+  return ok;
+}
 const char *LV_SORT_NAMES[LV_NSORTS] = {"Latest", "Hot", "Top", "Random"};
 const char *LV_SPAN_NAMES[LV_NSPANS] = {"All time", "Today", "This week", "This month"};
 int lv_booru_has_spans(const LvSite *s) { return s->kind != BK_GELBOORU; }
