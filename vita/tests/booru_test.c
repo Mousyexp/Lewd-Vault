@@ -60,6 +60,29 @@ static void check_kind(const char *file, const LvSite *s, int want) {
 }
 
 int main(void) {
+  // HentaiCity: eight minutes and longer, its counter links undone, each episode's tags and MP4
+  {
+    LvSite hy = {"HentaiCity", BK_HCITY, "https://www.hentaicity.com", NULL, 1, 0, NULL, NULL, NULL, 1};
+    char u[600];
+    lv_booru_url_ex(&hy, "", LV_R_ALL, LV_SORT_HOT, 0, NULL, 2, u, sizeof u);
+    CHECK(!strcmp(u, "https://www.hentaicity.com/videos/straight/all-popular-2.html?min_duration=480"), "hcity url %s", u);
+    size_t n;
+    char *t = slurp("tests/booru/hcity_list.html", &n);
+    int c = 0;
+    LvPost *p = lv_booru_parse(&hy, t, n, LV_R_ALL, &c);
+    CHECK(p && c >= 20, "hcity cards %d", c);
+    for (int k = 0; p && k < c; k++) CHECK(!strncmp(p[k].page, "https://www.hentaicity.com/video/", 33) && !strstr(p[k].page, "click") && strstr(p[k].preview, "main.jpg") && p[k].duration >= 480, "hcity card %d %s %d", k, p[k].page, p[k].duration);
+    lv_posts_free(p, c);
+    free(t);
+    t = slurp("tests/booru/hcity_episode.html", &n);
+    LvPost q = {0};
+    q.file = strdup("x");
+    CHECK(lv_item_check(&hy, &q, t) == 1 && !strcmp(q.file, "https://www.hentaicity.com/flv/0807/38331/mobile.mp4"), "hcity mp4 %s", q.file);
+    char *bad = malloc(n + 100);
+    snprintf(bad, n + 100, "<a href=\"https://www.hentaicity.com/tags/video/loli\">x</a>%s", t);
+    CHECK(lv_item_check(&hy, &q, bad) == 0, "hcity never-shown tag");
+    free(bad); free(q.file); free(t);
+  }
   // the episode sites: HentaiWorld and HentaiCloud (their lists, then each episode's page)
   {
     LvSite hw = {"HentaiWorld", BK_HWORLD, "https://hentaiworld.tv", NULL, 1, 0, NULL, NULL, NULL, 1};

@@ -34,6 +34,7 @@ const SITES = {
   xvideos: ['#ff6a5c', '#8a1414', 'EP'],
   hentaiworld: ['#ffb36b', '#c2410c', 'HW'],
   hentaicloud: ['#8fd0ff', '#2563eb', 'HC'],
+  hentaicity: ['#c084fc', '#6b21a8', 'HC'],
   hanime: ['#ff5aa8', '#8c1a5a', 'h'],
   missav: ['#ff8a4a', '#a3300e', 'M'],
   add: ['#3a2f3c', '#241c26', '@plus'],

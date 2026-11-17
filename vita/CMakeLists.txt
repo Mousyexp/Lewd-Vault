@@ -107,6 +107,7 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sites/xvideos.png sites/xvideos.png
   FILE sites/hentaiworld.png sites/hentaiworld.png
   FILE sites/hentaicloud.png sites/hentaicloud.png
+  FILE sites/hentaicity.png sites/hentaicity.png
   FILE sites/booruio.png sites/booruio.png
   FILE sites/r34anime.png sites/r34anime.png
   FILE sites/safebooru.png sites/safebooru.png

@@ -70,8 +70,11 @@ static uint64_t pt_last;
 
 // A worker thread onto one of the user cores (0: the drawing thread's; 1 and 2 for the work), as
 // the Vita wants it: the drawing thread is never pre-empted by decoding or the network.
+// The drawing thread has core 0 to itself; every worker may run on core 1 or 2, the system putting it
+// on the freer one (pinned to one core each, most of them landed on core 2 while core 1 idled).
 static void pin_to_core(int core) {
-  sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << (core < 0 ? 0 : core > 2 ? 2 : core));
+  int mask = core <= 0 ? SCE_KERNEL_CPU_MASK_USER_0 : (SCE_KERNEL_CPU_MASK_USER_1 | SCE_KERNEL_CPU_MASK_USER_2);
+  sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), mask);
 }
 // The C heap: 128 MB. Measured in use: a few MB browsing, ~30 MB at most while a big picture is
 // decoded (a vault of 10,000 items adds a few MB of strings). What it doesn't take is left to the
@@ -2525,6 +2528,11 @@ int main(void) {
   sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT, SCE_TOUCH_SAMPLING_STATE_START);
   sceTouchSetSamplingState(SCE_TOUCH_PORT_BACK, SCE_TOUCH_SAMPLING_STATE_START);
   pin_to_core(0); // (the drawing thread on the first core; the work on the other two)
+  // (the videos played last time, still on the card: they were only for playing, and can be large)
+  {
+    static const char *const tmp[] = {"play.mp4", "play.webm", "play0.mp4", "play0.webm", "play1.mp4", "play1.webm", "play.mp4.part", "play.webm.part", NULL};
+    for (int k = 0; tmp[k]; k++) { char p[96]; snprintf(p, sizeof p, DATA "/%s", tmp[k]); sceIoRemove(p); }
+  }
   // (a bigger per-frame vertex pool than vita2d's 1 MB: room to spare on the busiest screen)
   vita2d_init_advanced(4 * 1024 * 1024);
   make_disc();
@@ -2616,7 +2624,8 @@ int main(void) {
       if (pin.on && pin.on_wake && screen != S_PIN) { slideshow = 0; pin_lock(screen == S_COVER ? cover_return : screen); }
     }
     // (a video playing, or a slideshow: the Vita doesn't dim or sleep)
-    if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow) || drive.state == DRV_SYNCING || drive.state == DRV_CODE || wf_run)
+    if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow) || drive.state == DRV_SYNCING || drive.state == DRV_CODE || wf_run ||
+        dl_post >= 0 || msave_on) // (and while a video downloads or a chapter is saved: sleep would cut the Wi-Fi)
       sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
     PT("frame start");
     if (loaded_vault) take_results();

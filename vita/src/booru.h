@@ -4,7 +4,7 @@
 #pragma once
 #include <stddef.h>
 
-enum { BK_DANBOORU, BK_GELBOORU, BK_MOEBOORU, BK_E621, BK_KVS, BK_ESHUU, BK_BOORUIO, BK_XV, BK_HWORLD, BK_HCLOUD };
+enum { BK_DANBOORU, BK_GELBOORU, BK_MOEBOORU, BK_E621, BK_KVS, BK_ESHUU, BK_BOORUIO, BK_XV, BK_HWORLD, BK_HCLOUD, BK_HCITY };
 // (BK_HWORLD, BK_HCLOUD: hentai episode sites, hentaiworld.tv and hentaicloud.com, read as HTML. Their
 //  lists say little, so each episode's own page is read before it's shown (lv_item_check): its title,
 //  description and categories checked against the never-shown words, its MP4 found there.)

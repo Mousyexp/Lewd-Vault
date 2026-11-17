@@ -13,6 +13,7 @@ static const VSource VSRC_BUILTIN[] = {
   // (whole episodes, 10 minutes and longer: kept as a favourite or made available offline)
   {"HentaiWorld", "HentaiWorld", "", "hentaiworld", "Hentai episodes, new each week", 0},
   {"HentaiCloud", "HentaiCloud", "", "hentaicloud", "Hentai episodes, English subs", 0},
+  {"HentaiCity", "HentaiCity", "", "hentaicity", "Hentai episodes, 8 min+", 0},
   {"Hentai Episodes", "XVideos Hentai", "", "xvideos", "Whole episodes, 10 min+", 0},
   {"Uncensored Episodes", "XVideos Hentai", "uncensored", "xvideos", "Uncensored episodes, 10 min+", 0},
   {"R34V Longest", "Rule34Video", "longest", "rule34video", "The longest hentai videos", 0},

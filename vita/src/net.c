@@ -100,6 +100,7 @@ typedef struct {
   volatile float *progress;
   int too_big;
   volatile int64_t *have, *total; // (a file played as it comes: what's on the card, and the whole)
+  size_t flushed;                  // (written through to the card up to here)
 } Sink;
 
 static size_t on_data(char *p, size_t sz, size_t nm, void *u) {
@@ -110,7 +111,9 @@ static size_t on_data(char *p, size_t sz, size_t nm, void *u) {
   if (s->f) {
     if (fwrite(p, 1, n, s->f) != n) return 0;
     s->n += n;
-    if (s->have) { fflush(s->f); *s->have = (int64_t)s->n; } // (on the card before it's said to be)
+    // (on the card before it's said to be; a quarter of a megabyte at a time: the card is slow at
+    //  many small writes)
+    if (s->have && (s->n - s->flushed >= 256 * 1024 || s->n < 256 * 1024)) { fflush(s->f); s->flushed = s->n; *s->have = (int64_t)s->n; }
     return n;
   }
   if (s->n + n + 1 > s->cap) {

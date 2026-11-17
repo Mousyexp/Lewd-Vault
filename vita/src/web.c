@@ -215,13 +215,37 @@ static void saved_add(const char *src) {
 
 // The episode sites: each one's own page read before it's shown (lv_item_check: never-shown words,
 // its MP4); the ones that fail, or don't answer, are left out. Stops when *gen moves on from gen.
+// (each episode's answer kept for the session: the rows of the video browser overlap, and a page is
+//  ~55 KB, slow to fetch again and again on the Vita's Wi-Fi)
+#define ICHECK_N 512
+static struct { unsigned long long h; signed char ok; char *file; } icheck[ICHECK_N];
+static pthread_mutex_t icmx = PTHREAD_MUTEX_INITIALIZER;
+static unsigned long long page_hash(const char *s) { unsigned long long h = 1469598103934665603ull; while (*s) h = (h ^ (unsigned char)*s++) * 1099511628211ull; return h | 1; }
 static int check_items(LvHttp *h, const LvSite *s, LvPost *p, int n, volatile int *gen, int g) {
   int kept = 0, k = 0;
   for (; k < n && *gen == g; k++) {
-    uint8_t *b = NULL;
-    size_t bn = 0;
-    int ok = lv_http_get(h, p[k].page, &b, &bn, 2u << 20, NULL, NULL, NULL) == 200 && b && lv_item_check(s, &p[k], (char *)b);
-    free(b);
+    unsigned long long ph = page_hash(p[k].page);
+    int slot = (int)(ph % ICHECK_N), ok = -1;
+    pthread_mutex_lock(&icmx);
+    if (icheck[slot].h == ph) {
+      ok = icheck[slot].ok;
+      if (ok && icheck[slot].file) { char *f = strdup(icheck[slot].file); if (f) { free(p[k].file); p[k].file = f; } else ok = -1; }
+    }
+    pthread_mutex_unlock(&icmx);
+    if (ok < 0) {
+      uint8_t *b = NULL;
+      size_t bn = 0;
+      int st = lv_http_get(h, p[k].page, &b, &bn, 2u << 20, NULL, NULL, NULL);
+      ok = st == 200 && b && lv_item_check(s, &p[k], (char *)b);
+      free(b);
+      // (kept only when the page answered: one that didn't may answer next time)
+      if (st == 200) {
+        pthread_mutex_lock(&icmx);
+        free(icheck[slot].file);
+        icheck[slot].h = ph; icheck[slot].ok = (signed char)ok; icheck[slot].file = ok ? strdup(p[k].file) : NULL;
+        pthread_mutex_unlock(&icmx);
+      }
+    }
     if (ok) p[kept++] = p[k];
     else { LvPost *q = &p[k]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); }
   }
@@ -2171,6 +2195,18 @@ static void wv_offline(void) {
   sfx(SFX_TOGGLE);
   say("It goes into the vault once it's all downloaded (it plays meanwhile)");
 }
+// A seek in the video, never past what has downloaded yet (less a margin): the player would wait there.
+static void wv_seek(int64_t ms) {
+  if (!wv_vid) return;
+  uint64_t d = lv_video_duration(wv_vid);
+  if (ms < 0) ms = 0;
+  if (wv_stream && !wv_stream->done && wv_stream->total > 0 && d > 0) {
+    double f = (double)wv_stream->have / (double)wv_stream->total - 0.03;
+    int64_t lim = (int64_t)(d * (f > 0 ? f : 0));
+    if (ms > lim) { ms = lim; say("Only as far as it has downloaded"); }
+  }
+  lv_video_seek(wv_vid, ms);
+}
 static void draw_webview(void) {
   if (!nposts) { screen = wv_back; return; }
   if (sw_on && wv < nposts) { draw_save_wizard(); return; }
@@ -2178,7 +2214,9 @@ static void draw_webview(void) {
   static int stream_tried = -1, stream_tried_gen; // (once a video: a player that won't open isn't asked every frame)
   if (!wv_vid && dl_post == wv && dl_gen == wgen && wv < nposts && lv_post_is_video(&posts[wv]) && !strcmp(posts[wv].ext, "mp4") && !(stream_tried == wv && stream_tried_gen == wgen)) {
     LvGrow *g = &dl_grow[dl_slot];
-    if (g->have >= 768 * 1024 || (g->total > 0 && g->have >= g->total)) {
+    // (a head start first: 2 MB, or 2% of the file, whichever is more)
+    int64_t need = g->total > 0 && g->total / 50 > 2 * 1024 * 1024 ? g->total / 50 : 2 * 1024 * 1024;
+    if (g->have >= need || (g->total > 0 && g->have >= g->total)) {
       stream_tried = wv; stream_tried_gen = wgen;
       wv_vid = lv_video_open_growing(dl_path[dl_slot], g);
       LOG("stream open %s have=%lld total=%lld -> %p\n", dl_path[dl_slot], (long long)g->have, (long long)g->total, (void *)wv_vid);
@@ -2248,7 +2286,12 @@ static void draw_webview(void) {
   }
   if (in.dbl) { wzoom = wzoom > 1.5f ? 1 : 2.5f; wpan_x = (W / 2.0f - in.tap_x) * (wzoom - 1); wpan_y = (H / 2.0f - in.tap_y) * (wzoom - 1); }
   else if (in.tap && wdetails_y < 0.5f) {
-    if (frame_no < wchrome_until && in.tap_x < 70 && in.tap_y < 60) { sfx(SFX_BACK); wv_drop(); screen = wv_back; return; }
+    // (a tap on the video's bar: there)
+    if (wv_vid && frame_no < wchrome_until && in.tap_y > H - 60 && lv_video_duration(wv_vid) > 0) {
+      wv_seek((int64_t)(lv_video_duration(wv_vid) * fminf(1, fmaxf(0, (in.tap_x - 40) / (float)(W - 80)))));
+      wchrome_until = frame_no + 180;
+    }
+    else if (frame_no < wchrome_until && in.tap_x < 70 && in.tap_y < 60) { sfx(SFX_BACK); wv_drop(); screen = wv_back; return; }
     else if (frame_no < wchrome_until && in.tap_x > W - 70 && in.tap_y < 60) wdetails = 1;
     else if (frame_no < wchrome_until && in.tap_y < 60 && in.tap_x < W - 64 && in.tap_x > W - 420) {
       int x1, w1, x2, w2;
@@ -2272,6 +2315,12 @@ static void draw_webview(void) {
     else { wzoom = wzoom > 1.5f ? 1 : 2.5f; wpan_x = wpan_y = 0; }
   }
   if (wzoom > 1.01f) { wpan_x -= in.lx * 12; wpan_y -= in.ly * 12; }
+  // (a video: the left stick scrubs, further for a harder push; ↑ / ↓ ten seconds back or on)
+  else if (wv_vid && lv_video_duration(wv_vid) > 0) {
+    if (fabsf(in.lx) > 0.4f && frame_no % 6 == 0) { wv_seek((int64_t)lv_video_pos(wv_vid) + (int64_t)(in.lx * 8000)); wchrome_until = frame_no + 120; }
+    if (in.pressed & SCE_CTRL_UP) { wv_seek((int64_t)lv_video_pos(wv_vid) + 10000); wchrome_until = frame_no + 120; }
+    if (in.pressed & SCE_CTRL_DOWN) { wv_seek((int64_t)lv_video_pos(wv_vid) - 10000); wchrome_until = frame_no + 120; }
+  }
 
   // --- the controls on top ---
   if (frame_no < wchrome_until || wdetails) {
@@ -2302,6 +2351,23 @@ static void draw_webview(void) {
     circle(W - 38, 30, 13, with_alpha(TEXT, a));
     circle(W - 38, 30, 11, RGBA(0, 0, 0, a));
     text_center(W - 38, 36, with_alpha(TEXT, a), 15, "i");
+    (void)0;
+  }
+  // a video playing as it downloads: paused when it catches up with the download, until there's a
+  // margin again ("Buffering"), so the player never reads past what has come
+  static int auto_paused;
+  static const LvVideo *paused_vid;
+  if (paused_vid != wv_vid) { auto_paused = 0; paused_vid = wv_vid; } // (another video: its own state)
+  if (auto_paused && wv_vid && (!wv_stream || wv_stream->done)) { lv_video_pause(wv_vid, 0); auto_paused = 0; } // (all here now)
+  if (wv_vid && wv_stream && !wv_stream->done && wv_stream->total > 0 && lv_video_duration(wv_vid) > 0) {
+    float have = (float)wv_stream->have / (float)wv_stream->total, at = (float)lv_video_pos(wv_vid) / (float)lv_video_duration(wv_vid);
+    if (!lv_video_paused(wv_vid) && have < at + 0.015f && !wv_stream->failed) { lv_video_pause(wv_vid, 1); auto_paused = 1; }
+    else if (auto_paused && (have > at + 0.05f || wv_stream->failed)) { lv_video_pause(wv_vid, 0); auto_paused = 0; }
+    if (auto_paused) { spinner(W / 2, H / 2, 20); text_center(W / 2, H / 2 + 46, DIM, 15, "Buffering\u2026"); }
+  }
+  if (frame_no < wchrome_until || wdetails) {
+    int a = frame_no + 30 > wchrome_until && !wdetails ? (int)((wchrome_until - frame_no) * 8) : 240;
+    if (a > 240 || a < 0) a = 240;
     // (still downloading as it plays: how far along, under the bar)
     if (wv_vid && wv_stream && !wv_stream->done && wv_stream->total > 0) {
       float f = (float)wv_stream->have / (float)wv_stream->total;
