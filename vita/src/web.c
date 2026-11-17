@@ -2518,12 +2518,20 @@ static int wv_episode_card(const LvPost *p) {
   // (two lines at most)
   int cut = (int)strlen(t);
   while (cut > 0 && text_w(19, t) > (w - 40) * 2 - 30) { cut = cut * 9 / 10; t[cut] = 0; }
-  char l1[400], *l2 = NULL;
+  char l1[400];
+  const char *l2 = NULL;
   snprintf(l1, sizeof l1, "%s", t);
   if (text_w(19, l1) > w - 40) {
-    int k = (int)strlen(l1);
-    while (k > 0 && (l1[k] != ' ' || (l1[k] = 0, text_w(19, l1) > w - 40))) { if (l1[k] == 0) l1[k] = ' '; k--; }
-    if (k > 0) l2 = t + k + 1;
+    // (the first line: up to the last space where it still fits; the rest on the second)
+    int cut = -1;
+    for (int k = 1; t[k]; k++) {
+      if (t[k] != ' ') continue;
+      snprintf(l1, sizeof l1, "%.*s", k, t);
+      if (text_w(19, l1) > w - 40) break;
+      cut = k;
+    }
+    if (cut > 0) { snprintf(l1, sizeof l1, "%.*s", cut, t); l2 = t + cut + 1; }
+    else snprintf(l1, sizeof l1, "%s", t);
   }
   text_fit((int)x + 20, (int)y + 32, TEXT, 19, l1, (int)w - 40);
   if (l2) text_fit((int)x + 20, (int)y + 56, TEXT, 19, l2, (int)w - 40);
@@ -2564,6 +2572,7 @@ static int wv_similar(const LvPost *p) {
 }
 static void draw_webview(void) {
   if (!nposts) { screen = wv_back; return; }
+  { static int last_wv = -1; if (wv != last_wv) { last_wv = wv; if (!whero.closing) memset(&whero, 0, sizeof whero); } } // (a new one: not mid-swipe)
   if (sw_on && wv < nposts) { draw_save_wizard(); return; }
   // a video downloading: played as soon as its first part is here (MP4: the system player)
   static int stream_tried = -1, stream_tried_gen; // (once a video: a player that won't open isn't asked every frame)

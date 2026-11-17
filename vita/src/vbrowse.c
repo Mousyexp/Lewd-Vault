@@ -159,7 +159,15 @@ static VbDone vb_done[16];
 static int nvb_done;
 static struct { int row, card; } vb_want[24];
 static int nvb_want;
-static struct { int row, gen; LvPost *p; int n; char err[96]; int ready; } vb_list;
+static struct { int row, gen; LvPost *p; int n; char err[96]; int ready, append; } vb_list; // (append: more of a row already shown)
+// (the worker hands a row's posts to the drawing thread: the whole list, or a part to add to it)
+static void vb_publish(int row, int gen, LvPost *p, int n, const char *err, int append) {
+  pthread_mutex_lock(&vbmx);
+  while (vb_list.ready && worker_run) { pthread_mutex_unlock(&vbmx); sceKernelDelayThread(10000); pthread_mutex_lock(&vbmx); }
+  vb_list.row = row; vb_list.gen = gen; vb_list.p = p; vb_list.n = n; vb_list.ready = 1; vb_list.append = append;
+  snprintf(vb_list.err, sizeof vb_list.err, "%s", err ? err : "");
+  pthread_mutex_unlock(&vbmx);
+}
 
 static void *vb_main(void *arg) {
   pin_to_core(2); // (off the drawing thread's core)
@@ -171,12 +179,19 @@ static void *vb_main(void *arg) {
     while (worker_run) {
       gen = vb_gen;
       src = vb_src;
-      // a row's list first (in order), then the banner, then the cards wanted
+      // the first row's list, then the banner, then the cards on screen, then the other rows' lists
+      // (the row being looked at first): pictures show before every list is in (on an episode site
+      // each list is a page check per episode)
       job = -1;
-      for (int r = 0; r < VB_ROWS && src >= 0; r++) if (vrows[r].state == 0 && !vb_list.ready) { job = r; vrows[r].state = 1; break; }
-      if (job >= 0) break;
+      if (src >= 0 && vrows[0].state == 0 && !vb_list.ready) { job = 0; vrows[0].state = 1; break; }
       if (vb_hero_state == 1) { vb_hero_state = 4; card = -1; job = 0; break; }
       if (nvb_want) { job = vb_want[nvb_want - 1].row; card = vb_want[nvb_want - 1].card; nvb_want--; break; }
+      for (int d = 0; d < VB_ROWS && src >= 0 && !vb_list.ready; d++) {
+        int r = (vb_row < VB_ROWS ? vb_row : 0) + d;
+        if (r >= VB_ROWS) r -= VB_ROWS;
+        if (vrows[r].state == 0) { job = r; vrows[r].state = 1; break; }
+      }
+      if (job >= 0) break;
       pthread_cond_wait(&vbcv, &vbmx);
     }
     // the post's address, copied while held
@@ -200,19 +215,38 @@ static void *vb_main(void *arg) {
       int st = lv_http_get(h, u, &b, &n, 8u << 20, NULL, NULL, &err);
       int count = 0;
       LvPost *got = st == 200 ? lv_booru_parse(&sc, (const char *)b, n, ratings, &count) : NULL;
-      if (got && lv_site_checks_items(&sc)) count = check_items(h, &sc, got, count, &vb_gen, gen);
+      if (got && lv_site_checks_items(&sc)) {
+        // (an episode site: each one's page is read first, a few at a time, and those that pass are
+        //  shown as they come: the row's first cards after a few pages, not after all of them)
+        int shown_n = 0;
+        for (int pos = 0, step = 2; pos < count; pos += step, step = 4) {
+          int m = count - pos < step ? count - pos : step; // (two first: something to see soonest)
+          if (gen != vb_gen || shown_n >= VB_PER) { for (int k = pos; k < count; k++) { LvPost *q = &got[k]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); } break; }
+          LvPost *part = malloc(m * sizeof *part);
+          if (!part) continue;
+          memcpy(part, got + pos, m * sizeof *part);
+          int ok = check_items(h, &sc, part, m, &vb_gen, gen), kept = 0;
+          for (int k = 0; k < ok; k++) {
+            if (lv_post_is_video(&part[k]) && shown_n + kept < VB_PER) part[kept++] = part[k];
+            else { LvPost *q = &part[k]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); }
+          }
+          if (kept) { vb_publish(job, gen, part, kept, "", shown_n > 0); shown_n += kept; }
+          else free(part);
+        }
+        free(got); // (the posts went on in parts, or were freed)
+        if (!shown_n) vb_publish(job, gen, NULL, 0, st == 200 ? "Nothing here could be shown" : err && err[0] ? err : "No answer from the site", 0);
+        free(b);
+        continue;
+      }
       // (videos only: some sites' video tags also have pictures)
       int kept = 0;
       for (int k = 0; got && k < count; k++) {
         if (lv_post_is_video(&got[k]) && kept < VB_PER) got[kept++] = got[k];
         else { LvPost *q = &got[k]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); }
       }
-      pthread_mutex_lock(&vbmx);
-      while (vb_list.ready && worker_run) { pthread_mutex_unlock(&vbmx); sceKernelDelayThread(10000); pthread_mutex_lock(&vbmx); }
-      vb_list.row = job; vb_list.gen = gen; vb_list.p = got; vb_list.n = kept; vb_list.ready = 1;
-      snprintf(vb_list.err, sizeof vb_list.err, "%s", st == 200 ? (got ? "" : "The site's answer couldn't be read") : err && err[0] ? err : "No answer from the site");
-      if (b && strstr((const char *)b, "Just a moment")) snprintf(vb_list.err, sizeof vb_list.err, "The site is asking for a browser check");
-      pthread_mutex_unlock(&vbmx);
+      const char *why = st == 200 ? (got ? "" : "The site's answer couldn't be read") : err && err[0] ? err : "No answer from the site";
+      if (b && strstr((const char *)b, "Just a moment")) why = "The site is asking for a browser check";
+      vb_publish(job, gen, got, kept, why, 0);
       free(b);
       continue;
     }
@@ -276,7 +310,13 @@ static void vb_take(void) {
   pthread_mutex_lock(&vbmx);
   if (vb_list.ready) {
     VRow *r = &vrows[vb_list.row];
-    if (vb_list.gen == vb_gen) {
+    if (vb_list.gen == vb_gen && vb_list.append && r->p && vb_list.p) {
+      // (more of a row: added at its end)
+      LvPost *np = realloc(r->p, (r->n + vb_list.n) * sizeof *np);
+      if (np) { memcpy(np + r->n, vb_list.p, vb_list.n * sizeof *np); r->p = np; r->n += vb_list.n; free(vb_list.p); }
+      else lv_posts_free(vb_list.p, vb_list.n);
+    } else if (vb_list.gen == vb_gen) {
+      if (r->p) lv_posts_free(r->p, r->n);
       r->p = vb_list.p; r->n = vb_list.n; r->state = vb_list.p ? 2 : 3;
       snprintf(r->err, sizeof r->err, "%s", vb_list.err);
       if (vb_list.row == 0 && r->n && !vb_hero_state) { vb_hero_state = 1; pthread_cond_broadcast(&vbcv); }

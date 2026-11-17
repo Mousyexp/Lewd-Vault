@@ -119,6 +119,7 @@ static int heap_room(size_t need) {
 
 #define W 960
 #define H 544
+#define POOL_SIZE (4 * 1024 * 1024) // (vita2d's per-frame vertex pool: three frames' thirds, main())
 #define DATA "ux0:data/LWDV00001"
 // The header (one row of large buttons) and the floating tab bar tuck away while the Library or the
 // Browser is scrolled down, and come back on the way up: chrome_hide goes 0 (shown) to 1 (tucked).
@@ -201,8 +202,14 @@ static int text_w(int size, const char *s) {
 // value reaching the GPU draws garbage over the whole screen). Debug builds say who asked.
 static unsigned bad_draws;
 #define BAD1(v) (!isfinite(v) || fabsf(v) > 20000.0f)
-#define DRAW_GUARD(...) do { float g_[] = {__VA_ARGS__}; for (unsigned g_i = 0; g_i < sizeof g_ / sizeof *g_; g_i++) if (BAD1(g_[g_i])) { \
-    if (bad_draws++ < 40) LOG("bad draw in %s from %p: arg %u = %f\n", __func__, __builtin_return_address(0), g_i, (double)g_[g_i]); return; } } while (0)
+#define DRAW_GUARD(...) do { \
+    float g_[] = {__VA_ARGS__}; \
+    for (unsigned g_i = 0; g_i < sizeof g_ / sizeof *g_; g_i++) { \
+      if (!BAD1(g_[g_i])) continue; \
+      if (bad_draws++ < 40) { LOG("bad draw in %s from %p: arg %u = %f\n", __func__, __builtin_return_address(0), g_i, (double)g_[g_i]); } \
+      return; \
+    } \
+  } while (0)
 static void text(int x, int y, unsigned col, int size, const char *s) {
   if (x < -4000 || x > 4000 || y < -4000 || y > 4000 || !s) return; // (off anywhere sensible: a bad number)
   if (pgf && has_wide(s)) vita2d_pgf_draw_text(pgf, x, y, col, size / 17.0f, s);
@@ -2321,7 +2328,9 @@ static void account_time(void) {
   }
   view_started = 0;
 }
+static void vhero_reset(void);
 static void show_item(int k) {
+  vhero_reset(); // (a new one: not mid-swipe)
   account_time();
   stop_video();
   if (nshown == 0) return;
@@ -2504,6 +2513,7 @@ static int hero_backdrop(const HeroClose *hc) {
 }
 
 static HeroClose vhero; // (the Library's full view, swiped down to close)
+static void vhero_reset(void) { if (!vhero.closing) memset(&vhero, 0, sizeof vhero); }
 // Where a card is in the Library's grid once the full view closes (it scrolls there if it's out of sight)
 static int lib_card_target(int k, Rect *o) {
   if (k < 0 || k >= lgrid.n) return 0;
@@ -3418,7 +3428,7 @@ int main(void) {
     for (int k = 0; tmp[k]; k++) { char p[96]; snprintf(p, sizeof p, DATA "/%s", tmp[k]); sceIoRemove(p); }
   }
   // (a bigger per-frame vertex pool than vita2d's 1 MB: room to spare on the busiest screen)
-  vita2d_init_advanced(4 * 1024 * 1024);
+  vita2d_init_advanced(POOL_SIZE);
   make_disc();
   make_ring();
   splash_tex = vita2d_load_PNG_file("app0:splash.png");
@@ -3584,6 +3594,11 @@ int main(void) {
 
     PT("before drawing");
     vita2d_start_drawing();
+    // (vita2d starts every frame's vertices at the beginning of one pool, while the GPU may still be
+    //  drawing the frame before from it (up to two frames are queued): its shapes came out garbled.
+    //  So each frame starts in its own third of the pool, in turn: a third isn't written again until
+    //  the frame drawn from it is done. A frame uses ~100 KB of the ~1.3 MB a third has.)
+    if (frame_no % 3) vita2d_pool_malloc((frame_no % 3) * (POOL_SIZE / 3));
     vita2d_clear_screen();
     switch (screen) {
       case S_PICK: if (!cfg.onboarded) draw_onboarding(); else draw_pick(); break;

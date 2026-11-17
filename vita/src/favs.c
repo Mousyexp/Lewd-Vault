@@ -210,12 +210,15 @@ static void fav_thread_start(void) {
 static int fav_list(int tab, int *out);
 static void fav_play(int at, int offline);
 // ---- the video browser's "Up next" row: the favourite videos (vbrowse.c) ----
+// (the list made once a frame: each card asks several things of it)
+static int upnext_list[FAV_MAX], nupnext;
+static unsigned upnext_frame = ~0u;
 static int upnext_n(void) {
   if (!favs_loaded) favs_load();
-  int list[FAV_MAX];
-  return fav_list(0, list);
+  if (upnext_frame != frame_no) { upnext_frame = frame_no; nupnext = fav_list(0, upnext_list); }
+  return nupnext;
 }
-static int upnext_at(int j) { int list[FAV_MAX], m = fav_list(0, list); return j >= 0 && j < m ? list[j] : -1; }
+static int upnext_at(int j) { int m = upnext_n(); return j >= 0 && j < m ? upnext_list[j] : -1; }
 static vita2d_texture *upnext_tex(int j, int w, int h) {
   int k = upnext_at(j);
   if (k < 0) return NULL;
