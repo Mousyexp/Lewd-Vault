@@ -12,13 +12,13 @@ LvSite LV_SITES[LV_MAX_SITES] = {
   {"Danbooru", BK_DANBOORU, "https://danbooru.donmai.us", NULL, 1, 0, "danbooru", "Anime art, finely tagged"},
   {"Yande.re", BK_MOEBOORU, "https://yande.re", NULL, 0, 0, "yandere", "High-resolution anime scans"},
   {"Konachan", BK_MOEBOORU, "https://konachan.com", NULL, 0, 0, "konachan", "Anime wallpapers"},
-  {"e621", BK_E621, "https://e621.net", NULL, 1, 0, "e621", "Furry art"},
+  {"Xbooru Comics", BK_GELBOORU, "https://xbooru.com", NULL, 0, 0, "xcomics", "Hentai comic pages", "comic"},
   {"Xbooru", BK_GELBOORU, "https://xbooru.com", NULL, 0, 0, "xbooru", "Hentai"},
   {"TBIB", BK_GELBOORU, "https://tbib.org", NULL, 0, 0, "tbib", "The big imageboard"},
   {"Hypnohub", BK_GELBOORU, "https://hypnohub.net", NULL, 0, 0, "hypnohub", "Hypnosis art"},
   {"AIBooru", BK_DANBOORU, "https://aibooru.online", NULL, 1, 0, "aibooru", "AI-made anime art"},
   {"Safebooru", BK_GELBOORU, "https://safebooru.org", NULL, 0, 0, "safebooru", "Anime art, all ages"},
-  {"e926", BK_E621, "https://e926.net", NULL, 1, 0, "e926", "Furry art, all ages"},
+  {"Danbooru Comics", BK_DANBOORU, "https://danbooru.donmai.us", NULL, 1, 0, "dancomics", "Manga-style comic pages", "comic"},
   {"Gelbooru", BK_GELBOORU, "https://gelbooru.com", NULL, 0, 1, "gelbooru", "Anime and hentai (API key)"},
   {"Rule34", BK_GELBOORU, "https://api.rule34.xxx", "https://rule34.xxx", 0, 1, "rule34", "Rule 34, games and anime (API key)"},
   {"Sakugabooru", BK_MOEBOORU, "https://www.sakugabooru.com", NULL, 0, 0, "sakugabooru", "Anime animation clips (videos)"},
@@ -117,7 +117,7 @@ void lv_booru_url(const LvSite *s, const char *tags, int ratings, int sort, int 
 void lv_booru_url_ex(const LvSite *s, const char *tags, int ratings, int sort, int span, const char *key, int page, char *out, size_t cap) {
   char q[1024], clean[512];
   lv_booru_clean(tags, clean, sizeof clean);
-  snprintf(q, sizeof q, "%s", clean);
+  snprintf(q, sizeof q, "%s%s%s", s->preset ? s->preset : "", s->preset && clean[0] ? " " : "", clean);
   // the ratings: Danbooru takes a list (and it doesn't count towards its 2 free tags); the others
   // leave out the ones not wanted
   if ((ratings & LV_R_ALL) != LV_R_ALL) {

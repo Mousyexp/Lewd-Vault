@@ -23,7 +23,10 @@ static char *slurp(const char *p, size_t *n) {
   return b;
 }
 
+// (an e621-kind site, as one added by hand would be: the kind is still read)
+static LvSite E6 = {"e621", BK_E621, "https://e621.net", NULL, 1, 0, NULL, NULL, NULL};
 static const LvSite *site(const char *name) {
+  if (!strcmp(name, "e621")) return &E6;
   for (int k = 0; k < LV_NSITES; k++) if (!strcmp(LV_SITES[k].name, name)) return &LV_SITES[k];
   return NULL;
 }
@@ -90,6 +93,11 @@ int main(void) {
     lv_booru_url_ex(site("Gelbooru"), "x", LV_R_ALL, LV_SORT_LATEST, 0, "12345 abc+def", 2, u, sizeof u);
     CHECK(strstr(u, "https://gelbooru.com/index.php?page=dapi") && strstr(u, "&pid=1") && strstr(u, "&user_id=12345&api_key=abc%2Bdef"), "gelbooru's key: %s", u);
     CHECK(site("Rule34") && site("Rule34")->needs_key && !site("Danbooru")->needs_key, "which need a key");
+    // a site that's a slice of another: its preset tags first
+    lv_booru_url_ex(site("Danbooru Comics"), "blue_hair", LV_R_ALL, LV_SORT_LATEST, 0, NULL, 1, u, sizeof u);
+    CHECK(strstr(u, "danbooru.donmai.us/posts.json") && strstr(u, "tags=comic+blue_hair"), "danbooru comics: %s", u);
+    lv_booru_url_ex(site("Xbooru Comics"), "", LV_R_ALL, LV_SORT_LATEST, 0, NULL, 1, u, sizeof u);
+    CHECK(strstr(u, "xbooru.com") && strstr(u, "tags=comic"), "xbooru comics: %s", u);
   }
   // the JSON reader
   const char *js = "{\"a\":[1,2,{\"b\":\"x\\u00e9\\\"y\"}],\"c\":-3.5,\"d\":true,\"e\":null,\"f\":\"\\ud83d\\ude00\"}";

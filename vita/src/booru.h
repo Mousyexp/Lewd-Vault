@@ -14,6 +14,7 @@ typedef struct {
   int needs_key;         // only answers with an account's API key (user ID and key)
   const char *icon;      // its tile in the site switcher: app0:sites/<icon>.png
   const char *about;     // a few words on what it has
+  const char *preset;    // tags every search on it carries (a site that's a slice of another)
 } LvSite;
 // The built-in sites, then the ones added on the Vita (lv_booru_add_site), up to LV_MAX_SITES.
 #define LV_MAX_SITES 24

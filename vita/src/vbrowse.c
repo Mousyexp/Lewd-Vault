@@ -9,11 +9,11 @@
 typedef struct { const char *name, *site, *tags, *icon, *about; int blocked; } VSource;
 static const VSource VSRC[] = {
   {"Sakugabooru", "Sakugabooru", "", "sakugabooru", "Anime animation clips", 0},
-  {"e621", "e621", "~type:webm ~type:mp4", "e621", "Furry animation", 0},
+  {"Xbooru", "Xbooru", "video", "xbooru", "Hentai clips", 0},
   {"Rule34", "Rule34", "video", "rule34", "Hentai and game clips (key)", 0},
   {"Gelbooru", "Gelbooru", "video", "gelbooru", "Anime and hentai clips (key)", 0},
   {"Danbooru", "Danbooru", "filetype:mp4", "danbooru", "Anime clips", 0},
-  {"e926", "e926", "~type:webm ~type:mp4", "e926", "Animation, all ages", 0},
+  {"TBIB", "TBIB", "video", "tbib", "Anime and hentai clips", 0},
   // (both only answer after a Cloudflare browser check, which an app can't pass)
   {"hanime.tv", NULL, NULL, "hanime", "Hentai (browser check)", 1},
   {"MissAV", NULL, NULL, "missav", "JAV (browser check)", 1},
