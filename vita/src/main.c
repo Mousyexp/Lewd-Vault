@@ -1022,7 +1022,7 @@ static int ime_poll(char *out, int cap) {
 }
 
 // ---------- screens ----------
-enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI, S_CALC, S_CLEAN, S_HEALTH, S_VIDEOS, S_MANGA, S_BOOK, S_READER };
+enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI, S_CALC, S_CLEAN, S_HEALTH, S_VIDEOS, S_MANGA, S_BOOK, S_READER, S_FAVS };
 static int screen = S_PICK, cover_return = S_LIBRARY;
 static char found[16][512];
 static int nfound, pick_sel;
@@ -1398,7 +1398,7 @@ static void icon(const char *name, float cx, float cy, unsigned col) {
 static float pill_sel_x = -1;
 static int tab_of_screen(void) {
   switch (screen) {
-    case S_LIBRARY: return 0;
+    case S_LIBRARY: case S_FAVS: return 0;
     case S_WEB: case S_VIDEOS: case S_MANGA: return 1;
     case S_SHOW: return 2;
     case S_SETTINGS: case S_DRIVE: case S_WIFI: case S_STATS: case S_HEALTH: return 3;
@@ -1534,6 +1534,7 @@ static int online_button(int right) {
 }
 
 static int cats_x; // (where the categories' list opens)
+static void favs_open(int tab); // (favs.c)
 #include "lib.c"
 #include "show.c"
 #include "drive_ui.c"
@@ -1698,7 +1699,7 @@ static void draw_library(void) {
     char cl[80];
     snprintf(cl, sizeof cl, "%s", cat < 0 ? "All categories" : vault.cats[cat]);
     int cw = text_w(16, cl) + 44;
-    if (cw > 210) cw = 210;
+    if (cw > 180) cw = 180;
     rrect(title_end, hy + 8, cw, 40, 20, cat < 0 ? SURF2 : with_alpha(ACC, 110));
     text_fit(title_end + 16, hy + 34, TEXT, 16, cl, cw - 40);
     icon("chev_r", title_end + cw - 18, hy + 28, DIM);
@@ -1710,6 +1711,14 @@ static void draw_library(void) {
   if (nf) snprintf(kl, sizeof kl, "Filters \u00b7 %d", nf); else snprintf(kl, sizeof kl, "Filters");
   int hb;
   sx -= online_button(sx) + 8;
+  // (Videos and Comics: their favourites, kept as links)
+  if (!book_inside && (cfg.lmode == 2 || cfg.lmode == 3)) {
+    int x = sx - 44, y = HDR_Y;
+    rrect(x, y + 8, 44, 40, 20, with_alpha(ACC, 90));
+    heart(x + 22, y + 28, 8, ACC);
+    if (hit(x, y + 4, 44, 48)) { sfx(SFX_OPEN); favs_open(cfg.lmode == 3); in = saved_in; in.pressed = 0; in.tap = 0; return; }
+    sx -= 52;
+  }
   if (!book_inside) {
     sx -= head_button(sx, "sort", SORTS[cfg.sort], SURF2, &hb) + 8;
     if (hb || (!selecting && (in.pressed & SCE_CTRL_TRIANGLE))) { sfx(SFX_TOGGLE); cfg.sort = (cfg.sort + 1) % NSORTS; refilter(); cfg_save(); sel = 0; scroll = 0; }
@@ -2501,6 +2510,7 @@ static void library_grew(int before) {
 #include "wifi.c"
 #include "vbrowse.c"
 #include "manga_ui.c"
+#include "favs.c"
 
 int main(void) {
   sceIoMkdir("ux0:data", 0777);
@@ -2688,6 +2698,7 @@ int main(void) {
       case S_MANGA: draw_manga(); break;
       case S_BOOK: draw_book(); break;
       case S_READER: draw_reader(); break;
+      case S_FAVS: draw_favs(); break;
       case S_WEBVIEW: draw_webview(); break;
       case S_COVER: draw_cover_screen(); if (in.tap) { screen = cover_return; } break;
     }

@@ -380,6 +380,10 @@ static void prepare_save(LvHttp *h, const LvPost *p, uint8_t *raw, size_t rawn, 
 }
 
 static char video_path[256];
+// (the video downloading now, played as it comes: its post, its search, its slot's file and progress)
+static LvGrow dl_grow[2];
+static char dl_path[2][256];
+static volatile int dl_slot, dl_post = -1, dl_gen;
 
 // Free room where the vault is (its device: ux0:, uma0:...), -1 when unknown.
 static long long free_room(const char *root) {
@@ -449,7 +453,9 @@ static void *sample_main(void *arg) {
     LvPost post;
     int have = p < nposts;
     if (have) post_copy(&posts[p], &post);
-    int kvs = job_q.site >= 0 && job_q.site < LV_NSITES && LV_SITES[job_q.site].kind == BK_KVS;
+    int site_of_post = have && post.site1 > 0 && post.site1 <= LV_NSITES ? post.site1 - 1 : job_q.site;
+    int site_kind = site_of_post >= 0 && site_of_post < LV_NSITES ? LV_SITES[site_of_post].kind : -1;
+    int kvs = site_kind == BK_KVS || site_kind == BK_XV; // (a video whose MP4 is named on its page)
     big_cancel = 0;
     big_progress = 0;
     pthread_mutex_unlock(&wmx);
@@ -465,7 +471,7 @@ static void *sample_main(void *arg) {
       size_t n = 0;
       const char *err = NULL;
       char mp4[1024];
-      int nev = 0, ok = lv_http_get(h, post.page, &b, &n, 3u << 20, &big_cancel, NULL, &err) == 200 && b && lv_kvs_video((char *)b, mp4, sizeof mp4, &nev) == 0;
+      int nev = 0, ok = lv_http_get(h, post.page, &b, &n, 3u << 20, &big_cancel, NULL, &err) == 200 && b && (site_kind == BK_XV ? lv_xv_video((char *)b, mp4, sizeof mp4, &nev) : lv_kvs_video((char *)b, mp4, sizeof mp4, &nev)) == 0;
       free(b);
       if (ok) { free(post.file); post.file = strdup(mp4); ok = post.file != NULL; }
       if (!ok) {
@@ -509,8 +515,23 @@ static void *sample_main(void *arg) {
       } else if (video) {
         // a video: the whole file, straight onto the card (it never has to fit in memory), played
         // from there and copied into the vault from there by a save
-        snprintf(video_path, sizeof video_path, DATA "/play.%s", post.ext);
-        st = lv_http_get_file(h, post.file, video_path, &n, 200u * 1024 * 1024, &big_cancel, &big_progress, &err);
+        // (played as it comes: the drawing thread opens the player once the first part is here,
+        //  stream_ready; two files in turn, so the one before can still be closing)
+        int slot = dl_slot ^ 1;
+        LvGrow *g = &dl_grow[slot];
+        g->have = 0; g->total = 0; g->done = 0; g->failed = 0;
+        snprintf(dl_path[slot], sizeof dl_path[slot], DATA "/play%d.%s", slot, post.ext);
+        snprintf(video_path, sizeof video_path, "%s", dl_path[slot]);
+        // (as long as the card has room for, less a margin; 1.5 GB at most)
+        long long room = free_room("ux0:");
+        size_t cap = room > 0 ? (size_t)(room - 96ll * 1024 * 1024 > 16ll * 1024 * 1024 ? (room - 96ll * 1024 * 1024 < 1536ll * 1024 * 1024 ? room - 96ll * 1024 * 1024 : 1536ll * 1024 * 1024) : 16ll * 1024 * 1024) : 400u * 1024 * 1024;
+        dl_slot = slot;
+        __sync_synchronize();
+        dl_post = p; dl_gen = gen;
+        st = lv_http_stream_file(h, post.file, video_path, cap, &big_cancel, &big_progress, &g->have, &g->total, &err);
+        if (st == 200) g->done = 1; else g->failed = 1;
+        n = (size_t)g->have;
+        dl_post = -1;
       } else {
         st = lv_http_get(h, post.sample, &b, &n, 32u * 1024 * 1024, &big_cancel, &big_progress, &err);
       }
@@ -624,14 +645,22 @@ static uint8_t *wv_raw;      // the sample's bytes (for a save)
 static size_t wv_rawn;
 static int wv_raw_post = -1;
 static char wv_ext[8];
+static int fav_offline_next; // (post + 1 to make available offline once it's all here: the save page then)
+static int fav_toggle_video(const LvPost *p, int site); // (favs.c)
+static void sw_open(void);
+static int fav_find(int kind, const char *page);
 static LvVideo *wv_vid;
+static const LvGrow *wv_stream; // (the player's download, while it's still coming)
 static float wzoom = 1, wpan_x, wpan_y, wswipe;
 static int wdetails;
 static float wdetails_y;
 static unsigned wchrome_until;
 
 static void wv_drop(void) {
+  // (a video still downloading for this view: stopped, it isn't wanted any more)
+  if (dl_post >= 0) { pthread_mutex_lock(&wmx); if (!saving) big_cancel = 1; pthread_mutex_unlock(&wmx); }
   if (wv_vid) { video_close_later(wv_vid); wv_vid = NULL; }
+  wv_stream = NULL;
   release_tex(wv_tex);
   wv_tex = NULL;
   wv_tex_post = -1;
@@ -766,11 +795,14 @@ static void web_take_results(void) {
         wv_rawn = d->an;
         wv_raw_post = d->post;
         snprintf(wv_ext, sizeof wv_ext, "%s", d->ext);
-        if (wv < nposts && lv_post_is_video(&posts[wv]) && !d->err[0]) {
+        if (wv < nposts && lv_post_is_video(&posts[wv]) && !d->err[0] && !wv_vid) { // (not if it's already playing as it came)
           wv_vid = lv_video_open(video_path, NULL, 1);
+          LOG("video open %s -> %p\n", video_path, (void *)wv_vid);
           if (wv_vid) lv_video_set_volume(wv_vid, cfg.volume * 32768 / 100);
           else snprintf(wv_err, sizeof wv_err, "This video can't be played on the Vita (it can still be saved)");
         }
+        // (asked to be made available offline while it came: the save page, now it's all here)
+        if (fav_offline_next == wv + 1 && !d->err[0]) { fav_offline_next = 0; sw_open(); }
       }
     } else if (d->kind == WD_SAVE) {
       saving = 0;
@@ -2095,9 +2127,47 @@ static void draw_save_wizard(void) {
   }
   in.pressed = 0; in.tap = 0;
 }
+// The full view's buttons at the top right: a long video (an episode) gets ♥ Favorite (its link
+// kept) and ↓ Offline (downloaded into the vault); anything else, Save.
+static int wv_site(void) { return wv < nposts && posts[wv].site1 > 0 && posts[wv].site1 <= LV_NSITES ? posts[wv].site1 - 1 : cfg.site; }
+static int wv_is_long(void) { return wv < nposts && lv_is_long(&LV_SITES[wv_site()], &posts[wv]); }
+static void wv_labels(const char **l1, const char **l2) {
+  const LvPost *p = &posts[wv];
+  int saved = is_saved(p);
+  if (!wv_is_long()) { *l1 = NULL; *l2 = saved ? "\u2713 Saved" : saving ? "Saving\u2026" : "\u2193 Save"; return; }
+  *l1 = fav_find(0, p->page) >= 0 ? "\u2665 Favorite" : "\u2661 Favorite";
+  *l2 = saved ? "\u2713 Offline" : saving ? "Saving\u2026" : fav_offline_next == wv + 1 ? "Offline when here" : "\u2193 Offline";
+}
+static void wv_btns(int *x1, int *w1, int *x2, int *w2) {
+  const char *l1, *l2;
+  wv_labels(&l1, &l2);
+  *w2 = text_w(15, l2) + 24;
+  *x2 = W - 72 - *w2;
+  *w1 = l1 ? text_w(15, l1) + 24 : 0;
+  *x1 = *x2 - 8 - *w1;
+}
+static void wv_offline(void) {
+  if (wv >= nposts) return;
+  if (is_saved(&posts[wv])) { say("It's in your vault already"); return; }
+  if (wv_raw_post == wv) { sw_open(); return; }
+  fav_offline_next = wv + 1;
+  sfx(SFX_TOGGLE);
+  say("It goes into the vault once it's all downloaded (it plays meanwhile)");
+}
 static void draw_webview(void) {
   if (!nposts) { screen = wv_back; return; }
   if (sw_on && wv < nposts) { draw_save_wizard(); return; }
+  // a video downloading: played as soon as its first part is here (MP4: the system player)
+  static int stream_tried = -1, stream_tried_gen; // (once a video: a player that won't open isn't asked every frame)
+  if (!wv_vid && dl_post == wv && dl_gen == wgen && wv < nposts && lv_post_is_video(&posts[wv]) && !strcmp(posts[wv].ext, "mp4") && !(stream_tried == wv && stream_tried_gen == wgen)) {
+    LvGrow *g = &dl_grow[dl_slot];
+    if (g->have >= 768 * 1024 || (g->total > 0 && g->have >= g->total)) {
+      stream_tried = wv; stream_tried_gen = wgen;
+      wv_vid = lv_video_open_growing(dl_path[dl_slot], g);
+      LOG("stream open %s have=%lld total=%lld -> %p\n", dl_path[dl_slot], (long long)g->have, (long long)g->total, (void *)wv_vid);
+      if (wv_vid) { lv_video_set_volume(wv_vid, cfg.volume * 32768 / 100); wv_loading = 0; wv_stream = g; }
+    }
+  }
   LvPost *p = &posts[wv];
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 255));
   vita2d_texture *t = NULL;
@@ -2163,7 +2233,12 @@ static void draw_webview(void) {
   else if (in.tap && wdetails_y < 0.5f) {
     if (frame_no < wchrome_until && in.tap_x < 70 && in.tap_y < 60) { sfx(SFX_BACK); wv_drop(); screen = wv_back; return; }
     else if (frame_no < wchrome_until && in.tap_x > W - 70 && in.tap_y < 60) wdetails = 1;
-    else if (frame_no < wchrome_until && in.tap_x > W - 170 && in.tap_x < W - 70 && in.tap_y < 60) sw_open();
+    else if (frame_no < wchrome_until && in.tap_y < 60 && in.tap_x < W - 64 && in.tap_x > W - 420) {
+      int x1, w1, x2, w2;
+      wv_btns(&x1, &w1, &x2, &w2);
+      if (in.tap_x >= x2 - 4) { if (wv_is_long()) wv_offline(); else sw_open(); }
+      else if (w1 && in.tap_x >= x1 - 4) fav_toggle_video(&posts[wv], wv_site());
+    }
     else wchrome_until = frame_no < wchrome_until ? frame_no : frame_no + 240;
   }
 
@@ -2172,7 +2247,9 @@ static void draw_webview(void) {
   if (in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER)) { sfx(SFX_TICK); wv_show(wv - 1); return; }
   if (in.pressed & SCE_CTRL_CIRCLE) { if (wdetails) { sfx(SFX_CLOSE); wdetails = 0; } else { sfx(SFX_BACK); wv_drop(); wsel = wv; screen = wv_back; return; } }
   if (in.pressed & SCE_CTRL_TRIANGLE) { sfx(wdetails ? SFX_CLOSE : SFX_OPEN); wdetails = !wdetails; }
-  if (in.pressed & SCE_CTRL_SQUARE) { sw_open(); wchrome_until = frame_no + 120; }
+  // □: Save (an episode: ♥ Favorite); START: an episode's Offline
+  if (in.pressed & SCE_CTRL_SQUARE) { if (wv_is_long()) fav_toggle_video(&posts[wv], wv_site()); else sw_open(); wchrome_until = frame_no + 120; }
+  if ((in.pressed & SCE_CTRL_START) && wv_is_long()) { wv_offline(); wchrome_until = frame_no + 120; }
   if (in.pressed & SCE_CTRL_CROSS) {
     if (wv_vid) lv_video_pause(wv_vid, !lv_video_paused(wv_vid));
     else { wzoom = wzoom > 1.5f ? 1 : 2.5f; wpan_x = wpan_y = 0; }
@@ -2192,13 +2269,27 @@ static void draw_webview(void) {
     snprintf(pos, sizeof pos, "%s  ·  %d of %d%s", LV_SITES[cfg.site].name, wv + 1, nposts, wend ? "" : "+");
     text_center(W / 2, 36, with_alpha(TEXT, a), 16, pos);
     int saved = is_saved(p);
-    const char *sv = saved ? "✓ Saved" : saving ? "Saving…" : "↓ Save";
-    int sw = text_w(15, sv) + 24;
-    rrect(W - 72 - sw, 16, sw, 28, 14, saved ? with_alpha(SURF2, a) : with_alpha(ACC, a));
-    text(W - 72 - sw + 12, 35, saved ? with_alpha(TEXT, a) : RGBA(20, 12, 16, a), 15, sv);
+    {
+      const char *l1, *l2;
+      int x1, w1, x2, w2;
+      wv_labels(&l1, &l2);
+      wv_btns(&x1, &w1, &x2, &w2);
+      rrect(x2, 16, w2, 28, 14, saved ? with_alpha(SURF2, a) : with_alpha(ACC, a));
+      text(x2 + 12, 35, saved ? with_alpha(TEXT, a) : RGBA(20, 12, 16, a), 15, l2);
+      if (l1) {
+        int fav = fav_find(0, p->page) >= 0;
+        rrect(x1, 16, w1, 28, 14, fav ? with_alpha(ACC, a) : with_alpha(SURF2, a));
+        text(x1 + 12, 35, fav ? RGBA(20, 12, 16, a) : with_alpha(TEXT, a), 15, l1);
+      }
+    }
     circle(W - 38, 30, 13, with_alpha(TEXT, a));
     circle(W - 38, 30, 11, RGBA(0, 0, 0, a));
     text_center(W - 38, 36, with_alpha(TEXT, a), 15, "i");
+    // (still downloading as it plays: how far along, under the bar)
+    if (wv_vid && wv_stream && !wv_stream->done && wv_stream->total > 0) {
+      float f = (float)wv_stream->have / (float)wv_stream->total;
+      rrect(40, H - 14, (W - 80) * (f > 1 ? 1 : f), 3, 1, with_alpha(TEXT, a / 2));
+    }
     if (wv_vid) {
       uint64_t d = lv_video_duration(wv_vid), q = lv_video_pos(wv_vid);
       float f = d ? fminf(1, q / (float)d) : 0;

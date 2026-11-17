@@ -6,6 +6,10 @@ typedef struct LvVideo LvVideo;
 // MP4/M4V/MOV play in hardware, WebM/MKV (VP8/VP9) in software (video.c).
 // key: the vault's (NULL for a normal vault). loop: a preview clip, played round and round.
 LvVideo *lv_video_open(const char *path, const uint8_t *key, int loop);
+// An MP4 still being downloaded into path: played as it comes (the player's reads wait for the bytes;
+// a file with its index at the end waits for the end). g is the download's, kept until closed.
+typedef struct { volatile int64_t have, total; volatile int done, failed; } LvGrow;
+LvVideo *lv_video_open_growing(const char *path, const LvGrow *g);
 // The newest frame (call once a frame; the texture is the player's own buffer), or NULL so far.
 vita2d_texture *lv_video_frame(LvVideo *v);
 int lv_video_width(const LvVideo *v);

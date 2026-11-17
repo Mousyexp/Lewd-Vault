@@ -99,6 +99,7 @@ typedef struct {
   volatile int *cancel;
   volatile float *progress;
   int too_big;
+  volatile int64_t *have, *total; // (a file played as it comes: what's on the card, and the whole)
 } Sink;
 
 static size_t on_data(char *p, size_t sz, size_t nm, void *u) {
@@ -109,6 +110,7 @@ static size_t on_data(char *p, size_t sz, size_t nm, void *u) {
   if (s->f) {
     if (fwrite(p, 1, n, s->f) != n) return 0;
     s->n += n;
+    if (s->have) { fflush(s->f); *s->have = (int64_t)s->n; } // (on the card before it's said to be)
     return n;
   }
   if (s->n + n + 1 > s->cap) {
@@ -126,6 +128,7 @@ static size_t on_data(char *p, size_t sz, size_t nm, void *u) {
 static int on_progress(void *u, curl_off_t total, curl_off_t now, curl_off_t ut, curl_off_t un) {
   Sink *s = u;
   if (s->progress && total > 0) *s->progress = (float)now / (float)total;
+  if (s->total && total > 0) *s->total = (int64_t)total;
   return s->cancel && *s->cancel;
 }
 
@@ -157,6 +160,19 @@ int lv_http_get_file(LvHttp *h, const char *url, const char *path, size_t *n, si
   remove(path);
   if (rename(tmp, path) != 0) { remove(tmp); return -1; }
   *n = s.n;
+  return st;
+}
+
+// Straight into path (no .part: a player reads it as it grows), *have and *total kept up to date.
+int lv_http_stream_file(LvHttp *h, const char *url, const char *path, size_t max, volatile int *cancel,
+                        volatile float *progress, volatile int64_t *have, volatile int64_t *total, const char **err) {
+  Sink s = {NULL, fopen(path, "wb"), 0, 0, max, cancel, progress, 0, have, total};
+  if (!s.f) { if (err) *err = "No room on the memory card"; return -1; }
+  int st = perform(h, url, &s, err, NULL);
+  int ok = fclose(s.f) == 0 && st == 200;
+  if (have) *have = (int64_t)s.n;
+  if (!ok) return st < 0 ? st : st == 200 ? -1 : st;
+  if (total) *total = (int64_t)s.n;
   return st;
 }
 

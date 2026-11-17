@@ -16,6 +16,10 @@ void lv_http_free(LvHttp *h);
 // The same into a file (big videos never have to fit in memory); *n gets its size.
 int lv_http_get_file(LvHttp *h, const char *url, const char *path, size_t *n, size_t max, volatile int *cancel,
                      volatile float *progress, const char **err);
+// The same, straight into path while *have (bytes on the card) and *total (the whole, once the answer
+// says) are kept up to date: for a video played while it downloads.
+int lv_http_stream_file(LvHttp *h, const char *url, const char *path, size_t max, volatile int *cancel,
+                        volatile float *progress, volatile int64_t *have, volatile int64_t *total, const char **err);
 // After the Vita wakes up: every handle drops its connections before its next request.
 void lv_net_reset(void);
 int lv_http_get(LvHttp *h, const char *url, uint8_t **out, size_t *n, size_t max, volatile int *cancel,

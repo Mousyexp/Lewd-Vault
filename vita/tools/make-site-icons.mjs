@@ -31,6 +31,7 @@ const SITES = {
   r34anime: ['#ff9ad0', '#8a2a6a', 'R34'],
   eshuushuu: ['#7fd3ff', '#1f6fb5', 'ES'],
   booruio: ['#9aa7ff', '#3a3f9e', 'io'],
+  xvideos: ['#ff6a5c', '#8a1414', 'EP'],
   hanime: ['#ff5aa8', '#8c1a5a', 'h'],
   missav: ['#ff8a4a', '#a3300e', 'M'],
   add: ['#3a2f3c', '#241c26', '@plus'],

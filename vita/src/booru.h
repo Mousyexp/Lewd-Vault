@@ -4,7 +4,9 @@
 #pragma once
 #include <stddef.h>
 
-enum { BK_DANBOORU, BK_GELBOORU, BK_MOEBOORU, BK_E621, BK_KVS, BK_ESHUU, BK_BOORUIO };
+enum { BK_DANBOORU, BK_GELBOORU, BK_MOEBOORU, BK_E621, BK_KVS, BK_ESHUU, BK_BOORUIO, BK_XV };
+// (BK_XV: xvideos' search, its hentai only, long ones: list pages as HTML, each video's MP4 from its
+//  page (lv_xv_video), with its keywords checked)
 // (BK_ESHUU, BK_BOORUIO: image sites that aren't boorus, each with its own JSON: e-shuushuu.net
 //  (searched by a tag's number: lv_esh_tag_url finds it from the word), booru.io (one page a search).
 //  Shown in the sites window as "Image site", apart from the boorus: lv_site_is_booru.)
@@ -51,6 +53,8 @@ typedef struct {
   char ext[8];
   int width, height, score;
   int rating; // one of LV_R_*
+  int duration; // seconds, where the site says (its videos); 0 unknown
+  int site1;    // (0: the search's site; else its place in LV_SITES + 1: a list of favourites mixes them)
 } LvPost;
 
 #define LV_PAGE 40
@@ -73,4 +77,10 @@ int lv_post_is_video(const LvPost *p);
 // A KVS video page: the address of its MP4 (the smallest, the first it names), and 1
 // in *never when its tags carry one of the never-shown words. 0, or -1 when there's no video.
 int lv_kvs_video(const char *html, char *out, size_t cap, int *never);
+int lv_xv_video(const char *html, char *out, size_t cap, int *never);
+// A video of this length (seconds) or from a site for whole episodes: saved as a link (a favourite)
+// or downloaded, the choice offered (rather than downloaded straight away).
+#define LV_LONG_VIDEO 480
+int lv_is_long(const LvSite *s, const LvPost *p);
 int lv_booru_never_tags(const char *tags); // (1: one of the never-shown words, as a whole tag)
+int lv_ai_made(const char *tags); // (1: AI-made, by its tags or title: not offered)

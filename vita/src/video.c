@@ -106,6 +106,9 @@ struct LvVideo {
   int rgb_cur;
   volatile int pix_fresh;
   volatile int snd_done, dec_done;
+  // ---- a file still being downloaded (lv_video_open_growing): reads wait for its bytes ----
+  const LvGrow *grow;
+  SceUID gfd;
 };
 
 static void release_now(vita2d_texture *t) { vita2d_wait_rendering_done(); vita2d_free_texture(t); }
@@ -149,11 +152,35 @@ static void av_free_tex(void *p, void *ptr) {
 
 static int f_open(void *p, const char *name) {
   LvVideo *v = p;
+  if (v->grow) { v->gfd = sceIoOpen(name, SCE_O_RDONLY, 0); return v->gfd >= 0 ? 0 : -1; }
   return lv_open(&v->lf, name, v->has_key ? v->key : NULL) == 0 ? 0 : -1;
 }
-static int f_close(void *p) { lv_close(&((LvVideo *)p)->lf); return 0; }
-static int f_read(void *p, uint8_t *buf, uint64_t pos, uint32_t len) { return (int)lv_read_at(&((LvVideo *)p)->lf, pos, buf, len); }
-static uint64_t f_size(void *p) { return ((LvVideo *)p)->lf.len; }
+static int f_close(void *p) {
+  LvVideo *v = p;
+  if (v->grow) { if (v->gfd >= 0) sceIoClose(v->gfd); v->gfd = -1; return 0; }
+  lv_close(&v->lf);
+  return 0;
+}
+// (a growing file: wait until the download has the bytes asked for, or has ended, or the player is
+//  closing; then read what's there)
+static int f_read(void *p, uint8_t *buf, uint64_t pos, uint32_t len) {
+  LvVideo *v = p;
+  if (!v->grow) return (int)lv_read_at(&v->lf, pos, buf, len);
+  const LvGrow *g = v->grow;
+  while (v->run && !g->done && !g->failed && (uint64_t)g->have < pos + len) sceKernelDelayThread(20000);
+  if (!v->run) return -1;
+  int64_t have = g->have;
+  if ((int64_t)pos >= have) return 0;
+  if ((int64_t)(pos + len) > have) len = (uint32_t)(have - (int64_t)pos);
+  int r = sceIoPread(v->gfd, buf, len, (SceOff)pos);
+  return r < 0 ? -1 : r;
+}
+static uint64_t f_size(void *p) {
+  LvVideo *v = p;
+  if (!v->grow) return v->lf.len;
+  // (the whole size, from the download's answer; until it's known, what's here)
+  return v->grow->total > 0 ? (uint64_t)v->grow->total : (uint64_t)v->grow->have;
+}
 
 static void av_event(void *p, int32_t id, int32_t src, void *data) {
   LvVideo *v = p;
@@ -233,7 +260,9 @@ static int av_open(LvVideo *v) {
   init.numOutputVideoFrameBuffers = 6;
   init.autoStart = SCE_FALSE;
   v->h_av = sceAvPlayerInit(&init);
-  if (v->h_av <= 0) return -1;
+  // (the handle is an address in the player's memory, 0x81000000 up: negative as an int; an error is
+  //  one of Sony's codes, 0x80xxxxxx, or none at all)
+  if (v->h_av == 0 || ((unsigned)v->h_av >> 24) == 0x80) { LOG("av: init failed %08x\n", (unsigned)v->h_av); v->h_av = 0; return -1; }
   sceAvPlayerSetLooping(v->h_av, v->loop ? SCE_TRUE : SCE_FALSE);
   v->add_thread = sceKernelCreateThread("lv_av_add", av_add_main, 0x10000100, 0x10000, 0, 0, NULL); // (64 KB: the system player reads the file's header on it)
   if (v->add_thread >= 0) sceKernelStartThread(v->add_thread, sizeof v, &v);
@@ -573,6 +602,20 @@ static vita2d_texture *sw_frame(LvVideo *v) {
 
 // ======================= the API =======================
 
+LvVideo *lv_video_open_growing(const char *path, const LvGrow *g) {
+  if (ext(path, "webm") || ext(path, "mkv")) return NULL; // (the system player's MP4 only)
+  LvVideo *v = calloc(1, sizeof *v);
+  if (!v) return NULL;
+  snprintf(v->path, sizeof v->path, "%s", path);
+  v->grow = g;
+  v->gfd = -1;
+  v->volume = SCE_AUDIO_VOLUME_0DB;
+  v->speed = 100;
+  v->add_thread = v->audio_thread = -1;
+  v->run = 1;
+  if (av_open(v) != 0) { lv_video_close(v); return NULL; }
+  return v;
+}
 LvVideo *lv_video_open(const char *path, const uint8_t *key, int loop) {
   LvVideo *v = calloc(1, sizeof *v);
   if (!v) return NULL;
@@ -651,7 +694,7 @@ void lv_video_close(LvVideo *v) {
     int ok = 1;
     if (v->audio_thread >= 0) ok &= wait_flag(&v->snd_done, 500);
     if (v->add_thread >= 0) ok &= wait_flag(&v->dec_done, 2000);
-    if (v->h_av > 0) { sceAvPlayerStop(v->h_av); sceAvPlayerClose(v->h_av); }
+    if (v->h_av != 0) { sceAvPlayerStop(v->h_av); sceAvPlayerClose(v->h_av); } // (an address: negative as an int)
     if (!ok) return;
     lv_close(&v->lf);
   }

@@ -60,6 +60,38 @@ static void check_kind(const char *file, const LvSite *s, int want) {
 }
 
 int main(void) {
+  // AI-made: by tag (the boorus) or by title (the video sites)
+  CHECK(lv_ai_made("1girl ai-generated solo") && lv_ai_made("cum by snu snu island ai generated") && lv_ai_made("x stable diffusion y"), "ai tags and titles");
+  CHECK(!lv_ai_made("1girl aiko solo") && !lv_ai_made("air guitar") && !lv_ai_made("ai"), "not ai: other words");
+  // xvideos (its hentai, ten minutes and longer): the search page and a video page
+  {
+    LvSite xv = {"XVideos Hentai", BK_XV, "https://www.xvideos.com", NULL, 1, 0, NULL, NULL, "hentai", 1};
+    char u[600];
+    lv_booru_url_ex(&xv, "succubus", LV_R_ALL, LV_SORT_LATEST, 0, NULL, 2, u, sizeof u);
+    CHECK(!strcmp(u, "https://www.xvideos.com/?k=hentai+succubus&durf=10min_more&sort=uploaddate&p=1"), "xv url %s", u);
+    size_t n;
+    char *t = slurp("tests/booru/xv_list.html", &n);
+    int c = 0;
+    LvPost *p = lv_booru_parse(&xv, t, n, LV_R_ALL, &c);
+    CHECK(p && c >= 15, "xv cards %d", c);
+    int longs = 0;
+    for (int k = 0; p && k < c; k++) {
+      CHECK(!strncmp(p[k].page, "https://www.xvideos.com/video.", 30) && strstr(p[k].preview, ".jpg") && lv_post_is_video(&p[k]), "xv card %d %s", k, p[k].page);
+      longs += p[k].duration >= 600 && lv_is_long(&xv, &p[k]);
+    }
+    CHECK(longs >= c / 2, "xv durations: %d of %d long", longs, c);
+    lv_posts_free(p, c);
+    free(t);
+    t = slurp("tests/booru/xv_video.html", &n);
+    char mp4[1024];
+    int nev = 0;
+    CHECK(lv_xv_video(t, mp4, sizeof mp4, &nev) == 0 && strstr(mp4, "mp4_sd.mp4") && !nev, "xv mp4 %s", mp4);
+    free(t);
+    // (Rule34Video's longest: sorted by length)
+    LvSite kv = {"Rule34Video", BK_KVS, "https://rule34video.com", NULL, 1, 0, NULL, NULL, "hentai", 1};
+    lv_booru_url_ex(&kv, "longest", LV_R_ALL, LV_SORT_LATEST, 0, NULL, 1, u, sizeof u);
+    CHECK(strstr(u, "/tags/hentai/") && strstr(u, "sort_by=duration"), "kvs longest %s", u);
+  }
   // the image sites: e-shuushuu (its API, a tag by its number) and booru.io
   {
     LvSite es = {"E-Shuushuu", BK_ESHUU, "https://e-shuushuu.net", NULL, 1, 0, NULL, NULL};

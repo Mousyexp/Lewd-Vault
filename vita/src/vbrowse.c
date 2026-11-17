@@ -10,6 +10,10 @@ static pthread_mutex_t vbmx = PTHREAD_MUTEX_INITIALIZER; // (the video browser's
 static int vb_src = -1;
 typedef struct { const char *name, *site, *tags, *icon, *about; int blocked; } VSource;
 static const VSource VSRC_BUILTIN[] = {
+  // (whole episodes, 10 minutes and longer: kept as a favourite or made available offline)
+  {"Hentai Episodes", "XVideos Hentai", "", "xvideos", "Whole episodes, 10 min+", 0},
+  {"Uncensored Episodes", "XVideos Hentai", "uncensored", "xvideos", "Uncensored episodes, 10 min+", 0},
+  {"R34V Longest", "Rule34Video", "longest", "rule34video", "The longest hentai videos", 0},
   {"Rule34Video", "Rule34Video", "hentai", "rule34video", "Hentai animations", 0},
   {"Genshin Impact", "Rule34Video", "genshin-impact", "r34anime", "Genshin animations (Rule34Video)", 0},
   {"Blue Archive", "Rule34Video", "blue-archive", "r34anime", "Blue Archive animations (Rule34Video)", 0},

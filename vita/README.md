@@ -135,6 +135,20 @@ HTTPS is checked against Mozilla's list of authorities (`cacert.pem`, from certi
 own `inet_pton` (`src/net.c`): the Vita C library's answers -1 for a host name, which libcurl takes
 for "an IP address" and then sends no server name (SNI) in its TLS hello, which most sites refuse.
 
+**Favourites and long videos.** A long video (8 minutes or more, or from a source of whole episodes:
+Hentai Episodes and Uncensored Episodes, xvideos' hentai search of 10 minutes and longer; R34V
+Longest, Rule34Video's longest) gets two buttons in the full view instead of Save: **♥ Favorite** keeps
+only its link (□), **↓ Offline** downloads it into the vault (START; asked while it's still coming, the
+save page opens once it's all here). A comic's page has the same two (□ and △). The **Favourites**
+screen (the ♥ in the Library's Videos and Comics modes) lists them, a tab each: Play or Read, Make
+available offline, Remove (`src/favs.c`, `ux0:data/LWDV00001/favorites.tsv`).
+
+**Videos play as they download.** The MP4 goes straight to the card and the system player starts as
+soon as the first 768 KB are there, its reads waiting for the bytes still coming (`lv_video_open_growing`
+in `src/video.c`, `lv_http_stream_file` in `src/net.c`); a thin line under the controls shows how much
+has come. (An MP4 whose index is at its end waits for the end.) Leaving the video stops its download.
+AI-made posts are left out everywhere: by their tags on the boorus, by their titles on the video sites.
+
 ## Wi-Fi transfer
 
 Settings → Wi-Fi transfer: while that screen is open, the Vita serves a small page at

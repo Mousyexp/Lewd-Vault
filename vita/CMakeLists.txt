@@ -104,6 +104,7 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sites/hypnohub.png sites/hypnohub.png
   FILE sites/rule34video.png sites/rule34video.png
   FILE sites/eshuushuu.png sites/eshuushuu.png
+  FILE sites/xvideos.png sites/xvideos.png
   FILE sites/booruio.png sites/booruio.png
   FILE sites/r34anime.png sites/r34anime.png
   FILE sites/safebooru.png sites/safebooru.png

@@ -422,6 +422,24 @@ static void mg_list_more(void) {
   mg.loading = 1;
   mg_push(MJ_LIST, 0, 0, url);
 }
+static int mg_book_back = S_MANGA;   // (where ○ on a book goes: the list, or the Favourites)
+static int mg_offline_pending;       // (opened to be made available offline: its pages saved once here)
+static int fav_toggle_comic(const LvBook *b, int src);
+static int fav_find(int kind, const char *page);
+// (the list let go, nothing asked for: a book from elsewhere is about to be put in it)
+static void mg_search_cancel(void) {
+  pthread_mutex_lock(&mgmx);
+  mg_gen++;
+  nmjobs = 0;
+  for (int k = 0; k < nmdone; k++) { free(mdone[k].px.rgba); free(mdone[k].books); free(mdone[k].ch); lv_strings_free(mdone[k].urls, mdone[k].n); }
+  nmdone = 0;
+  pthread_mutex_unlock(&mgmx);
+  mg_drop_textures();
+  free(mg.books); mg.books = NULL;
+  free(mg.cstate); mg.cstate = NULL;
+  memset(md_official, 0, sizeof md_official);
+  mg.nbooks = 0; mg.total = 0; mg.more = 0; mg.loading = 0; mg.err[0] = 0; mg.sel = 0; mg.scroll = 0;
+}
 static void mg_search(void) {
   pthread_mutex_lock(&mgmx);
   mg_gen++;
@@ -549,6 +567,8 @@ static void mg_take(void) {
           else lv_strings_free(d->urls, d->n);
         }
         mg.gallery_p++;
+        // (opened to be made available offline: saved now there's a list of pages)
+        if (mg_offline_pending && mg.npages) { mg_offline_pending = 0; msave_start(); }
         break;
       case MJ_PAGE:
         if (d->px.rgba && d->a >= mg.page && d->a <= mg.page + 2) {
@@ -733,9 +753,27 @@ static void draw_book(void) {
     if (in.pressed & SCE_CTRL_UP) { mg.ch_sel = mg.ch_sel > 0 ? mg.ch_sel - 1 : 0; sfx(SFX_TICK); }
     if (in.pressed & SCE_CTRL_CROSS) { sfx(SFX_SELECT); mg_read(mg.ch_sel); return; }
   }
+  // ♥ Favorite (its link kept) and ↓ Offline (its pages into the vault), at the top right
+  {
+    int fav = fav_find(1, b->id) >= 0;
+    const char *fl = fav ? "\u2665 Favorite" : "\u2661 Favorite", *ol = msave_on ? "Saving\u2026" : "\u2193 Offline";
+    int fw = text_w(16, fl) + 36, ow = text_w(16, ol) + 36, x2 = W - 16 - ow, x1 = x2 - 10 - fw;
+    rrect(x1, 12, fw, 40, 20, fav ? ACC : SURF2);
+    text(x1 + 18, 38, fav ? RGBA(20, 12, 16, 255) : TEXT, 16, fl);
+    rrect(x2, 12, ow, 40, 20, SURF2);
+    text(x2 + 18, 38, TEXT, 16, ol);
+    if (hit(x1, 8, fw, 48) || (in.pressed & SCE_CTRL_SQUARE)) fav_toggle_comic(b, mg.src);
+    if ((hit(x2, 8, ow, 48) || (in.pressed & SCE_CTRL_TRIANGLE)) && !msave_on) {
+      if (mg.src == MS_EHENTAI || (mg.nch && !mg.ch_loading)) { mg_offline_pending = 1; sfx(SFX_OPEN); mg_read(mg.src == MS_EHENTAI ? 0 : mg.ch_sel); return; }
+      else { sfx(SFX_ERROR); say(mg.ch_loading ? "The chapters are still coming" : "Nothing here to save"); }
+    }
+    // (opened from Favourites to be made available offline: as soon as there's something to save)
+    if (mg_offline_pending && screen == S_BOOK && (mg.src == MS_EHENTAI || (mg.nch && !mg.ch_loading))) { mg_read(mg.src == MS_EHENTAI ? 0 : mg.ch_sel); return; }
+    if (mg_offline_pending && mg.src == MS_MANGADEX && !mg.ch_loading && !mg.nch) mg_offline_pending = 0;
+  }
   rrect(16, 12, 44, 36, 18, SURF2);
   icon("back", 38, 30, TEXT);
-  if (hit(16, 12, 44, 36) || (in.pressed & SCE_CTRL_CIRCLE)) { sfx(SFX_BACK); screen = S_MANGA; }
+  if (hit(16, 12, 44, 36) || (in.pressed & SCE_CTRL_CIRCLE)) { sfx(SFX_BACK); screen = mg_book_back; mg_book_back = S_MANGA; mg_offline_pending = 0; }
 }
 
 // ---------- the reader ----------

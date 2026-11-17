@@ -1,3 +1,4 @@
+#define _GNU_SOURCE // (strcasestr)
 #include "booru.h"
 #include "json.h"
 #include <ctype.h>
@@ -29,10 +30,13 @@ LvSite LV_SITES[LV_MAX_SITES] = {
   // (image sites, not boorus)
   {"E-Shuushuu", BK_ESHUU, "https://e-shuushuu.net", NULL, 1, 0, "eshuushuu", "Anime art, all ages"},
   {"booru.io", BK_BOORUIO, "https://booru.io", NULL, 0, 0, "booruio", "Anime and hentai art"},
+  // (whole hentai episodes: only in the video browser)
+  {"XVideos Hentai", BK_XV, "https://www.xvideos.com", NULL, 1, 0, "xvideos", "Hentai episodes, 10 min and longer", "hentai", 1},
 };
-const int LV_NBUILTIN = 16;
-int LV_NSITES = 16;
-int lv_site_is_booru(const LvSite *s) { return s->kind != BK_ESHUU && s->kind != BK_BOORUIO && s->kind != BK_KVS; }
+const int LV_NBUILTIN = 17;
+int LV_NSITES = 17;
+int lv_is_long(const LvSite *s, const LvPost *p) { return lv_post_is_video(p) && (p->duration >= LV_LONG_VIDEO || (s && s->kind == BK_XV)); }
+int lv_site_is_booru(const LvSite *s) { return s->kind != BK_ESHUU && s->kind != BK_BOORUIO && s->kind != BK_KVS && s->kind != BK_XV; }
 // (the strings of the sites added by hand, kept here)
 static char added_names[LV_MAX_SITES][48], added_bases[LV_MAX_SITES][160];
 int lv_booru_add_site(const char *name, int kind, const char *base) {
@@ -79,7 +83,27 @@ static int never(const char *tag, size_t n) {
   return 0;
 }
 int lv_booru_never_tags(const char *tags);
-static int any_never(const char *tags) { return lv_booru_never_tags(tags); }
+// AI-made pictures and videos aren't offered either: their tags (ai-generated, ...) or, for the video
+// sites read by their titles, the phrases ("ai generated", "stable diffusion", ...)
+int lv_ai_made(const char *tags) {
+  static const char *const tagw[] = {"ai-generated", "ai_generated", "ai-assisted", "ai_assisted", "aigenerated", "ai_art", "aiart",
+                                     "stable_diffusion", "novelai", "midjourney", "ai-created", NULL};
+  static const char *const phrase[] = {"ai generated", "ai assisted", "ai art", "stable diffusion", "ai created", "made with ai", NULL};
+  for (const char *p = tags; *p; ) {
+    while (*p == ' ') p++;
+    const char *e = p;
+    while (*e && *e != ' ') e++;
+    for (int k = 0; tagw[k]; k++) if ((size_t)(e - p) == strlen(tagw[k]) && !strncasecmp(p, tagw[k], e - p)) return 1;
+    p = e;
+  }
+  for (int k = 0; phrase[k]; k++) {
+    const char *f = strcasestr(tags, phrase[k]);
+    size_t n = strlen(phrase[k]);
+    if (f && (f == tags || f[-1] == ' ') && (f[n] == ' ' || !f[n])) return 1;
+  }
+  return 0;
+}
+static int any_never(const char *tags) { return lv_booru_never_tags(tags) || lv_ai_made(tags); }
 int lv_booru_never_tags(const char *tags) {
   const char *p = tags;
   while (*p) {
@@ -188,6 +212,17 @@ void lv_booru_url_ex(const LvSite *s, const char *tags, int ratings, int sort, i
     }
     return;
   }
+  if (s->kind == BK_XV) {
+    // the search, always with "hentai", ten minutes and longer
+    static const char *by[LV_NSORTS] = {"uploaddate", "relevance", "rating", "random"};
+    static const char *datef[LV_NSPANS] = {"", "&datef=today", "&datef=week", "&datef=month"};
+    char words[300], e[700];
+    snprintf(words, sizeof words, "%s%s%s", s->preset ? s->preset : "hentai", clean[0] ? " " : "", clean);
+    enc(words, e, sizeof e);
+    snprintf(out, cap, "%s/?k=%s&durf=10min_more&sort=%s%s&p=%d", s->base, e, by[sort >= 0 && sort < LV_NSORTS ? sort : 0],
+             sort == LV_SORT_TOP && span > 0 && span < LV_NSPANS ? datef[span] : "", page > 1 ? page - 1 : 0);
+    return;
+  }
   if (s->kind == BK_KVS) {
     // a tag's page, in the site's order: the search's first word (or the preset), as the site's slug
     char slug[128] = "";
@@ -199,8 +234,11 @@ void lv_booru_url_ex(const LvSite *s, const char *tags, int ratings, int sort, i
     }
     slug[o] = 0;
     static const char *top[] = {"rating", "rating_today", "rating_week", "rating_month"};
-    const char *by = sort == LV_SORT_HOT ? "video_viewed_week" : sort == LV_SORT_TOP ? top[span >= 0 && span < LV_NSPANS ? span : 0]
+    // (a search word "longest": the site's longest first)
+    int longest = strstr(clean, "longest") != NULL;
+    const char *by = longest ? "duration" : sort == LV_SORT_HOT ? "video_viewed_week" : sort == LV_SORT_TOP ? top[span >= 0 && span < LV_NSPANS ? span : 0]
                    : sort == LV_SORT_RANDOM ? "video_viewed" : "post_date";
+    if (longest) { const char *w2 = s->preset ? s->preset : "hentai"; snprintf(slug, sizeof slug, "%s", w2); }
     // (Random: a page of the most watched, somewhere further along each time)
     int from = sort == LV_SORT_RANDOM ? page + (int)(time(NULL) / 60 % 40) : page;
     snprintf(out, cap, "%s/tags/%s/?mode=async&function=get_block&block_id=custom_list_videos_common_videos&sort_by=%s&from=%d",
@@ -359,12 +397,88 @@ static LvPost *kvs_parse(const char *text, size_t len, int *n) {
     q.file = sdup(page); // (its video page: lv_kvs_video finds the MP4 there)
     q.page = sdup(page);
     q.source = sdup(tm);
+    // ("m:ss" or "h:mm:ss": seconds)
+    { int a = 0, b = 0, c = 0, nf = sscanf(tm, "%d:%d:%d", &a, &b, &c); q.duration = nf == 3 ? a * 3600 + b * 60 + c : nf == 2 ? a * 60 + b : 0; }
     q.tags = sdup(tags);
     if (!q.preview || !q.file || !q.page || !q.tags) { free(q.preview); free(q.sample); free(q.file); free(q.page); free(q.source); free(q.tags); continue; }
     out[(*n)++] = q;
   }
   return out;
 }
+// ---------- xvideos: its search page's thumbnails, read as HTML ----------
+static LvPost *xv_parse(const char *text, size_t len, int *n) {
+  (void)len;
+  int cap = 0;
+  for (const char *p = strstr(text, "data-eid="); p; p = strstr(p + 1, "data-eid=")) cap++;
+  LvPost *out = calloc(cap + 1, sizeof *out);
+  if (!out) return NULL;
+  for (const char *p = strstr(text, "data-eid="); p; ) {
+    const char *next = strstr(p + 1, "data-eid=");
+    const char *end = next ? next : text + strlen(text);
+    LvPost q;
+    memset(&q, 0, sizeof q);
+    char id[24] = "", href[400] = "", img[600] = "", title[400] = "", dur[40] = "";
+    attr(p, end, "data-id=", id, sizeof id);
+    const char *th = strstr(p, "class=\"thumb\"");
+    if (th && th < end) attr(th, end, "href=", href, sizeof href);
+    const char *im = strstr(p, "<img");
+    if (im && im < end) attr(im, end, "data-src=", img, sizeof img);
+    const char *ti = strstr(p, "class=\"title\"");
+    if (ti && ti < end) attr(ti, end, "title=", title, sizeof title);
+    unent(title);
+    const char *du = strstr(p, "class=\"duration\">");
+    if (du && du < end) { du += strlen("class=\"duration\">"); size_t k = 0; while (du[k] && du[k] != '<' && k < sizeof dur - 1) { dur[k] = du[k]; k++; } dur[k] = 0; }
+    p = next;
+    q.id = atoll(id);
+    if (!q.id || href[0] != '/' || strncmp(img, "http", 4)) continue;
+    // ("51 min", "1 h 3 min", "34 sec": seconds)
+    { int h = 0, m = 0, sec = 0; const char *c = dur;
+      while (*c) { int v = atoi(c); while (*c && isdigit((unsigned char)*c)) c++; while (*c == ' ') c++;
+        if (*c == 'h') h = v; else if (*c == 'm') m = v; else if (*c == 's') sec = v;
+        while (*c && !isdigit((unsigned char)*c)) c++; }
+      q.duration = h * 3600 + m * 60 + sec; }
+    char tags[600];
+    size_t o = 0;
+    for (const char *c = title; *c && o + 2 < sizeof tags; c++) { unsigned char ch = (unsigned char)*c; tags[o++] = isalnum(ch) ? (char)tolower(ch) : ' '; }
+    tags[o] = 0;
+    if (any_never(tags)) continue;
+    char page[600];
+    snprintf(page, sizeof page, "https://www.xvideos.com%s", href);
+    snprintf(q.ext, sizeof q.ext, "mp4");
+    q.width = 1280; q.height = 720; q.rating = LV_R_EXPLICIT;
+    q.preview = sdup(img); q.sample = sdup(img); q.file = sdup(page); q.page = sdup(page); q.source = sdup(dur); q.tags = sdup(tags);
+    if (!q.preview || !q.sample || !q.file || !q.page || !q.source || !q.tags) { free(q.preview); free(q.sample); free(q.file); free(q.page); free(q.source); free(q.tags); continue; }
+    out[(*n)++] = q;
+  }
+  return out;
+}
+// Its video page: the MP4 (the smaller one, quickest to come), and its keywords checked.
+int lv_xv_video(const char *html, char *out, size_t cap, int *nev) {
+  *nev = 0;
+  out[0] = 0;
+  const char *k = strstr(html, "\"keywords\":\"");
+  if (k) {
+    char kw[1200];
+    k += 12;
+    size_t n = 0;
+    while (k[n] && k[n] != '"' && n < sizeof kw - 1) { kw[n] = k[n] == ',' ? ' ' : (char)tolower((unsigned char)k[n]); n++; }
+    kw[n] = 0;
+    if (any_never(kw)) { *nev = 1; return -1; }
+  }
+  static const char *keys[] = {"setVideoUrlLow('", "setVideoUrlHigh('"};
+  for (int i = 0; i < 2; i++) {
+    const char *v = strstr(html, keys[i]);
+    if (!v) continue;
+    v += strlen(keys[i]);
+    const char *e = strchr(v, '\'');
+    if (!e || (size_t)(e - v) >= cap || strncmp(v, "http", 4)) continue;
+    memcpy(out, v, e - v);
+    out[e - v] = 0;
+    return 0;
+  }
+  return -1;
+}
+
 int lv_kvs_video(const char *html, char *out, size_t cap, int *nev) {
   *nev = 0;
   out[0] = 0;
@@ -535,6 +649,7 @@ static LvPost *image_site_parse(const LvSite *s, const char *text, size_t len, i
 LvPost *lv_booru_parse(const LvSite *s, const char *text, size_t len, int ratings, int *n) {
   *n = 0;
   if (s->kind == BK_KVS) return kvs_parse(text, len, n);
+  if (s->kind == BK_XV) return xv_parse(text, len, n);
   if (s->kind == BK_ESHUU || s->kind == BK_BOORUIO) return image_site_parse(s, text, len, ratings, n);
   Json j;
   if (json_parse(&j, text, len) != 0) return NULL;
