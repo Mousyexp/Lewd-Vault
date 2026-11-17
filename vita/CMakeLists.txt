@@ -56,6 +56,48 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE splash.png splash.png
   FILE sce_sys/pic0.png sce_sys/pic0.png
   FILE sounds/tick.wav sounds/tick.wav
+  FILE sounds/soft/back.wav sounds/soft/back.wav
+  FILE sounds/soft/close.wav sounds/soft/close.wav
+  FILE sounds/soft/delete.wav sounds/soft/delete.wav
+  FILE sounds/soft/done.wav sounds/soft/done.wav
+  FILE sounds/soft/error.wav sounds/soft/error.wav
+  FILE sounds/soft/more.wav sounds/soft/more.wav
+  FILE sounds/soft/open.wav sounds/soft/open.wav
+  FILE sounds/soft/saved.wav sounds/soft/saved.wav
+  FILE sounds/soft/select.wav sounds/soft/select.wav
+  FILE sounds/soft/slideshow.wav sounds/soft/slideshow.wav
+  FILE sounds/soft/start.wav sounds/soft/start.wav
+  FILE sounds/soft/tab.wav sounds/soft/tab.wav
+  FILE sounds/soft/tick.wav sounds/soft/tick.wav
+  FILE sounds/soft/toggle.wav sounds/soft/toggle.wav
+  FILE sounds/retro/back.wav sounds/retro/back.wav
+  FILE sounds/retro/close.wav sounds/retro/close.wav
+  FILE sounds/retro/delete.wav sounds/retro/delete.wav
+  FILE sounds/retro/done.wav sounds/retro/done.wav
+  FILE sounds/retro/error.wav sounds/retro/error.wav
+  FILE sounds/retro/more.wav sounds/retro/more.wav
+  FILE sounds/retro/open.wav sounds/retro/open.wav
+  FILE sounds/retro/saved.wav sounds/retro/saved.wav
+  FILE sounds/retro/select.wav sounds/retro/select.wav
+  FILE sounds/retro/slideshow.wav sounds/retro/slideshow.wav
+  FILE sounds/retro/start.wav sounds/retro/start.wav
+  FILE sounds/retro/tab.wav sounds/retro/tab.wav
+  FILE sounds/retro/tick.wav sounds/retro/tick.wav
+  FILE sounds/retro/toggle.wav sounds/retro/toggle.wav
+  FILE sounds/bubbly/back.wav sounds/bubbly/back.wav
+  FILE sounds/bubbly/close.wav sounds/bubbly/close.wav
+  FILE sounds/bubbly/delete.wav sounds/bubbly/delete.wav
+  FILE sounds/bubbly/done.wav sounds/bubbly/done.wav
+  FILE sounds/bubbly/error.wav sounds/bubbly/error.wav
+  FILE sounds/bubbly/more.wav sounds/bubbly/more.wav
+  FILE sounds/bubbly/open.wav sounds/bubbly/open.wav
+  FILE sounds/bubbly/saved.wav sounds/bubbly/saved.wav
+  FILE sounds/bubbly/select.wav sounds/bubbly/select.wav
+  FILE sounds/bubbly/slideshow.wav sounds/bubbly/slideshow.wav
+  FILE sounds/bubbly/start.wav sounds/bubbly/start.wav
+  FILE sounds/bubbly/tab.wav sounds/bubbly/tab.wav
+  FILE sounds/bubbly/tick.wav sounds/bubbly/tick.wav
+  FILE sounds/bubbly/toggle.wav sounds/bubbly/toggle.wav
   FILE sounds/select.wav sounds/select.wav
   FILE sounds/back.wav sounds/back.wav
   FILE sounds/toggle.wav sounds/toggle.wav

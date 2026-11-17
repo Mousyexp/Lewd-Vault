@@ -7,3 +7,5 @@ void sfx_init(void);
 // Plays a sound (at the volume set: 0 is off). A sound already playing that recently isn't stacked.
 void sfx(int id);
 void sfx_volume(int percent);
+// The sound pack: "" the Vita's own (sounds/*.wav), else sounds/<pack>/*.wav.
+void sfx_pack(const char *pack);

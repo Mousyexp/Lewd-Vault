@@ -36,7 +36,9 @@ Untraceable vault's cached thumbnails are encrypted with its key, like everythin
 | Browser's full view | swipe; pinch; tap Save; pull up for details, tap a tag to search it | ←/→ next; □ save; △ details; ✕ zoom or play/pause; ○ back |
 | Anywhere | | SELECT covers the screen with a plain clock (again to come back); ○ in the Library, Browser and Settings goes round those three |
 
-Settings: search the Library, video volume, interface sounds, what a double tap does, the glow behind
+Settings: search the Library, video volume, interface sounds, **Theme** (the accent: the vault's own,
+or any of ten for the Vita), **Background** (dark, black for OLED screens, midnight, plum), **Sound
+pack** (the Vita's own, or Soft, Retro (8-bit) and Bubbly, made by `tools/make-sound-packs.py`), what a double tap does, the glow behind
 pictures, Google Drive, another vault, clearing the thumbnail cache.
 
 **Modes** (the switch beside the title, or L / R): **All** (everything but comics' pages), **Pictures** (pictures and GIFs, not
@@ -146,7 +148,8 @@ screen (the ♥ in the Library's Videos and Comics modes) lists them, a tab each
 available offline, Remove (`src/favs.c`, `ux0:data/LWDV00001/favorites.tsv`).
 
 **Offline copies are 480p.** The long-form sources' files are 480p already. A booru keeps only its
-original: when that's bigger, the Vita (which can't re-encode video) hands its address to a
+original: when that's bigger and Settings › Video conversion is turned on (it starts off; with it
+off, such a video stays a favourite), the Vita (which can't re-encode video) hands its address to a
 **conversion service** with your own API key, CloudConvert, FreeConvert or Rendi, tried in that order,
 which makes an 854 x 480 H.264/AAC MP4 the Vita then downloads into the vault (`src/conv.c`). Add keys
 in Settings › Video conversion, or paste them on the Wi-Fi transfer page (they're long); they're kept

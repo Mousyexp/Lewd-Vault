@@ -151,6 +151,15 @@ static const struct { const char *name; unsigned a, b; } THEMES[] = {
   {"noir", RGBA(220, 220, 220, 255), RGBA(150, 150, 160, 255)}, {"galaxy", RGBA(140, 110, 255, 255), RGBA(255, 110, 200, 255)},
 };
 static unsigned with_alpha(unsigned c, int a) { return (c & 0x00FFFFFF) | (unsigned)a << 24; }
+// The backgrounds: the page, its cards, their raised parts, and the text's three greys
+static const struct { const char *name; unsigned bg, surf, surf2, text, dim, faint; } BGS[] = {
+  {"Dark", RGBA(18, 14, 17, 255), RGBA(34, 27, 32, 255), RGBA(48, 39, 45, 255), RGBA(247, 232, 236, 255), RGBA(190, 170, 180, 255), RGBA(120, 105, 114, 255)},
+  {"Black (OLED)", RGBA(0, 0, 0, 255), RGBA(18, 16, 18, 255), RGBA(32, 29, 32, 255), RGBA(245, 240, 242, 255), RGBA(180, 172, 176, 255), RGBA(110, 104, 108, 255)},
+  {"Midnight", RGBA(12, 16, 28, 255), RGBA(24, 30, 48, 255), RGBA(36, 44, 68, 255), RGBA(232, 238, 250, 255), RGBA(168, 180, 205, 255), RGBA(104, 114, 140, 255)},
+  {"Plum", RGBA(26, 14, 30, 255), RGBA(42, 24, 48, 255), RGBA(60, 36, 68, 255), RGBA(248, 232, 250, 255), RGBA(200, 172, 208, 255), RGBA(130, 104, 140, 255)},
+};
+static const char *SND_PACKS[4] = {"", "soft", "retro", "bubbly"};
+static const char *SND_NAMES[4] = {"The Vita's own", "Soft", "Retro (8-bit)", "Bubbly"};
 
 // ---------- text ----------
 static vita2d_font *font;
@@ -344,7 +353,10 @@ static struct {
   int hide, tlock;  // SELECT shows: 0 the clock, 1 the calculator; touch lock's time (privacy.c)
   char local_vault[512]; // the last vault opened that isn't the Google Drive one (livearea.c)
   int lmode;             // the Library's mode: 0 everything, 1 pictures, 2 videos, 3 comics (lib.c)
-} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0};
+  int theme, bgstyle;    // the accent (0: the vault's own, else THEMES[theme - 1]) and the background (BGS)
+  int sndpack;           // the interface sounds: SND_PACKS
+  int conv;              // offline copies made 480p by a conversion service: 0 off (as it starts), 1 on
+} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0};
 static void cfg_load(void) {
   FILE *f = fopen(DATA "/config.txt", "r");
   if (!f) return;
@@ -376,6 +388,10 @@ static void cfg_load(void) {
     else if (!strcmp(line, "tlock")) cfg.tlock = atoi(eq) & 3;
     else if (!strcmp(line, "local_vault")) snprintf(cfg.local_vault, sizeof cfg.local_vault, "%s", eq);
     else if (!strcmp(line, "lmode")) cfg.lmode = atoi(eq);
+    else if (!strcmp(line, "theme")) cfg.theme = atoi(eq);
+    else if (!strcmp(line, "bgstyle")) cfg.bgstyle = atoi(eq);
+    else if (!strcmp(line, "sndpack")) cfg.sndpack = atoi(eq);
+    else if (!strcmp(line, "conv")) cfg.conv = atoi(eq) != 0;
   }
   fclose(f);
   if (cfg.interval < 2 || cfg.interval > 60) cfg.interval = 5;
@@ -386,6 +402,9 @@ static void cfg_load(void) {
   if (cfg.wpages < 0 || cfg.wpages > 50) cfg.wpages = 0;
   if (cfg.kind < 0 || cfg.kind > 3) cfg.kind = 0;
   if (cfg.lmode < 0 || cfg.lmode > 3) cfg.lmode = 0;
+  if (cfg.theme < 0 || cfg.theme > 10) cfg.theme = 0;
+  if (cfg.bgstyle < 0 || cfg.bgstyle > 3) cfg.bgstyle = 0;
+  if (cfg.sndpack < 0 || cfg.sndpack > 3) cfg.sndpack = 0;
   if (cfg.sort < 0 || cfg.sort >= 7) cfg.sort = 0;
   if (cfg.wsel < 0) cfg.wsel = 0;
   if (cfg.sounds < 0 || cfg.sounds > 100) cfg.sounds = 70;
@@ -394,9 +413,9 @@ static void cfg_load(void) {
 static void cfg_save(void) {
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
-          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode);
+          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -1053,6 +1072,11 @@ static void find_vaults(void) {
 }
 
 static void apply_theme(void) {
+  int b = cfg.bgstyle >= 0 && cfg.bgstyle < 4 ? cfg.bgstyle : 0;
+  BG = BGS[b].bg; SURF = BGS[b].surf; SURF2 = BGS[b].surf2; TEXT = BGS[b].text; DIM = BGS[b].dim; FAINT = BGS[b].faint;
+  vita2d_set_clear_color(BG);
+  // the accent: the one chosen in Settings, else the vault's own theme (as the PC and the phones show it)
+  if (cfg.theme > 0 && cfg.theme <= (int)(sizeof THEMES / sizeof *THEMES)) { ACC = THEMES[cfg.theme - 1].a; ACC2 = THEMES[cfg.theme - 1].b; return; }
   for (size_t k = 0; k < sizeof THEMES / sizeof *THEMES; k++)
     if (!strcmp(THEMES[k].name, vault.theme)) { ACC = THEMES[k].a; ACC2 = THEMES[k].b; return; }
   ACC = THEMES[0].a; ACC2 = THEMES[0].b;
@@ -2381,6 +2405,7 @@ static void conv_keys_save(void) {
   if (f) fclose(f);
 }
 static int conv_any_key(void) {
+  if (!cfg.conv) return 0; // (off unless turned on in Settings)
   if (!conv_loaded) conv_keys_load();
   for (int s = 0; s < CV_N; s++) if (conv_keys[s][0]) return 1;
   return 0;
@@ -2388,14 +2413,18 @@ static int conv_any_key(void) {
 static void draw_settings(void) {
   if (!conv_loaded) conv_keys_load();
   char vconv[80];
-  snprintf(vconv, sizeof vconv, "%s: %s", lv_conv_name(conv_sel), conv_keys[conv_sel][0] ? "key set" : "no key");
+  if (!cfg.conv) snprintf(vconv, sizeof vconv, "Off");
+  else snprintf(vconv, sizeof vconv, "%s: %s", lv_conv_name(conv_sel), conv_keys[conv_sel][0] ? "key set" : "no key");
+  char vtheme[48];
+  snprintf(vtheme, sizeof vtheme, "%s", cfg.theme > 0 ? THEMES[cfg.theme - 1].name : "The vault's own");
+  if (cfg.theme > 0) vtheme[0] = (char)toupper((unsigned char)vtheme[0]);
   char v3[64];
   snprintf(v3, sizeof v3, "%d%%", cfg.volume);
   char v4[16];
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_CONV, ST_VAULT, ST_CACHE, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change"},
@@ -2411,7 +2440,10 @@ static void draw_settings(void) {
     {"Your stats", "", "What's here and how it's been looked at"},
     {"Clean up", "", "One at a time: swipe away what you don't want any more"},
     {"Health check", "", "What's wrong in the vault, and what can be put right"},
-    {"Video conversion", vconv, "Offline copies of big videos made 480p by a service (your key; it sees the video's address) \u00b7 \u2190\u2192 which \u00b7 \u2715 key \u00b7 \u25a1 remove"},
+    {"Theme", vtheme, "The accent colour (\u2190\u2192): the vault's own, or one for the Vita"},
+    {"Background", BGS[cfg.bgstyle].name, "\u2190\u2192: dark, black (OLED), midnight or plum"},
+    {"Sound pack", SND_NAMES[cfg.sndpack], "The interface sounds (\u2190\u2192, a sound plays to hear them)"},
+    {"Video conversion", vconv, cfg.conv ? "Big booru videos made 480p by a service for offline (your key; it sees the address) \u00b7 \u2190\u2192 Off or which \u00b7 \u2715 key \u00b7 \u25a1 remove" : "Off: \u2190\u2192 to turn it on (big booru videos made 480p by a service, for offline)"},
     {"Open another vault", "", "The vaults on the memory card"},
     {"Clear the thumbnail cache", "", "They're made again as you scroll"},
   };
@@ -2426,7 +2458,8 @@ static void draw_settings(void) {
     rrect(30, y, W - 60, 54, 14, k == set_sel ? SURF2 : SURF);
     if (k == set_sel) rrect(30, y, 5, 54, 3, ACC);
     text(54, y + 24, TEXT, 18, rows[k].name);
-    text(54, y + 45, FAINT, 14, rows[k].hint);
+    int vw = rows[k].value[0] ? text_w(18, rows[k].value) + 24 : 0;
+    text_fit(54, y + 45, FAINT, 14, rows[k].hint, W - 108 - vw); // (cut short of the value)
     if (rows[k].value[0]) text(W - 54 - text_w(18, rows[k].value), y + 34, ACC, 18, rows[k].value);
     if (hit(30, y, W - 60, 54) && in.tap_y > top && in.tap_y < H - BAR) { set_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
@@ -2477,9 +2510,20 @@ static void draw_settings(void) {
       case ST_STATS: if (cross) { sfx(SFX_OPEN); screen = S_STATS; return; } break;
       case ST_WIFI: if (cross) { sfx(SFX_OPEN); wf_return = S_SETTINGS; wf_last[0] = 0; screen = S_WIFI; return; } break;
       case ST_VAULT: if (cross) { views_save_async(); resume_save(); find_vaults(); screen = S_PICK; return; } break;
+      case ST_THEME: cfg.theme = (cfg.theme + d + 11) % 11; apply_theme(); cfg_save(); sfx(SFX_TOGGLE); break;
+      case ST_BGS: cfg.bgstyle = (cfg.bgstyle + d + 4) % 4; apply_theme(); cfg_save(); sfx(SFX_TOGGLE); break;
+      case ST_SNDPACK: cfg.sndpack = (cfg.sndpack + d + 4) % 4; sfx_pack(SND_PACKS[cfg.sndpack]); cfg_save(); sfx(SFX_SAVED); break;
       case ST_CONV:
-        if (cross && !ime_open) { char t[120]; snprintf(t, sizeof t, "Your %s API key (from %s)", lv_conv_name(conv_sel), lv_conv_site(conv_sel)); ime_start(17, t, "", 0); }
-        else if (!cross) { conv_sel = (conv_sel + d + CV_N) % CV_N; sfx(SFX_TICK); }
+        // (←→ go round Off and the services; ✕ on a service asks for its key)
+        if (cross && cfg.conv && !ime_open) { char t[120]; snprintf(t, sizeof t, "Your %s API key (from %s)", lv_conv_name(conv_sel), lv_conv_site(conv_sel)); ime_start(17, t, "", 0); }
+        else {
+          int at = cfg.conv ? conv_sel + 1 : 0;
+          at = (at + d + CV_N + 1) % (CV_N + 1);
+          cfg.conv = at > 0;
+          if (at) conv_sel = at - 1;
+          cfg_save();
+          sfx(SFX_TOGGLE);
+        }
         break;
       case ST_CACHE:
         if (cross) {
@@ -2583,6 +2627,9 @@ int main(void) {
   pgf = vita2d_load_default_pgf();
   rnd_state ^= (unsigned)time(NULL);
   cfg_load();
+  apply_theme(); // (the background and accent chosen, from the first screen on)
+  vita2d_set_clear_color(BG);
+  if (cfg.sndpack) sfx_pack(SND_PACKS[cfg.sndpack]);
   show_load();
   drive_load();
   sfx_volume(cfg.sounds);

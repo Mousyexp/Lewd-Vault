@@ -46,7 +46,7 @@ static const char WF_PAGE[] =
   "</script>"
   "<h2 style='font-size:18px;margin-top:32px'>Video conversion keys</h2><p><small>Offline copies of big videos are made 480p by a "
   "conversion service, with your own API key: paste one here (it's kept on the Vita's memory card only; the service sees the "
-  "video's address). Tried in this order.</small></p>"
+  "video's address). Tried in this order, when Settings \u203a Video conversion is on (it starts off).</small></p>"
   "<div id=k></div><script>const S=['CloudConvert (cloudconvert.com)','FreeConvert (freeconvert.com)','Rendi (rendi.dev)'];"
   "S.forEach((n,i)=>{const p=document.createElement('p');p.innerHTML='<b>'+n+'</b><br><textarea rows=2 style=\"width:100%;display:block;"
   "background:#221a24;color:#eee;border:1px solid #444;border-radius:8px\"></textarea><button>Save on the Vita</button> <small></small>';"

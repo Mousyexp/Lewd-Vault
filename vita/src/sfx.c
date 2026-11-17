@@ -27,9 +27,12 @@ static uint64_t last[SFX_COUNT];
 static int ready;
 
 // A WAV's samples (16-bit PCM, its data chunk found by name).
-static void load(int id) {
-  char path[64];
-  snprintf(path, sizeof path, "app0:sounds/%s.wav", NAMES[id]);
+static char pack_dir[48] = "app0:sounds"; // (the pack: the Vita's own, or app0:sounds/<pack>)
+static void load_into(Clip *dst, int id);
+static void load(int id) { load_into(clips, id); }
+static void load_into(Clip *dst, int id) {
+  char path[96];
+  snprintf(path, sizeof path, "%s/%s.wav", pack_dir, NAMES[id]);
   FILE *f = fopen(path, "rb");
   if (!f) return;
   fseek(f, 0, SEEK_END);
@@ -45,11 +48,11 @@ static void load(int id) {
     if (!memcmp(b + at, "fmt ", 4) && at + 12 <= n) channels = b[at + 10];
     if (!memcmp(b + at, "data", 4)) {
       long len = (long)sz > n - at - 8 ? n - at - 8 : (long)sz;
-      clips[id].pcm = malloc(len);
-      if (clips[id].pcm) {
-        memcpy(clips[id].pcm, b + at + 8, len);
-        clips[id].channels = channels == 2 ? 2 : 1;
-        clips[id].frames = (int)(len / 2 / clips[id].channels);
+      dst[id].pcm = malloc(len);
+      if (dst[id].pcm) {
+        memcpy(dst[id].pcm, b + at + 8, len);
+        dst[id].channels = channels == 2 ? 2 : 1;
+        dst[id].frames = (int)(len / 2 / dst[id].channels);
       }
       break;
     }
@@ -95,6 +98,20 @@ void sfx_init(void) {
   SceUID t = sceKernelCreateThread("lv_sfx", mixer, 0x10000100 - 10, 0x4000, 0, SCE_KERNEL_CPU_MASK_USER_2, NULL);
   if (t >= 0) sceKernelStartThread(t, 0, NULL);
   ready = 1;
+}
+// Another pack: its sounds loaded, the old ones let go (the mixer held off meanwhile). A pack missing a
+// sound keeps silence for it.
+void sfx_pack(const char *pack) {
+  Clip fresh[SFX_COUNT], old[SFX_COUNT];
+  memset(fresh, 0, sizeof fresh);
+  snprintf(pack_dir, sizeof pack_dir, "%s%s%s", "app0:sounds", pack && pack[0] ? "/" : "", pack ? pack : "");
+  for (int k = 0; k < SFX_COUNT; k++) load_into(fresh, k); // (apart: the mixer still plays the old ones)
+  if (ready) sceKernelLockLwMutex(&mutex_work, 1, NULL);
+  memcpy(old, clips, sizeof clips);
+  for (int v = 0; v < VOICES; v++) voices[v].clip = -1;
+  memcpy(clips, fresh, sizeof clips);
+  if (ready) sceKernelUnlockLwMutex(&mutex_work, 1);
+  for (int k = 0; k < SFX_COUNT; k++) free(old[k].pcm);
 }
 void sfx_volume(int percent) { volume = percent < 0 ? 0 : percent > 100 ? 100 : percent; }
 

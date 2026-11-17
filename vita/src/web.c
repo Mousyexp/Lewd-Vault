@@ -2347,7 +2347,7 @@ static void wv_offline(void) {
       if (conv_any_key()) { conv_start(p, wv_site()); return; }
       sfx(SFX_ERROR);
       char m[200];
-      snprintf(m, sizeof m, "Only at %dx%d here: add a conversion service (Settings \u203a Video conversion) to make a 480p copy", w, h);
+      snprintf(m, sizeof m, "Only at %dx%d here: keep it as a favourite (or turn on Settings \u203a Video conversion)", w, h);
       say(m);
       return;
     }
