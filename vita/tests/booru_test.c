@@ -60,6 +60,37 @@ static void check_kind(const char *file, const LvSite *s, int want) {
 }
 
 int main(void) {
+  // a KVS video site (rule34video.com): its list page's cards, and a video page's MP4
+  {
+    LvSite kv = {"Rule34Video", BK_KVS, "https://rule34video.com", NULL, 1, 0, NULL, NULL, "hentai", 1};
+    char u[600];
+    lv_booru_url_ex(&kv, "", LV_R_ALL, LV_SORT_LATEST, 0, NULL, 2, u, sizeof u);
+    CHECK(!strcmp(u, "https://rule34video.com/tags/hentai/?mode=async&function=get_block&block_id=custom_list_videos_common_videos&sort_by=post_date&from=2"), "kvs url %s", u);
+    lv_booru_url_ex(&kv, "big_breasts", LV_R_ALL, LV_SORT_TOP, LV_SPAN_MONTH, NULL, 1, u, sizeof u);
+    CHECK(strstr(u, "/tags/big-breasts/") && strstr(u, "sort_by=rating_month"), "kvs search %s", u);
+    size_t n;
+    char *html = slurp("tests/booru/kvs_list.html", &n);
+    int c = 0;
+    LvPost *p = lv_booru_parse(&kv, html, n, LV_R_ALL, &c);
+    CHECK(p && c >= 15, "kvs cards: %d", c);
+    for (int k = 0; p && k < c; k++) {
+      CHECK(lv_post_is_video(&p[k]) && !strncmp(p[k].file, "https://rule34video.com/video/", 30), "card %d page %s", k, p[k].file);
+      CHECK(!strncmp(p[k].preview, "https://", 8) && strstr(p[k].preview, ".jpg"), "card %d preview %s", k, p[k].preview);
+      CHECK(p[k].tags[0] && p[k].id > 0, "card %d tags", k);
+    }
+    lv_posts_free(p, c);
+    free(html);
+    html = slurp("tests/booru/kvs_video.html", &n);
+    char mp4[1024];
+    int nev = 0;
+    CHECK(lv_kvs_video(html, mp4, sizeof mp4, &nev) == 0 && strstr(mp4, "_360.mp4") && !nev, "kvs mp4 %s", mp4);
+    // a page tagged with one of the never-shown words: no video
+    char *bad = malloc(n + 64);
+    snprintf(bad, n + 64, "<a href=\"/tags/loli-elf/\">x</a>%s", html);
+    CHECK(lv_kvs_video(bad, mp4, sizeof mp4, &nev) != 0 && nev, "never-shown tags block the video");
+    free(bad);
+    free(html);
+  }
   // working out what kind a site added by hand is, from its answers
   {
     size_t n1, n2, n3;

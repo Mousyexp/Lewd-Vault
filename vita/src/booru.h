@@ -4,7 +4,9 @@
 #pragma once
 #include <stddef.h>
 
-enum { BK_DANBOORU, BK_GELBOORU, BK_MOEBOORU, BK_E621 };
+enum { BK_DANBOORU, BK_GELBOORU, BK_MOEBOORU, BK_E621, BK_KVS };
+// (BK_KVS: video sites made with Kernel Video Sharing, like rule34video.com: their list pages are read
+//  as HTML; a post's file is its video page, whose player names the MP4: lv_kvs_video)
 typedef struct {
   const char *name;
   int kind;
@@ -59,3 +61,7 @@ void lv_posts_free(LvPost *p, int n);
 // Cleans a search: drops the tags that are never searched for. Returns out.
 char *lv_booru_clean(const char *query, char *out, size_t cap);
 int lv_post_is_video(const LvPost *p);
+// A KVS video page: the address of its MP4 (the smallest, the first it names), and 1
+// in *never when its tags carry one of the never-shown words. 0, or -1 when there's no video.
+int lv_kvs_video(const char *html, char *out, size_t cap, int *never);
+int lv_booru_never_tags(const char *tags); // (1: one of the never-shown words, as a whole tag)

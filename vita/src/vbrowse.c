@@ -8,7 +8,10 @@
 
 typedef struct { const char *name, *site, *tags, *icon, *about; int blocked; } VSource;
 static const VSource VSRC_BUILTIN[] = {
+  {"Rule34Video", "Rule34Video", "hentai", "rule34video", "Hentai animations", 0},
+  {"R34V Anime", "Rule34Video", "anime", "r34anime", "Anime-style animations", 0},
   {"Sakugabooru", "Sakugabooru", "", "sakugabooru", "Anime animation clips", 0},
+  {"Rule34", "Rule34", "video -furry -3d -real", "rule34", "Hentai videos (API key)", 0},
   {"Xbooru", "Xbooru", "video", "xbooru", "Hentai clips", 0},
   {"Gelbooru", "Gelbooru", "video", "gelbooru", "Anime and hentai clips (key)", 0},
   {"Danbooru", "Danbooru", "filetype:mp4", "danbooru", "Anime clips", 0},
@@ -19,7 +22,7 @@ static const VSource VSRC_BUILTIN[] = {
 #define NVSRC_BUILTIN ((int)(sizeof VSRC_BUILTIN / sizeof *VSRC_BUILTIN))
 // The sources offered: the built-in ones that answer, the ones added (the site finder, web.c: saved
 // in ux0:data/LWDV00001/video_sources.txt, "<site name>\t<tags>" a line), then the locked ones.
-#define VSRC_MAX 14
+#define VSRC_MAX 16
 static VSource VSRC[VSRC_MAX];
 static int NVSRC, vsrc_built, nvs_added;
 static char vs_name[VSRC_MAX][48], vs_tags[VSRC_MAX][64];
@@ -31,7 +34,9 @@ static void vsrc_build(void) {
   for (int k = 0; k < NVSRC_BUILTIN; k++) if (!VSRC_BUILTIN[k].blocked) VSRC[NVSRC++] = VSRC_BUILTIN[k];
   for (int k = 0; k < nvs_added && NVSRC < VSRC_MAX - 2; k++) {
     const char *ic = NULL;
-    for (int s = 0; s < LV_NSITES; s++) if (!strcmp(LV_SITES[s].name, vs_name[k])) ic = LV_SITES[s].icon;
+    int gone = 0;
+    for (int s = 0; s < LV_NSITES; s++) if (!strcmp(LV_SITES[s].name, vs_name[k])) { ic = LV_SITES[s].icon; gone = LV_SITES[s].hidden && LV_SITES[s].kind != BK_KVS; }
+    if (gone) continue; // (a site no longer offered: AIBooru)
     VSRC[NVSRC++] = (VSource){vs_name[k], vs_name[k], vs_tags[k], ic, "Added: videos", 0};
   }
   for (int k = 0; k < NVSRC_BUILTIN; k++) if (VSRC_BUILTIN[k].blocked && NVSRC < VSRC_MAX) VSRC[NVSRC++] = VSRC_BUILTIN[k];

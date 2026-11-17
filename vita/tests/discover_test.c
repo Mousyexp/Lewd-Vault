@@ -26,7 +26,8 @@ int main(void) {
   size_t len;
   char *md = slurp("tests/discover/supportedsites.md", &len);
   int a = lv_disc_gallerydl(md, len, c, &n, 200);
-  CHECK(a >= 8);
+  CHECK(a >= 6);
+  CHECK(!find(c, n, "aibooru")); // (AI-made pictures: never offered)
   const LvCand *x = find(c, n, "danbooru.donmai.us");
   CHECK(x && x->kind == BK_DANBOORU && !strcmp(x->name, "Danbooru") && !strcmp(x->base, "https://danbooru.donmai.us"));
   x = find(c, n, "yande.re");

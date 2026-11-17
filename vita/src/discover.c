@@ -11,10 +11,10 @@
 const char *const LV_GRABBER_DIRS[3] = {"Danbooru%20(2.0)", "Gelbooru%20(0.2)", "Moebooru"};
 const int LV_GRABBER_KINDS[3] = {BK_DANBOORU, BK_GELBOORU, BK_MOEBOORU};
 
-// (minors; furry and pony boorus; real people; the mixed ones the app keeps hidden)
+// (minors; furry and pony boorus; real people; AI-made pictures; the mixed ones the app keeps hidden)
 static const char *const NEVER[] = {"allthefallen", "atfbooru", "lolibooru", "loli", "shota", "cub",
                                     "e621", "e926", "e6ai", "furry", "fur", "derpibooru", "ponybooru", "twibooru", "pony",
-                                    "realbooru", "3dbooru", "behoimi", "idol", "paheal", "rule34", "tbib", "borvar", NULL};
+                                    "realbooru", "3dbooru", "aibooru", "ai", "aiart", "diffusion", "aigenerated", "behoimi", "idol", "paheal", "rule34", "tbib", "borvar", NULL};
 int lv_disc_never(const char *name, const char *base) {
   const char *in[2] = {name, base};
   for (int s = 0; s < 2; s++) {

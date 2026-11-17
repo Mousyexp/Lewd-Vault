@@ -228,6 +228,7 @@ static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const
   curl_easy_reset(c); // (the connection itself stays open for the next request)
   curl_easy_setopt(c, CURLOPT_URL, url);
   curl_easy_setopt(c, CURLOPT_USERAGENT, UA);
+  curl_easy_setopt(c, CURLOPT_COOKIEFILE, ""); // (cookies kept per connection, in memory: a video page's cookie for its file)
   curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(c, CURLOPT_MAXREDIRS, 5L);
   curl_easy_setopt(c, CURLOPT_PROTOCOLS_STR, "https,http");

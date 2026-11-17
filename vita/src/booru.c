@@ -17,15 +17,18 @@ LvSite LV_SITES[LV_MAX_SITES] = {
   // (TBIB and Rule34: much western and 3D: not offered, the app being about anime and hentai)
   {"TBIB", BK_GELBOORU, "https://tbib.org", NULL, 0, 0, "tbib", "The big imageboard", NULL, 1},
   {"Hypnohub", BK_GELBOORU, "https://hypnohub.net", NULL, 0, 0, "hypnohub", "Hypnosis art"},
-  {"AIBooru", BK_DANBOORU, "https://aibooru.online", NULL, 1, 0, "aibooru", "AI-made anime art"},
+  // (AIBooru, AI-made pictures, isn't offered: its place is kept, saved settings count sites by place)
+  {"AIBooru", BK_DANBOORU, "https://aibooru.online", NULL, 1, 0, "aibooru", "AI-made anime art", NULL, 1},
   {"Safebooru", BK_GELBOORU, "https://safebooru.org", NULL, 0, 0, "safebooru", "Anime art, all ages"},
   {"Danbooru Comics", BK_DANBOORU, "https://danbooru.donmai.us", NULL, 1, 0, "dancomics", "Manga-style comic pages", "comic"},
   {"Gelbooru", BK_GELBOORU, "https://gelbooru.com", NULL, 0, 1, "gelbooru", "Anime and hentai (API key)"},
   {"Rule34", BK_GELBOORU, "https://api.rule34.xxx", "https://rule34.xxx", 0, 1, "rule34", "Rule 34, games and anime (API key)", NULL, 1},
   {"Sakugabooru", BK_MOEBOORU, "https://www.sakugabooru.com", NULL, 0, 0, "sakugabooru", "Anime animation clips (videos)"},
+  // (video sites: only in the video browser)
+  {"Rule34Video", BK_KVS, "https://rule34video.com", NULL, 1, 0, "rule34video", "Hentai and game animations", "hentai", 1},
 };
-const int LV_NBUILTIN = 13;
-int LV_NSITES = 13;
+const int LV_NBUILTIN = 14;
+int LV_NSITES = 14;
 // (the strings of the sites added by hand, kept here)
 static char added_names[LV_MAX_SITES][48], added_bases[LV_MAX_SITES][160];
 int lv_booru_add_site(const char *name, int kind, const char *base) {
@@ -71,7 +74,9 @@ static int never(const char *tag, size_t n) {
     if (strlen(NEVER[k]) == n && !strncasecmp(NEVER[k], tag, n)) return 1;
   return 0;
 }
-static int any_never(const char *tags) {
+int lv_booru_never_tags(const char *tags);
+static int any_never(const char *tags) { return lv_booru_never_tags(tags); }
+int lv_booru_never_tags(const char *tags) {
   const char *p = tags;
   while (*p) {
     while (*p == ' ') p++;
@@ -161,6 +166,25 @@ void lv_booru_url_ex(const LvSite *s, const char *tags, int ratings, int sort, i
     }
     strncat(q, sp, sizeof q - strlen(q) - 1);
   }
+  if (s->kind == BK_KVS) {
+    // a tag's page, in the site's order: the search's first word (or the preset), as the site's slug
+    char slug[128] = "";
+    const char *w = clean[0] ? clean : s->preset ? s->preset : "hentai";
+    size_t o = 0;
+    for (const char *c = w; *c && *c != ' ' && o + 1 < sizeof slug; c++) {
+      unsigned char ch = (unsigned char)tolower((unsigned char)*c);
+      slug[o++] = ch == '_' ? '-' : isalnum(ch) || ch == '-' ? (char)ch : '-';
+    }
+    slug[o] = 0;
+    static const char *top[] = {"rating", "rating_today", "rating_week", "rating_month"};
+    const char *by = sort == LV_SORT_HOT ? "video_viewed_week" : sort == LV_SORT_TOP ? top[span >= 0 && span < LV_NSPANS ? span : 0]
+                   : sort == LV_SORT_RANDOM ? "video_viewed" : "post_date";
+    // (Random: a page of the most watched, somewhere further along each time)
+    int from = sort == LV_SORT_RANDOM ? page + (int)(time(NULL) / 60 % 40) : page;
+    snprintf(out, cap, "%s/tags/%s/?mode=async&function=get_block&block_id=custom_list_videos_common_videos&sort_by=%s&from=%d",
+             s->base, slug, by, from < 1 ? 1 : from);
+    return;
+  }
   const char *t = q;
   while (*t == ' ') t++;
   char e[2048];
@@ -234,8 +258,133 @@ static void e621_tags(const Json *j, int tags, char *out, size_t cap) {
   }
 }
 
+// ---------- KVS: the list page's cards, read as HTML ----------
+// (an attribute's value inside [p, end): after name=" up to the next quote)
+static int attr(const char *p, const char *end, const char *name, char *out, size_t cap) {
+  out[0] = 0;
+  const char *a = strstr(p, name);
+  if (!a || a >= end) return 0;
+  a += strlen(name);
+  char q = *a == '\'' ? '\'' : '"';
+  if (*a == q) a++;
+  const char *e = strchr(a, q);
+  if (!e || e > end) return 0;
+  size_t n = (size_t)(e - a) < cap - 1 ? (size_t)(e - a) : cap - 1;
+  memcpy(out, a, n);
+  out[n] = 0;
+  return 1;
+}
+// (HTML's &amp; &quot; &#039; ... in place)
+static void unent(char *s) {
+  static const struct { const char *e; char c; } E[] = {{"&amp;", '&'}, {"&quot;", '"'}, {"&#039;", '\''}, {"&#39;", '\''}, {"&lt;", '<'}, {"&gt;", '>'}};
+  char *o = s;
+  for (char *p = s; *p; ) {
+    int done = 0;
+    for (size_t k = 0; k < sizeof E / sizeof *E && *p == '&'; k++)
+      if (!strncmp(p, E[k].e, strlen(E[k].e))) { *o++ = E[k].c; p += strlen(E[k].e); done = 1; break; }
+    if (!done) *o++ = *p++;
+  }
+  *o = 0;
+}
+static LvPost *kvs_parse(const char *text, size_t len, int *n) {
+  (void)len;
+  int cap = 0;
+  for (const char *p = strstr(text, "data-video-card-id="); p; p = strstr(p + 1, "data-video-card-id=")) cap++;
+  LvPost *out = calloc(cap + 1, sizeof *out);
+  if (!out) return NULL;
+  for (const char *p = strstr(text, "data-video-card-id="); p; ) {
+    const char *next = strstr(p + 1, "data-video-card-id=");
+    const char *end = next ? next : text + strlen(text);
+    LvPost q;
+    memset(&q, 0, sizeof q);
+    char id[24], page[600], title[400], img[600], tm[16] = "";
+    attr(p, end, "data-video-card-id=", id, sizeof id);
+    q.id = atoll(id);
+    // (its own page: the link to /video/, not the popup's)
+    page[0] = 0;
+    for (const char *a = strstr(p, "href="); a && a < end && !strstr(page, "/video/"); a = strstr(a + 5, "href=")) attr(a, end, "href=", page, sizeof page);
+    if (!strstr(page, "/video/")) page[0] = 0;
+    attr(p, end, "title=", title, sizeof title);
+    unent(title);
+    const char *im = strstr(p, "class=\"thumb");
+    // (lazy pictures: the real address is in one of these; src may be a placeholder)
+    static const char *const imgattr[] = {"data-rd-src=", "data-original=", "data-src=", "src="};
+    img[0] = 0;
+    for (int k = 0; k < 4 && im && im < end && strncmp(img, "http", 4); k++) {
+      const char *tagend = strchr(im, '>');
+      attr(im, tagend && tagend < end ? tagend : end, imgattr[k], img, sizeof img);
+    }
+    if (strncmp(img, "http", 4)) img[0] = 0;
+    const char *t = strstr(p, "class=\"time\">");
+    if (t && t < end) { t += 13; size_t k = 0; while (t[k] && t[k] != '<' && k < sizeof tm - 1) { tm[k] = t[k]; k++; } tm[k] = 0; }
+    p = next;
+    if (!q.id || strncmp(page, "http", 4) || !img[0]) continue;
+    // the title's words, as tags: what the never-shown words are checked against (and searched)
+    char tags[600];
+    size_t o = 0;
+    for (const char *c = title; *c && o + 2 < sizeof tags; c++) {
+      unsigned char ch = (unsigned char)*c;
+      tags[o++] = isalnum(ch) ? (char)tolower(ch) : ' ';
+    }
+    tags[o] = 0;
+    if (any_never(tags)) continue;
+    snprintf(q.ext, sizeof q.ext, "mp4");
+    q.width = 1280; q.height = 720;
+    q.rating = LV_R_EXPLICIT;
+    q.score = 0;
+    q.preview = sdup(img);
+    q.sample = sdup(img);
+    q.file = sdup(page); // (its video page: lv_kvs_video finds the MP4 there)
+    q.page = sdup(page);
+    q.source = sdup(tm);
+    q.tags = sdup(tags);
+    if (!q.preview || !q.file || !q.page || !q.tags) { free(q.preview); free(q.sample); free(q.file); free(q.page); free(q.source); free(q.tags); continue; }
+    out[(*n)++] = q;
+  }
+  return out;
+}
+int lv_kvs_video(const char *html, char *out, size_t cap, int *nev) {
+  *nev = 0;
+  out[0] = 0;
+  // the tags: links to /tags/<slug>/
+  for (const char *p = strstr(html, "/tags/"); p; p = strstr(p + 6, "/tags/")) {
+    char slug[128];
+    size_t k = 0;
+    const char *c = p + 6;
+    while (c[k] && c[k] != '/' && c[k] != '"' && k < sizeof slug - 1) { slug[k] = c[k] == '-' ? '_' : c[k]; k++; }
+    slug[k] = 0;
+    // (each part of "loli-elf", and the whole)
+    char words[160];
+    snprintf(words, sizeof words, "%s", slug);
+    for (char *w = words; *w; w++) if (*w == '_') *w = ' ';
+    if (never(slug, strlen(slug)) || any_never(words)) { *nev = 1; return -1; }
+  }
+  // (the first, the smallest: 360p on most, played whole from the card, so it comes fastest; the
+  //  Vita's screen is 544 lines)
+  const char *keys[] = {"video_url:", "video_alt_url:"};
+  for (int k = 0; k < 2; k++) {
+    const char *v = strstr(html, keys[k]);
+    if (!v) continue;
+    v += strlen(keys[k]);
+    while (*v == ' ') v++;
+    char q = *v;
+    if (q != '\'' && q != '"') continue;
+    const char *e = strchr(v + 1, q);
+    if (!e) continue;
+    const char *u = v + 1;
+    if (!strncmp(u, "function/0/", 11)) u += 11; // (some KVS sites wrap it)
+    size_t n = (size_t)(e - u);
+    if (n >= cap || strncmp(u, "http", 4)) continue;
+    memcpy(out, u, n);
+    out[n] = 0;
+    return 0;
+  }
+  return -1;
+}
+
 LvPost *lv_booru_parse(const LvSite *s, const char *text, size_t len, int ratings, int *n) {
   *n = 0;
+  if (s->kind == BK_KVS) return kvs_parse(text, len, n);
   Json j;
   if (json_parse(&j, text, len) != 0) return NULL;
   int list = 0;

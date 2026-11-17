@@ -424,6 +424,7 @@ static void *sample_main(void *arg) {
     LvPost post;
     int have = p < nposts;
     if (have) post_copy(&posts[p], &post);
+    int kvs = job_q.site >= 0 && job_q.site < LV_NSITES && LV_SITES[job_q.site].kind == BK_KVS;
     big_cancel = 0;
     big_progress = 0;
     pthread_mutex_unlock(&wmx);
@@ -432,6 +433,28 @@ static void *sample_main(void *arg) {
     memset(&d, 0, sizeof d);
     d.post = p;
     d.gen = gen;
+    // a KVS site's video: its page first, for the MP4's address (the page's cookie goes with it, on
+    // this same connection), and its full tags, checked
+    if (kvs && lv_post_is_video(&post)) {
+      uint8_t *b = NULL;
+      size_t n = 0;
+      const char *err = NULL;
+      char mp4[1024];
+      int nev = 0, ok = lv_http_get(h, post.page, &b, &n, 3u << 20, &big_cancel, NULL, &err) == 200 && b && lv_kvs_video((char *)b, mp4, sizeof mp4, &nev) == 0;
+      free(b);
+      if (ok) { free(post.file); post.file = strdup(mp4); ok = post.file != NULL; }
+      if (!ok) {
+        d.kind = save ? WD_SAVE : WD_SAMPLE;
+        snprintf(d.err, sizeof d.err, "%s", nev ? "Not shown (its tags)" : err && err[0] ? err : "The video's page couldn't be read");
+        if (save) { pthread_mutex_lock(&wmx); saving = 0; pthread_mutex_unlock(&wmx); }
+        free(post.preview); free(post.sample); free(post.file); free(post.page); free(post.source); free(post.tags);
+        free(raw);
+        pthread_mutex_lock(&wmx);
+        if (nwdone < 24) wdone[nwdone++] = d;
+        pthread_mutex_unlock(&wmx);
+        continue;
+      }
+    }
     if (save) {
       d.kind = WD_SAVE;
       // full size: the original instead of the sample (pictures; GIFs and videos are whole anyway)
