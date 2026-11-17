@@ -234,7 +234,7 @@ static int av_open(LvVideo *v) {
   v->h_av = sceAvPlayerInit(&init);
   if (v->h_av <= 0) return -1;
   sceAvPlayerSetLooping(v->h_av, v->loop ? SCE_TRUE : SCE_FALSE);
-  v->add_thread = sceKernelCreateThread("lv_av_add", av_add_main, 0x10000100, 0x4000, 0, 0, NULL);
+  v->add_thread = sceKernelCreateThread("lv_av_add", av_add_main, 0x10000100, 0x10000, 0, 0, NULL); // (64 KB: the system player reads the file's header on it)
   if (v->add_thread >= 0) sceKernelStartThread(v->add_thread, sizeof v, &v);
   else if (sceAvPlayerAddSource(v->h_av, v->path) < 0) return -1;
   v->audio_thread = sceKernelCreateThread("lv_av_sound", av_sound_main, 0x10000100, 0x4000, 0, SCE_KERNEL_CPU_MASK_USER_1, NULL);

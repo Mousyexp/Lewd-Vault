@@ -14,13 +14,14 @@ LvSite LV_SITES[LV_MAX_SITES] = {
   {"Konachan", BK_MOEBOORU, "https://konachan.com", NULL, 0, 0, "konachan", "Anime wallpapers"},
   {"Xbooru Comics", BK_GELBOORU, "https://xbooru.com", NULL, 0, 0, "xcomics", "Hentai comic pages", "comic"},
   {"Xbooru", BK_GELBOORU, "https://xbooru.com", NULL, 0, 0, "xbooru", "Hentai"},
-  {"TBIB", BK_GELBOORU, "https://tbib.org", NULL, 0, 0, "tbib", "The big imageboard"},
+  // (TBIB and Rule34: much western and 3D: not offered, the app being about anime and hentai)
+  {"TBIB", BK_GELBOORU, "https://tbib.org", NULL, 0, 0, "tbib", "The big imageboard", NULL, 1},
   {"Hypnohub", BK_GELBOORU, "https://hypnohub.net", NULL, 0, 0, "hypnohub", "Hypnosis art"},
   {"AIBooru", BK_DANBOORU, "https://aibooru.online", NULL, 1, 0, "aibooru", "AI-made anime art"},
   {"Safebooru", BK_GELBOORU, "https://safebooru.org", NULL, 0, 0, "safebooru", "Anime art, all ages"},
   {"Danbooru Comics", BK_DANBOORU, "https://danbooru.donmai.us", NULL, 1, 0, "dancomics", "Manga-style comic pages", "comic"},
   {"Gelbooru", BK_GELBOORU, "https://gelbooru.com", NULL, 0, 1, "gelbooru", "Anime and hentai (API key)"},
-  {"Rule34", BK_GELBOORU, "https://api.rule34.xxx", "https://rule34.xxx", 0, 1, "rule34", "Rule 34, games and anime (API key)"},
+  {"Rule34", BK_GELBOORU, "https://api.rule34.xxx", "https://rule34.xxx", 0, 1, "rule34", "Rule 34, games and anime (API key)", NULL, 1},
   {"Sakugabooru", BK_MOEBOORU, "https://www.sakugabooru.com", NULL, 0, 0, "sakugabooru", "Anime animation clips (videos)"},
 };
 const int LV_NBUILTIN = 13;

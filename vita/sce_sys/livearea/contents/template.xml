@@ -3,7 +3,7 @@
      Drive vault and frame2, on its right, the vault on the card, straight away (the app reads the
      param); frame3, the strip along the bottom, shows the vault's numbers, which the app writes
      there (src/livearea.c). The pictures: tools/make-livearea.mjs. -->
-<livearea style="a1" format-ver="01.00" content-rev="2">
+<livearea style="a1" format-ver="01.00" content-rev="4">
   <livearea-background>
     <image>bg.png</image>
   </livearea-background>

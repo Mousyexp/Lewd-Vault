@@ -227,7 +227,7 @@ static void wf_start(void) {
   if (wf_started) { pthread_join(wf_thread, NULL); wf_started = 0; }
   pthread_attr_t at;
   pthread_attr_init(&at);
-  pthread_attr_setstacksize(&at, 128 * 1024);
+  pthread_attr_setstacksize(&at, 512 * 1024); // (it makes thumbnails)
   wf_started = pthread_create(&wf_thread, &at, wf_main, NULL) == 0;
   if (!wf_started) wf_run = 0;
 }

@@ -999,7 +999,7 @@ static void saver_start(void) {
   pthread_t t;
   pthread_attr_t at;
   pthread_attr_init(&at);
-  pthread_attr_setstacksize(&at, 64 * 1024);
+  pthread_attr_setstacksize(&at, 128 * 1024);
   saver_started = pthread_create(&t, &at, saver_main, NULL) == 0;
 }
 static void save_async(const char *name, char *data) {
@@ -1674,7 +1674,7 @@ static void closer_start(void) {
   pthread_t t;
   pthread_attr_t at;
   pthread_attr_init(&at);
-  pthread_attr_setstacksize(&at, 64 * 1024);
+  pthread_attr_setstacksize(&at, 512 * 1024); // (it opens videos: FFmpeg and libvpx want room)
   closer_on = pthread_create(&t, &at, closer_main, NULL) == 0 ? 1 : -1;
 }
 static void videos_close_now(void) {
@@ -1756,8 +1756,6 @@ static void open_viewer(int k, int show) {
   chrome_until = frame_no + 180;
   screen = S_VIEWER;
   PT("open_viewer start");
-  scePowerSetArmClockFrequency(444);
-  PT("clock");
   show_item(k);
   PT("show_item");
 }
@@ -2310,10 +2308,6 @@ int main(void) {
   sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
   sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT, SCE_TOUCH_SAMPLING_STATE_START);
   sceTouchSetSamplingState(SCE_TOUCH_PORT_BACK, SCE_TOUCH_SAMPLING_STATE_START);
-  scePowerSetArmClockFrequency(444);
-  scePowerSetBusClockFrequency(222);
-  scePowerSetGpuClockFrequency(222);
-  scePowerSetGpuXbarClockFrequency(166);
   pin_to_core(0); // (the drawing thread on the first core; the work on the other two)
   // (a bigger per-frame vertex pool than vita2d's 1 MB: room to spare on the busiest screen)
   vita2d_init_advanced(4 * 1024 * 1024);
@@ -2336,8 +2330,8 @@ int main(void) {
   pthread_t th;
   pthread_attr_t at;
   pthread_attr_init(&at);
-  pthread_attr_setstacksize(&at, 256 * 1024);
-  pthread_create(&th, &at, worker, NULL);
+  pthread_attr_setstacksize(&at, 512 * 1024); // (it decodes pictures and makes JPEGs)
+  if (pthread_create(&th, &at, worker, NULL) != 0) LOG("the thumbnail thread didn't start\n");
   SceUID pt = sceKernelCreateThread("lv_power", power_main, 0x10000100, 0x10000, 0, 0, NULL);
   if (pt >= 0) sceKernelStartThread(pt, 0, NULL);
   atlas_init();
@@ -2349,7 +2343,7 @@ int main(void) {
     pthread_t nt;
     pthread_attr_t at;
     pthread_attr_init(&at);
-    pthread_attr_setstacksize(&at, 128 * 1024);
+    pthread_attr_setstacksize(&at, 256 * 1024);
     if (pthread_create(&nt, &at, net_warm, NULL) == 0) pthread_detach(nt);
   }
 
@@ -2401,6 +2395,8 @@ int main(void) {
       lv_net_reset();
       if (vid) { stop_video(); say("Paused while the Vita slept"); }
       if (wv_vid) { video_close_later(wv_vid); wv_vid = NULL; }
+      // (the Wi-Fi transfer's socket doesn't outlive a sleep: a fresh one)
+      if (wf_run) { wf_stop(); wf_last[0] = 0; if (screen == S_WIFI) wf_start(); }
       if (pin.on && pin.on_wake && screen != S_PIN) { slideshow = 0; pin_lock(screen == S_COVER ? cover_return : screen); }
     }
     // (a video playing, or a slideshow: the Vita doesn't dim or sleep)

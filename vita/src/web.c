@@ -498,11 +498,12 @@ static void web_start(void) {
   pthread_t t;
   pthread_attr_t at;
   pthread_attr_init(&at);
-  pthread_attr_setstacksize(&at, 256 * 1024);
-  pthread_create(&t, &at, list_main, NULL);
+  pthread_attr_setstacksize(&at, 512 * 1024); // (they decode pictures)
+  // (a thread that won't start, the memory being short for a moment: tried again next time)
+  if (pthread_create(&t, &at, list_main, NULL) != 0) { web_started = 0; return; }
+  if (pthread_create(&t, &at, preview_main, NULL) != 0) LOG("a preview thread didn't start\n");
   pthread_create(&t, &at, preview_main, NULL);
-  pthread_create(&t, &at, preview_main, NULL);
-  pthread_create(&t, &at, sample_main, NULL);
+  if (pthread_create(&t, &at, sample_main, NULL) != 0) LOG("the sample thread didn't start\n");
 }
 
 // ---------- searches ----------
@@ -779,6 +780,17 @@ static int mg_src_now(void);
 static void manga_open(int src);
 static int vb_cur = -1;
 // sites added by hand (ux0:data/LWDV00001/web_sites.txt: "<name>\t<kind>\t<address>" a line)
+// The sites offered (not the hidden ones), in order: tile k is site vis[k]
+static int sites_visible(int *vis) {
+  int n = 0;
+  for (int k = 0; k < LV_NSITES; k++) if (!LV_SITES[k].hidden) vis[n++] = k;
+  return n;
+}
+static int site_tile_of(int site) {
+  int vis[LV_MAX_SITES], n = sites_visible(vis);
+  for (int k = 0; k < n; k++) if (vis[k] == site) return k;
+  return 0;
+}
 static void custom_sites_load(void) {
   FILE *f = fopen(DATA "/web_sites.txt", "r");
   char ln[300];
@@ -790,7 +802,7 @@ static void custom_sites_load(void) {
     lv_booru_add_site(ln, atoi(a + 1), b + 1);
   }
   if (f) fclose(f);
-  if (cfg.site >= LV_NSITES) cfg.site = 0;
+  if (cfg.site >= LV_NSITES || LV_SITES[cfg.site].hidden) cfg.site = 0;
 }
 static void custom_sites_save(void) {
   FILE *f = fopen(DATA "/web_sites.txt", "w");
@@ -832,7 +844,7 @@ static void add_site_start(const char *typed) {
   pthread_t t;
   pthread_attr_t at;
   pthread_attr_init(&at);
-  pthread_attr_setstacksize(&at, 128 * 1024);
+  pthread_attr_setstacksize(&at, 256 * 1024);
   if (pthread_create(&t, &at, add_main, NULL) == 0) pthread_detach(t);
   else add_state = 3;
   say("Looking at the site…");
@@ -887,7 +899,8 @@ static void draw_letter_icon(int x, int y, int sz, const char *name) {
 static void draw_sites_sheet(void) {
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 170));
   const int cols = 6, tw = 142, th = 136, gap = 10;
-  int n = sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : LV_NSITES + 1; // (+ the add tile)
+  int vis[LV_MAX_SITES], nvis = sites_visible(vis);
+  int n = sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : nvis + 1; // (+ the add tile)
   int rows = (n + cols - 1) / cols, vis_rows = rows < 3 ? rows : 3;
   int ww = cols * tw + (cols - 1) * gap + 36, wh = vis_rows * th + (vis_rows - 1) * gap + 100;
   int wx = (W - ww) / 2, wy = 18;
@@ -909,7 +922,7 @@ static void draw_sites_sheet(void) {
   if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
     sites_tab = (sites_tab + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : 2)) % 3;
     sheet_sel = 0; sites_scroll = 0; sfx(SFX_TAB);
-    n = sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : LV_NSITES + 1;
+    n = sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : nvis + 1;
     rows = (n + cols - 1) / cols;
   }
   if (sheet_sel >= n) sheet_sel = n - 1;
@@ -924,11 +937,12 @@ static void draw_sites_sheet(void) {
     int x = wx + 18 + (k % cols) * (tw + gap), y = top + r * (th + gap);
     int on = k == sheet_sel;
     const char *name, *about, *ic;
-    int cur, blocked = 0, add = !sites_tab && k == LV_NSITES, slot;
+    int cur, blocked = 0, add = !sites_tab && k == nvis, slot;
+    int site = !sites_tab && k < nvis ? vis[k] : -1;
     if (sites_tab == 2) { name = msource_name(k); about = msource_about(k); ic = msource_icon(k); cur = screen == S_MANGA && k == mg_src_now(); slot = 48 + k; }
     else if (sites_tab) { name = vsource_name(k); about = vsource_about(k); ic = vsource_icon(k); cur = k == vb_cur; blocked = vsource_blocked(k); slot = 32 + k; }
     else if (add) { name = "Add a site"; about = "Any booru, by its address"; ic = "add"; cur = 0; slot = 31; }
-    else { name = LV_SITES[k].name; about = LV_SITES[k].about; ic = LV_SITES[k].icon; cur = k == cfg.site; slot = k; }
+    else { name = LV_SITES[site].name; about = LV_SITES[site].about; ic = LV_SITES[site].icon; cur = site == cfg.site; slot = site; }
     if (on) rrect(x - 3, y - 3, tw + 6, th + 6, 20, ACC);
     rrect(x, y, tw, th, 18, on ? SURF2 : with_alpha(SURF2, 140));
     vita2d_texture *t = site_icon_named(slot, ic);
@@ -938,7 +952,7 @@ static void draw_sites_sheet(void) {
     text_fit(x + 10, y + 100, cur ? ACC : TEXT, 15, name, tw - 20);
     if (about) text_fit(x + 10, y + 122, FAINT, 12, about, tw - 20);
     if (cur) { circle(x + tw - 16, y + 16, 10, ACC); text_center(x + tw - 16, y + 21, RGBA(20, 12, 16, 255), 13, "✓"); }
-    if (!sites_tab && !add && LV_SITES[k].needs_key && !wkeys[k][0]) { rrect(x + 8, y + 8, 36, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 26, y + 23, DIM, 12, "key"); }
+    if (!sites_tab && !add && LV_SITES[site].needs_key && !wkeys[site][0]) { rrect(x + 8, y + 8, 36, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 26, y + 23, DIM, 12, "key"); }
     if (blocked) { rrect(x + 8, y + 8, 50, 20, 10, RGBA(0, 0, 0, 170)); text_center(x + 33, y + 23, DIM, 12, "locked"); }
     if (hit(x, y, tw, th)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
@@ -959,13 +973,13 @@ static void draw_sites_sheet(void) {
     else if (sites_tab) {
       if (vsource_blocked(sheet_sel)) { sfx(SFX_ERROR); say("This site only answers after a browser check (Cloudflare), so the Vita can't reach it"); }
       else { sfx(SFX_SELECT); sheet = SH_NONE; vb_open(sheet_sel); }
-    } else if (sheet_sel == LV_NSITES) {
+    } else if (sheet_sel == nvis) {
       if (!ime_open) { sheet = SH_NONE; ime_start(14, "The site's address (like booru.example.org)", "", 0); }
-    } else { sfx(SFX_SELECT); sheet = SH_NONE; if (sheet_sel != cfg.site) { cfg.site = sheet_sel; if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST; web_search(); } }
+    } else { int st = vis[sheet_sel]; sfx(SFX_SELECT); sheet = SH_NONE; if (st != cfg.site) { cfg.site = st; if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST; web_search(); } }
   }
   // □ on a site added by hand: removed
-  else if ((in.pressed & SCE_CTRL_SQUARE) && !sites_tab && sheet_sel >= LV_NBUILTIN && sheet_sel < LV_NSITES) {
-    for (int k = sheet_sel; k < LV_NSITES - 1; k++) LV_SITES[k] = LV_SITES[k + 1];
+  else if ((in.pressed & SCE_CTRL_SQUARE) && !sites_tab && sheet_sel < nvis && vis[sheet_sel] >= LV_NBUILTIN) {
+    for (int k = vis[sheet_sel]; k < LV_NSITES - 1; k++) LV_SITES[k] = LV_SITES[k + 1];
     LV_NSITES--;
     if (cfg.site >= LV_NSITES) cfg.site = 0;
     custom_sites_save();
@@ -1293,7 +1307,7 @@ static void draw_web(void) {
   int ws = text_w(17, site) + 36;
   rrect(sx, 8, ws, 36, 18, ACC);
   text(sx + 18, 32, RGBA(20, 12, 16, 255), 17, site);
-  if (!sheet_open && hit(sx, 4, ws, 44)) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = cfg.site; sites_tab = 0; sites_scroll = 0; }
+  if (!sheet_open && hit(sx, 4, ws, 44)) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = site_tile_of(cfg.site); sites_tab = 0; sites_scroll = 0; }
   // filter and sort on the right
   char filt[40];
   int nr = 0;
@@ -1326,7 +1340,7 @@ static void draw_web(void) {
     // the sites are tabs: L / R go through them
     if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
       sfx(SFX_TAB);
-      cfg.site = (cfg.site + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : LV_NSITES - 1)) % LV_NSITES;
+      do cfg.site = (cfg.site + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : LV_NSITES - 1)) % LV_NSITES; while (LV_SITES[cfg.site].hidden);
       if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST;
       web_search();
       char m[80];
@@ -1335,7 +1349,7 @@ static void draw_web(void) {
     }
     if ((in.pressed & SCE_CTRL_CROSS) && nposts) { sfx(SFX_SELECT); wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; wv_back = S_WEB; screen = S_WEBVIEW; wv_show(wsel); return; }
     if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_SHOW; plan_sel = 0; }
-    if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = cfg.site; sites_tab = 0; sites_scroll = 0; }
+    if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = site_tile_of(cfg.site); sites_tab = 0; sites_scroll = 0; }
   }
   draw_bar();
   if (sheet == SH_SITES) draw_sites_sheet();

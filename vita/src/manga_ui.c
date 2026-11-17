@@ -195,7 +195,7 @@ static void mg_start_thread(void) {
   pthread_t t;
   pthread_attr_t at;
   pthread_attr_init(&at);
-  pthread_attr_setstacksize(&at, 256 * 1024);
+  pthread_attr_setstacksize(&at, 512 * 1024); // (it decodes pages)
   mg_thread_on = pthread_create(&t, &at, mg_main, NULL) == 0;
 }
 
