@@ -51,6 +51,7 @@
 #include "drive.h"
 #include "net.h"
 #include "discover.h"
+#include "conv.h"
 #include "manga.h"
 #include <psp2/kernel/clib.h>
 #ifdef LV_DEBUG
@@ -2357,14 +2358,44 @@ static void draw_viewer(void) {
 
 // ----- settings -----
 static float set_scroll;
+// The conversion services' keys (yours: ux0:data/LWDV00001/convert_keys.txt, "<service>\t<key>" a line;
+// never in the app or its sources). Used for offline copies made 480p elsewhere (web.c, conv_main).
+static char conv_keys[CV_N][2048];
+static int conv_loaded, conv_sel;
+static void conv_keys_load(void) {
+  conv_loaded = 1;
+  FILE *f = fopen(DATA "/convert_keys.txt", "r");
+  char ln[300];
+  while (f && fgets(ln, sizeof ln, f)) {
+    ln[strcspn(ln, "\r\n")] = 0;
+    char *t = strchr(ln, '\t');
+    if (!t) continue;
+    int s = atoi(ln);
+    if (s >= 0 && s < CV_N) snprintf(conv_keys[s], sizeof conv_keys[s], "%s", t + 1);
+  }
+  if (f) fclose(f);
+}
+static void conv_keys_save(void) {
+  FILE *f = fopen(DATA "/convert_keys.txt", "w");
+  for (int s = 0; f && s < CV_N; s++) if (conv_keys[s][0]) fprintf(f, "%d\t%s\n", s, conv_keys[s]);
+  if (f) fclose(f);
+}
+static int conv_any_key(void) {
+  if (!conv_loaded) conv_keys_load();
+  for (int s = 0; s < CV_N; s++) if (conv_keys[s][0]) return 1;
+  return 0;
+}
 static void draw_settings(void) {
+  if (!conv_loaded) conv_keys_load();
+  char vconv[80];
+  snprintf(vconv, sizeof vconv, "%s: %s", lv_conv_name(conv_sel), conv_keys[conv_sel][0] ? "key set" : "no key");
   char v3[64];
   snprintf(v3, sizeof v3, "%d%%", cfg.volume);
   char v4[16];
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_VAULT, ST_CACHE, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_CONV, ST_VAULT, ST_CACHE, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change"},
@@ -2380,6 +2411,7 @@ static void draw_settings(void) {
     {"Your stats", "", "What's here and how it's been looked at"},
     {"Clean up", "", "One at a time: swipe away what you don't want any more"},
     {"Health check", "", "What's wrong in the vault, and what can be put right"},
+    {"Video conversion", vconv, "Offline copies of big videos made 480p by a service (your key; it sees the video's address) \u00b7 \u2190\u2192 which \u00b7 \u2715 key \u00b7 \u25a1 remove"},
     {"Open another vault", "", "The vaults on the memory card"},
     {"Clear the thumbnail cache", "", "They're made again as you scroll"},
   };
@@ -2412,6 +2444,7 @@ static void draw_settings(void) {
   if (cross) d = d ? d : 1;
   if (decoy_session && (set_sel == ST_PIN || set_sel == ST_DECOY) && (d || square || cross)) { sfx(SFX_ERROR); say("Not available"); d = square = cross = 0; }
   if (square && set_sel == ST_PIN && pin.on) { sfx(SFX_CLOSE); pin.on = 0; pin.decoy_hash[0] = 0; pin_save(); say("PIN lock off"); }
+  if (square && set_sel == ST_CONV && conv_keys[conv_sel][0]) { conv_keys[conv_sel][0] = 0; conv_keys_save(); sfx(SFX_CLOSE); say("Key removed"); }
   if (square && set_sel == ST_DECOY && pin.decoy_hash[0]) { sfx(SFX_CLOSE); pin.decoy_hash[0] = 0; pin_save(); say("Decoy PIN off"); }
   if (d) {
     switch (set_sel) {
@@ -2444,6 +2477,10 @@ static void draw_settings(void) {
       case ST_STATS: if (cross) { sfx(SFX_OPEN); screen = S_STATS; return; } break;
       case ST_WIFI: if (cross) { sfx(SFX_OPEN); wf_return = S_SETTINGS; wf_last[0] = 0; screen = S_WIFI; return; } break;
       case ST_VAULT: if (cross) { views_save_async(); resume_save(); find_vaults(); screen = S_PICK; return; } break;
+      case ST_CONV:
+        if (cross && !ime_open) { char t[120]; snprintf(t, sizeof t, "Your %s API key (from %s)", lv_conv_name(conv_sel), lv_conv_site(conv_sel)); ime_start(17, t, "", 0); }
+        else if (!cross) { conv_sel = (conv_sel + d + CV_N) % CV_N; sfx(SFX_TICK); }
+        break;
       case ST_CACHE:
         if (cross) {
           DIR *dd = opendir(cache_dir);
@@ -2625,7 +2662,7 @@ int main(void) {
     }
     // (a video playing, or a slideshow: the Vita doesn't dim or sleep)
     if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow) || drive.state == DRV_SYNCING || drive.state == DRV_CODE || wf_run ||
-        dl_post >= 0 || msave_on) // (and while a video downloads or a chapter is saved: sleep would cut the Wi-Fi)
+        dl_post >= 0 || msave_on || conv_on) // (and while a video downloads or a chapter is saved: sleep would cut the Wi-Fi)
       sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
     PT("frame start");
     if (loaded_vault) take_results();
@@ -2634,6 +2671,7 @@ int main(void) {
     PT("web_take_results");
     if (loaded_vault) wf_take();
     msave_take();
+    conv_take();
     // (the header and the tab bar: tucked only while the Library or the Browser scrolls down)
     if (screen != S_LIBRARY && screen != S_WEB) chrome_target = 0;
     chrome_hide += (chrome_target - chrome_hide) * 0.25f;
@@ -2643,7 +2681,7 @@ int main(void) {
 
     // the keyboard's answer
     if (ime_open) {
-      char got[120];
+      static char got[2100]; // (an API key can be long)
       int r = ime_poll(got, sizeof got);
       if (r == 1 && ime_for == 1) { snprintf(password, sizeof password, "%s", got); load_state = 0; screen = S_UNLOCKING; }
       if (r == 1 && ime_for == 3) { char clean[128]; snprintf(cfg.wquery, sizeof cfg.wquery, "%s", lv_booru_clean(got, clean, sizeof clean)); sheet = SH_NONE; screen = S_WEB; web_search(); }
@@ -2653,6 +2691,7 @@ int main(void) {
       if (r == 1 && ime_for == 7 && got[0]) { snprintf(drive_new_id, sizeof drive_new_id, "%s", got); drive_ask_secret = 1; }
       if (r == 1 && ime_for == 14 && got[0]) add_site_start(got);
       if (r == 1 && ime_for == 15) { snprintf(mg.query, sizeof mg.query, "%s", got); mg_search(); }
+      if (r == 1 && ime_for == 17 && got[0]) { snprintf(conv_keys[conv_sel], sizeof conv_keys[conv_sel], "%s", got); conv_keys_save(); sfx(SFX_DONE); say("Key saved"); }
       if (r == 1 && ime_for == 16 && got[0]) { for (char *c = got; *c; c++) if (*c == ',' || *c == '"') *c = ' '; snprintf(sw_cat, sizeof sw_cat, "%.63s", got); sw_catsel = sw_ncats() - 1; }
       if (r == 1 && ime_for == 9) { snprintf(whidden, sizeof whidden, "%s", got); hidden_save(); web_search(); }
       if (r == 1 && ime_for == 10 && got[0]) { snprintf(wkey_user, sizeof wkey_user, "%s", got); wkey_ask = 1; }

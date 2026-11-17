@@ -145,6 +145,14 @@ save page opens once it's all here). A comic's page has the same two (□ and �
 screen (the ♥ in the Library's Videos and Comics modes) lists them, a tab each: Play or Read, Make
 available offline, Remove (`src/favs.c`, `ux0:data/LWDV00001/favorites.tsv`).
 
+**Offline copies are 480p.** The long-form sources' files are 480p already. A booru keeps only its
+original: when that's bigger, the Vita (which can't re-encode video) hands its address to a
+**conversion service** with your own API key, CloudConvert, FreeConvert or Rendi, tried in that order,
+which makes an 854 x 480 H.264/AAC MP4 the Vita then downloads into the vault (`src/conv.c`). Add keys
+in Settings › Video conversion, or paste them on the Wi-Fi transfer page (they're long); they're kept
+in `ux0:data/LWDV00001/convert_keys.txt` only, and the service sees the video's address. With no key,
+such a video stays a favourite.
+
 **Videos play as they download.** The MP4 goes straight to the card and the system player starts as
 soon as the first 768 KB are there, its reads waiting for the bytes still coming (`lv_video_open_growing`
 in `src/video.c`, `lv_http_stream_file` in `src/net.c`); a thin line under the controls shows how much

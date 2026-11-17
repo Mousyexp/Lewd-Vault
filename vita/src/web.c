@@ -2194,6 +2194,146 @@ static void wv_btns(int *x1, int *w1, int *x2, int *w2) {
   *w1 = l1 ? text_w(15, l1) + 24 : 0;
   *x1 = *x2 - 8 - *w1;
 }
+// ---------- an offline copy made 480p by a conversion service ----------
+// (the Vita can't re-encode video: the original's address goes to one of your services, which makes an
+//  854 x 480 H.264 MP4; the Vita downloads that into the vault. Each service with a key is tried in turn.)
+typedef struct { char src[1500], page[600], preview[600], name[200], cat[64], tags[4000]; int w, h, nsfw, vgen; } ConvJob;
+typedef struct { LvNew nw; LvAdded added; char name[200], cat[64], when[40], page[600], tags[4000]; int vgen; } ConvDone;
+static volatile int conv_on;
+static char conv_msg[200];
+static volatile unsigned conv_msg_seq;
+static ConvDone conv_done;
+static volatile int conv_done_ready;
+static void conv_say(const char *m) { snprintf(conv_msg, sizeof conv_msg, "%s", m); conv_msg_seq++; }
+static void *conv_main(void *arg) {
+  ConvJob *j = arg;
+  pin_to_core(1);
+  LvHttp *h = lv_http_new();
+  char result[1500] = "";
+  for (int s = 0; s < CV_N && h && !result[0]; s++) {
+    if (!conv_keys[s][0]) continue;
+    char url[300], hdr[3][300], id[200], m[200];
+    static char body[5000];
+    lv_conv_start(s, conv_keys[s], j->src, url, sizeof url, body, sizeof body, hdr);
+    const char *hs[3] = {hdr[0], hdr[1], NULL};
+    LvReq rq = {.method = "POST", .headers = hs, .body = body, .body_len = strlen(body)};
+    uint8_t *b = NULL;
+    size_t n = 0;
+    const char *err = NULL;
+    snprintf(m, sizeof m, "Making it 480p on %s\u2026", lv_conv_name(s));
+    conv_say(m);
+    int st = lv_http_req(h, url, &rq, &b, &n, 1u << 20, NULL, &err);
+    int ok = (st == 200 || st == 201) && b && lv_conv_parse_start(s, (char *)b, n, id, sizeof id) == 0;
+    free(b);
+    if (!ok) { snprintf(m, sizeof m, "%s didn't take it (%d): trying the next", lv_conv_name(s), st); conv_say(m); continue; }
+    // (asked every five seconds, for forty minutes at most)
+    const char *hg[2] = {hdr[0], NULL};
+    LvReq get = {.headers = hg};
+    char purl[300];
+    lv_conv_poll_url(s, id, purl, sizeof purl);
+    int r = 0;
+    for (int t = 0; t < 480 && r == 0 && worker_run; t++) {
+      sceKernelDelayThread(5 * 1000 * 1000);
+      b = NULL; n = 0;
+      st = lv_http_req(h, purl, &get, &b, &n, 4u << 20, NULL, &err);
+      if (st == 200 && b) r = lv_conv_parse_poll(s, (char *)b, n, result, sizeof result);
+      else if (st == 401 || st == 403 || st == 404) r = -1;
+      free(b);
+    }
+    if (r != 1) { result[0] = 0; snprintf(m, sizeof m, "%s couldn't make it: trying the next", lv_conv_name(s)); conv_say(m); }
+  }
+  lv_http_free(h);
+  if (!result[0]) { conv_say("No conversion service could make it 480p (Settings \u203a Video conversion)"); free(j); conv_on = 0; return NULL; }
+  // the 480p copy: down onto the card (a new connection: the result's address needs no key)
+  conv_say("Downloading the 480p copy\u2026");
+  LvHttp *d = lv_http_new();
+  size_t n = 0;
+  const char *err = NULL;
+  char path[] = DATA "/conv480.mp4";
+  long long room = free_room("ux0:");
+  size_t cap = room > 0 && room - 96ll * 1024 * 1024 > 0 ? (size_t)(room - 96ll * 1024 * 1024 < 1536ll * 1024 * 1024 ? room - 96ll * 1024 * 1024 : 1536ll * 1024 * 1024) : 400u * 1024 * 1024;
+  int st = d ? lv_http_get_file(d, result, path, &n, cap, NULL, NULL, &err) : -1;
+  // its thumbnail: the post's preview, at a card's size
+  uint8_t *thumb = NULL, *pb = NULL;
+  size_t tn = 0, pn = 0;
+  int tw = 0, th = 0;
+  if (st == 200 && d && lv_http_get(d, j->preview, &pb, &pn, 4u << 20, NULL, NULL, NULL) == 200) {
+    LvPixels px;
+    int cw, ch;
+    cover_size(pb, pn, &cw, &ch);
+    if (lv_decode(pb, pn, cw, ch, &px) == 0) { thumb = lv_encode_jpeg(&px, 85, &tn); tw = px.w; th = px.h; free(px.rgba); }
+  }
+  free(pb);
+  lv_http_free(d);
+  if (st != 200) { conv_say(err && err[0] ? err : "The 480p copy didn't download"); free(thumb); free(j); conv_on = 0; return NULL; }
+  // its size: the original's, fitted in 854 x 480 (even numbers, as the service makes them)
+  double sc = j->w > 0 && j->h > 0 ? fmin(1.0, fmin(854.0 / j->w, 480.0 / j->h)) : 1.0;
+  ConvDone c;
+  memset(&c, 0, sizeof c);
+  snprintf(c.name, sizeof c.name, "%s", j->name);
+  snprintf(c.cat, sizeof c.cat, "%s", j->cat);
+  snprintf(c.page, sizeof c.page, "%s", j->page);
+  snprintf(c.tags, sizeof c.tags, "%s", j->tags);
+  now_iso(c.when, sizeof c.when);
+  LvNew nw = {.name = c.name, .category = c.cat, .kind = "video", .tags = c.tags, .source = c.page, .added = c.when, .nsfw = j->nsfw,
+              .quality = 5, .width = ((int)(j->w * sc)) & ~1, .height = ((int)(j->h * sc)) & ~1, .from = path};
+  saver_flush();
+  pthread_mutex_lock(&vmx);
+  const char *why = NULL;
+  int ok = loaded_vault && vgen == j->vgen && lv_vault_add_files(&vault, &nw, NULL, n, "mp4", thumb, tn, tw, th, &c.added, &why) == 0;
+  pthread_mutex_unlock(&vmx);
+  free(thumb);
+  remove(path);
+  if (!ok) { conv_say(why ? why : "It couldn't be saved"); free(j); conv_on = 0; return NULL; }
+  c.nw = nw; c.vgen = j->vgen;
+  conv_done = c;
+  conv_done_ready = 1;
+  free(j);
+  conv_on = 0;
+  return NULL;
+}
+// (the drawing thread: its messages as they come, and the saved copy into the loaded vault)
+static void conv_take(void) {
+  static unsigned seen;
+  if (seen != conv_msg_seq) { seen = conv_msg_seq; say(conv_msg); }
+  if (!conv_done_ready) return;
+  ConvDone *c = &conv_done;
+  if (c->vgen == vgen && loaded_vault) {
+    c->nw.name = c->name; c->nw.category = c->cat; c->nw.added = c->when; c->nw.tags = c->tags; c->nw.source = c->page;
+    int before = vault.n;
+    pthread_mutex_lock(&vmx);
+    int ok = lv_vault_add_memory(&vault, &c->nw, &c->added) == 0;
+    pthread_mutex_unlock(&vmx);
+    if (ok) library_grew(before);
+    saved_add(c->page);
+    sfx(SFX_SAVED);
+    say("Saved at 480p: available offline");
+  }
+  conv_done_ready = 0;
+}
+static void conv_start(const LvPost *p, int site) {
+  if (conv_on) { say("Another video is being made 480p: one at a time"); return; }
+  ConvJob *j = calloc(1, sizeof *j);
+  if (!j) return;
+  snprintf(j->src, sizeof j->src, "%s", p->file);
+  snprintf(j->page, sizeof j->page, "%s", p->page);
+  snprintf(j->preview, sizeof j->preview, "%s", p->preview);
+  snprintf(j->name, sizeof j->name, "%s %lld (480p).mp4", LV_SITES[site].name, p->id);
+  snprintf(j->cat, sizeof j->cat, "%s", save_category());
+  snprintf(j->tags, sizeof j->tags, "%s", p->tags);
+  int ri = p->rating == LV_R_EXPLICIT ? 3 : p->rating == LV_R_QUESTIONABLE ? 2 : p->rating == LV_R_SENSITIVE ? 1 : 0;
+  j->nsfw = RATING_NSFW[ri];
+  j->w = p->width; j->h = p->height; j->vgen = vgen;
+  pthread_t t;
+  pthread_attr_t at;
+  pthread_attr_init(&at);
+  pthread_attr_setstacksize(&at, 512 * 1024); // (it decodes the thumbnail)
+  conv_on = 1;
+  if (pthread_create(&t, &at, conv_main, j) != 0) { conv_on = 0; free(j); say("It couldn't start"); return; }
+  pthread_detach(t);
+  sfx(SFX_OPEN);
+}
+
 static void wv_offline(void) {
   if (wv >= nposts) return;
   if (is_saved(&posts[wv])) { say("It's in your vault already"); return; }
@@ -2203,9 +2343,11 @@ static void wv_offline(void) {
     const LvPost *p = &posts[wv];
     int w = p->width, h = p->height, small_side = w < h ? w : h;
     if (lv_site_is_booru(&LV_SITES[wv_site()]) && small_side > 480) {
+      // (made 480p by one of your conversion services; with none, it stays a favourite)
+      if (conv_any_key()) { conv_start(p, wv_site()); return; }
       sfx(SFX_ERROR);
-      char m[160];
-      snprintf(m, sizeof m, "This site only has it at %dx%d: offline copies are 480p, so keep it as a favourite", w, h);
+      char m[200];
+      snprintf(m, sizeof m, "Only at %dx%d here: add a conversion service (Settings \u203a Video conversion) to make a 480p copy", w, h);
       say(m);
       return;
     }

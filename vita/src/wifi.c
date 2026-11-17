@@ -24,6 +24,8 @@ typedef struct { LvNew nw; LvAdded added; char name[200], cat[64], when[40], kin
 static WfDone wf_done[8];
 static int nwf_done;
 static pthread_mutex_t wfmx = PTHREAD_MUTEX_INITIALIZER;
+static char wf_key[CV_N][2048]; // (conversion keys pasted on the page, for the drawing thread)
+static int wf_key_set[CV_N];
 
 static const char WF_PAGE[] =
   "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -41,7 +43,16 @@ static const char WF_PAGE[] =
   "x.onerror=()=>{li.textContent=f.name+' \\u2717 the Vita stopped answering';li.className='no';r()};x.send(f)}))}"
   "document.getElementById('f').onchange=e=>[...e.target.files].forEach(send);"
   "const d=document.getElementById('d');d.ondragover=e=>e.preventDefault();d.ondrop=e=>{e.preventDefault();[...e.dataTransfer.files].forEach(send)};"
-  "</script></body></html>";
+  "</script>"
+  "<h2 style='font-size:18px;margin-top:32px'>Video conversion keys</h2><p><small>Offline copies of big videos are made 480p by a "
+  "conversion service, with your own API key: paste one here (it's kept on the Vita's memory card only; the service sees the "
+  "video's address). Tried in this order.</small></p>"
+  "<div id=k></div><script>const S=['CloudConvert (cloudconvert.com)','FreeConvert (freeconvert.com)','Rendi (rendi.dev)'];"
+  "S.forEach((n,i)=>{const p=document.createElement('p');p.innerHTML='<b>'+n+'</b><br><textarea rows=2 style=\"width:100%;display:block;"
+  "background:#221a24;color:#eee;border:1px solid #444;border-radius:8px\"></textarea><button>Save on the Vita</button> <small></small>';"
+  "const t=p.querySelector('textarea'),s=p.querySelector('small');p.querySelector('button').onclick=()=>{fetch('/key?svc='+i,"
+  "{method:'POST',body:t.value.trim()}).then(r=>r.text()).then(m=>s.textContent=m).catch(()=>s.textContent='the Vita stopped answering')};"
+  "document.getElementById('k').appendChild(p)})</script></body></html>";
 
 static void wf_reply(int c, int code, const char *type, const char *body, size_t n) {
   char h[256];
@@ -174,6 +185,22 @@ static void wf_serve(int c) {
     if (!strncasecmp(l + 2, "Content-Length:", 15)) len = atoll(l + 17);
   if (!strcmp(method, "GET") && (!strcmp(path, "/") || !strncmp(path, "/?", 2))) wf_reply(c, 200, "text/html; charset=utf-8", WF_PAGE, sizeof WF_PAGE - 1);
   else if (!strcmp(method, "POST") && !strncmp(path, "/upload", 7)) wf_upload(c, path, len, body, body_n);
+  else if (!strcmp(method, "POST") && !strncmp(path, "/key?svc=", 9)) {
+    // a conversion service's key, pasted on the page: handed to the drawing thread (wf_take)
+    int svc = atoi(path + 9);
+    static char key[2048];
+    size_t have = body_n < sizeof key - 1 ? body_n : sizeof key - 1;
+    memcpy(key, body, have);
+    while (len > 0 && (long long)have < len && have < sizeof key - 1 && wf_run) { int r = recv(c, key + have, sizeof key - 1 - have, 0); if (r <= 0) break; have += (size_t)r; }
+    key[have] = 0;
+    while (have && (key[have - 1] == ' ' || key[have - 1] == '\n' || key[have - 1] == '\r')) key[--have] = 0;
+    if (svc < 0 || svc >= CV_N || len > (long long)sizeof key - 1) { wf_text(c, 400, "Not a key the Vita can keep"); return; }
+    pthread_mutex_lock(&wfmx);
+    snprintf(wf_key[svc], sizeof wf_key[svc], "%s", key);
+    wf_key_set[svc] = 1;
+    pthread_mutex_unlock(&wfmx);
+    wf_text(c, 200, have ? "\u2713 saved on the Vita" : "\u2713 removed from the Vita");
+  }
   else wf_text(c, 404, "Nothing here");
 }
 
@@ -238,6 +265,9 @@ static void wf_stop(void) {
 // (on the drawing thread: what came in, into the loaded vault)
 static void wf_take(void) {
   pthread_mutex_lock(&wfmx);
+  if (!conv_loaded) conv_keys_load(); // (the others kept: saving writes them all)
+  for (int s = 0; s < CV_N; s++)
+    if (wf_key_set[s]) { wf_key_set[s] = 0; snprintf(conv_keys[s], sizeof conv_keys[s], "%s", wf_key[s]); conv_keys_save(); sfx(SFX_DONE); say(conv_keys[s][0] ? "A conversion key came from the Wi-Fi page" : "A conversion key was removed"); }
   int n = nwf_done;
   WfDone got[8];
   memcpy(got, wf_done, n * sizeof *got);
