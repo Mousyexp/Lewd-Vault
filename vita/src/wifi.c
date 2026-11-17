@@ -132,6 +132,7 @@ static void wf_upload(int c, const char *query, long long len, const char *alrea
   for (char *p = e2; *p; p++) *p = (char)tolower((unsigned char)*p);
   if (!strcmp(e2, "jpeg")) snprintf(e2, sizeof e2, "jpg");
   LvNew nw = {.name = d.name, .category = d.cat, .kind = d.kind, .tags = "", .source = "", .added = d.when, .width = w, .height = h, .from = WF_TMP};
+  saver_flush(); // (a rewrite of index.csv waiting to be written goes first: this appends to it)
   pthread_mutex_lock(&vmx);
   const char *why = NULL;
   int r = loaded_vault ? lv_vault_add_files(&vault, &nw, NULL, (size_t)len, e2, thumb, tn, tw, th, &d.added, &why) : -1;

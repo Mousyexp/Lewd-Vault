@@ -45,6 +45,7 @@ static void clean_next(int gone) {
 // the ones let go, into _trash (from the end, so the numbers of the rest don't move under it)
 static void clean_finish(void) {
   int n = 0;
+  saver_flush(); // (a queued write mustn't land after this one)
   pthread_mutex_lock(&vmx);
   for (int i = vault.n - 1; i >= 0; i--) if (cl_gone[i]) { if (lv_vault_delete(&vault, i, 0) == 0) n++; }
   int r = n ? lv_vault_save_index(&vault) : 0;
@@ -168,6 +169,7 @@ static void draw_health(void) {
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
   if (in.pressed & SCE_CTRL_CROSS) {
     if (hc_sel == 0 && hc.missing) {
+      saver_flush(); // (a queued write mustn't land after this one)
       pthread_mutex_lock(&vmx);
       for (int i = vault.n - 1; i >= 0; i--) if (!vault.items[i].path) lv_vault_delete(&vault, i, 0);
       int r = lv_vault_save_index(&vault);
@@ -177,6 +179,7 @@ static void draw_health(void) {
       hc.done = 0;
     } else if (hc_sel == 1 && hc.stale_views) {
       // (views.csv written again from the rows still in use)
+      saver_flush(); // (a queued write mustn't land after this one)
       pthread_mutex_lock(&vmx);
       int w = 0;
       int *to = malloc((vault.nviews + 1) * sizeof *to);

@@ -281,6 +281,7 @@ void lv_vault_init(LvVault *v, const char *root) {
 // of the day, the 14 newest kept (backup_daily in lib.rs: the same folders, so the PC's restore finds
 // them). Copied as they are, still encrypted in an Untraceable vault.
 int lv_backup_days = 14;
+static void backup_today(LvVault *v);
 void lv_local_tm(time_t t, struct tm *out);
 static void backup_daily(LvVault *v, const char *today) {
   char dir[700], from[700], to[1800];
@@ -321,6 +322,13 @@ static void backup_daily(LvVault *v, const char *today) {
     rmdir(to);
     memcpy(days[oldest], days[--nd], 16);
   }
+}
+void lv_backup_today_root(const char *root) {
+  // (the day's backup for the vault at root: a writer thread's way in, with no loaded vault to hand)
+  static LvVault tmp;
+  memset(&tmp, 0, sizeof tmp);
+  snprintf(tmp.root, sizeof tmp.root, "%s", root);
+  backup_today(&tmp);
 }
 static void backup_today(LvVault *v) {
   time_t t = time(NULL);

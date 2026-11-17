@@ -62,33 +62,6 @@ static struct { int row, card; } vb_want[24];
 static int nvb_want;
 static struct { int row, gen; LvPost *p; int n; char err[96]; int ready; } vb_list;
 
-// A picture decoded to exactly w x h: made just big enough to cover it, then cropped (a little above
-// the middle, where faces tend to be). A picture smaller than that stays its own size, cropped to the
-// shape: the GPU stretches it, nothing is made up.
-static int decode_exact(const uint8_t *b, size_t n, int w, int h, LvPixels *out) {
-  int iw = 0, ih = 0;
-  if (!lv_image_size(b, n, &iw, &ih) || iw <= 0 || ih <= 0) return -1;
-  float s = fmaxf(w / (float)iw, h / (float)ih);
-  int dw = s < 1 ? (int)ceilf(iw * s) : iw, dh = s < 1 ? (int)ceilf(ih * s) : ih;
-  LvPixels px;
-  if (lv_decode(b, n, dw, dh, &px) != 0) return -1;
-  // the crop: the card's shape, at most the card's size
-  float sh = fminf(px.w / (float)w, px.h / (float)h);
-  int cw = (int)(w * sh), ch = (int)(h * sh);
-  if (cw > px.w) cw = px.w;
-  if (ch > px.h) ch = px.h;
-  if (cw < 1 || ch < 1) { free(px.rgba); return -1; }
-  int ox = (px.w - cw) / 2, oy = (int)((px.h - ch) * 0.3f);
-  uint8_t *o = malloc((size_t)cw * ch * 4);
-  if (!o) { free(px.rgba); return -1; }
-  for (int y = 0; y < ch; y++) memcpy(o + (size_t)y * cw * 4, px.rgba + ((size_t)(y + oy) * px.w + ox) * 4, (size_t)cw * 4);
-  free(px.rgba);
-  out->rgba = o;
-  out->w = cw;
-  out->h = ch;
-  return 0;
-}
-
 static int vb_src = -1;
 static void *vb_main(void *arg) {
   (void)arg;
@@ -293,8 +266,8 @@ static void draw_videos(void) {
     vita2d_draw_texture_scale(vb_hero, 0, y0, s, HERO_H / (float)vita2d_texture_get_height(vb_hero));
     (void)s;
   } else rrect(0, y0, W, HERO_H, 0, RGBA(30, 20, 30, 255));
-  for (int k = 0; k < 120; k++) vita2d_draw_rectangle(0, y0 + HERO_H - 120 + k, W, 1, RGBA(8, 6, 10, k * 2 + 15));
-  for (int k = 0; k < 360; k++) vita2d_draw_rectangle(k, y0, 1, HERO_H, RGBA(8, 6, 10, (360 - k) * 190 / 360));
+  grad(0, y0 + HERO_H - 120, W, 120, RGBA(8, 6, 10, 255), 15, 255, 0);
+  grad(0, y0, 360, HERO_H, RGBA(8, 6, 10, 255), 190, 0, 1);
   text(30, y0 + 70, ACC, 15, src->name);
   text(30, y0 + 104, TEXT, 30, "Trending now");
   if (r0->n) {
@@ -350,7 +323,7 @@ static void draw_videos(void) {
     }
   }
   // ---- the top: back, the source (its tab of the site switcher) ----
-  for (int k = 0; k < 70; k++) vita2d_draw_rectangle(0, k, W, 1, RGBA(8, 6, 10, (70 - k) * 3));
+  grad(0, 0, W, 70, RGBA(8, 6, 10, 255), 210, 0, 0);
   rrect(16, 10, 44, 40, 20, with_alpha(TEXT, 40));
   icon("back", 38, 30, TEXT);
   if (hit(16, 10, 44, 40)) { sfx(SFX_BACK); screen = S_WEB; return; }

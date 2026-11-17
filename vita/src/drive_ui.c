@@ -175,7 +175,8 @@ static void draw_drive(void) {
     else if (go >= 0 && !fetch) {
       // everything written first, then nothing more until it's done
       save_edits_now();
-      lv_vault_save_views(&vault);
+      views_save_async();
+      saver_flush();
       resume_save();
       sfx(SFX_START);
       drive_sync(vault.root, drive_folder_of_vault(), 1);

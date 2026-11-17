@@ -56,11 +56,11 @@ static int nwdone;
 
 // the full view's job: a sample to fetch, or a save to prepare
 static struct {
-  int post, gen, save, vgen, full;
-  uint8_t *raw; // (a save: the sample's bytes, handed over; a video's are in its file)
+  int post, gen, save, vgen, full, hires;
+  uint8_t *raw; // (a save: the sample's bytes, handed over; a video's are in its file; hires: a copy)
   size_t rawn;
   char cat[64];
-} big_job = {-1, 0, 0, 0, 0, NULL, 0, ""};
+} big_job = {-1, 0, 0, 0, 0, 0, NULL, 0, ""};
 // the search a page is for, copied when asked (the settings may change while it loads)
 static struct { int site, ratings, sort, span; char q[128], key[200], hidden[512]; } job_q;
 static int saving;
@@ -378,6 +378,7 @@ static void write_save(const LvPost *post, WDone *d, int vgen_asked, const char 
   LvNew nw = {.name = d->name, .category = d->cat, .kind = video ? "video" : gif ? "gif" : "image", .tags = post->tags,
               .source = post->page, .added = d->when, .nsfw = RATING_NSFW[ri], .quality = 5, .width = d->w, .height = d->h,
               .from = d->a ? NULL : video_path};
+  saver_flush(); // (a rewrite of index.csv waiting to be written goes first: this appends to it)
   size_t need = d->a ? d->an : 0;
   if (!d->a) { struct stat st; if (stat(video_path, &st) == 0) need = (size_t)st.st_size; d->an = need; }
   pthread_mutex_lock(&vmx);
@@ -409,7 +410,8 @@ static void *sample_main(void *arg) {
     pthread_mutex_lock(&wmx);
     while (worker_run && big_job.post < 0) pthread_cond_wait(&wcv, &wmx);
     if (!worker_run) { pthread_mutex_unlock(&wmx); break; }
-    int p = big_job.post, gen = big_job.gen, save = big_job.save, vgen_asked = big_job.vgen, full = big_job.full;
+    int p = big_job.post, gen = big_job.gen, save = big_job.save, vgen_asked = big_job.vgen, full = big_job.full, hires = big_job.hires;
+    big_job.hires = 0;
     char cat[64];
     snprintf(cat, sizeof cat, "%s", big_job.cat);
     uint8_t *raw = big_job.raw;
@@ -449,7 +451,11 @@ static void *sample_main(void *arg) {
       uint8_t *b = NULL;
       size_t n = 0;
       int st;
-      if (video) {
+      if (hires && raw) {
+        // zoomed in: the sample again, from the bytes already here, at up to 1920 px
+        b = raw; raw = NULL; n = rawn;
+        st = 200;
+      } else if (video) {
         // a video: the whole file, straight onto the card (it never has to fit in memory), played
         // from there and copied into the vault from there by a save
         snprintf(video_path, sizeof video_path, DATA "/play.%s", post.ext);
@@ -464,7 +470,7 @@ static void *sample_main(void *arg) {
         snprintf(d.ext, sizeof d.ext, "%s", post.ext);
       } else {
         d.a = b; d.an = n;
-        if (lv_decode(b, n, 1920, 1920, &d.px) != 0) {
+        if (lv_decode(b, n, hires ? 1920 : W, hires ? 1920 : H, &d.px) != 0) {
           // (a GIF, or something else the Vita can't decode: the preview stands in)
           snprintf(d.err, sizeof d.err, "%s", !strcmp(post.ext, "gif") ? "GIF: the preview is shown" : "This picture can't be shown");
         }
@@ -574,7 +580,7 @@ static unsigned wchrome_until;
 
 static void wv_drop(void) {
   if (wv_vid) { video_close_later(wv_vid); wv_vid = NULL; }
-  free_later(wv_tex);
+  release_tex(wv_tex);
   wv_tex = NULL;
   wv_tex_post = -1;
   free(wv_raw);
@@ -674,10 +680,12 @@ static void web_take_results(void) {
       else resume_sel = -1;
     }
   }
-  int n = nwdone;
+  // (at most six a frame: the rest the next)
+  int n = nwdone < 6 ? nwdone : 6;
   WDone got[24];
   memcpy(got, wdone, n * sizeof *got);
-  nwdone = 0;
+  memmove(wdone, wdone + n, (nwdone - n) * sizeof *wdone);
+  nwdone -= n;
   pthread_mutex_unlock(&wmx);
   for (int k = 0; k < n; k++) {
     WDone *d = &got[k];
@@ -695,7 +703,7 @@ static void web_take_results(void) {
       if (d->post == wv) {
         wv_loading = 0;
         if (d->err[0]) { snprintf(wv_err, sizeof wv_err, "%s", d->err); wv_failed = !(d->px.rgba); }
-        if (d->px.rgba) { free_later(wv_tex); wv_tex = upload(&d->px); wv_tex_post = d->post; }
+        if (d->px.rgba) { release_tex(wv_tex); wv_tex = screen_upload(1, &d->px); wv_tex_post = d->post; }
         free(wv_raw);
         wv_raw = d->a; d->a = NULL;
         wv_rawn = d->an;
@@ -1165,9 +1173,12 @@ static void open_search_sheet(void) {
 // ---------- the grid ----------
 
 static void draw_web(void) {
+  PT("web in");
   web_start();
+  PT("web_start");
   add_site_poll();
   if (!saved_src && loaded_vault) saved_build();
+  PT("saved_build");
   if (!nposts && !wloading && !wend && !werr[0]) {
     web_search();
     if (!resume_checked) { resume_checked = 1; resume_pages = cfg.wpages; resume_sel = cfg.wpages > 0 ? cfg.wsel : -1; }
@@ -1340,6 +1351,21 @@ static void draw_webview(void) {
   }
   if (wv_err[0]) text_center(W / 2, (int)avail_h - 50, ACC2, 15, wv_err);
 
+  // (zoomed in past 1.25x: the sample decoded again at up to 1920 px, from the bytes already here)
+  static int wv_hi_post = -1;
+  if (wv_hi_post >= 0 && wv_hi_post != wv) wv_hi_post = -1;
+  if (wzoom > 1.25f && wv_hi_post != wv && wv_tex_post == wv && wv_raw_post == wv && wv_raw && !saving && !lv_post_is_video(p)) {
+    uint8_t *copy = malloc(wv_rawn);
+    if (copy) {
+      memcpy(copy, wv_raw, wv_rawn);
+      pthread_mutex_lock(&wmx);
+      free(big_job.raw);
+      big_job.post = wv; big_job.gen = wgen; big_job.save = 0; big_job.hires = 1; big_job.raw = copy; big_job.rawn = wv_rawn;
+      pthread_cond_broadcast(&wcv);
+      pthread_mutex_unlock(&wmx);
+      wv_hi_post = wv;
+    }
+  }
   // --- touch: swipe, pinch, drag when zoomed, tap for the controls ---
   static float pd0, z0;
   if (in.touching && wdetails_y < 0.5f) {
@@ -1383,7 +1409,7 @@ static void draw_webview(void) {
   if (frame_no < wchrome_until || wdetails) {
     int a = frame_no + 30 > wchrome_until && !wdetails ? (int)((wchrome_until - frame_no) * 8) : 240;
     if (a > 240 || a < 0) a = 240;
-    for (int k = 0; k < 64; k++) vita2d_draw_rectangle(0, k, W, 1, RGBA(0, 0, 0, (64 - k) * a / 400));
+    grad(0, 0, W, 64, RGBA(0, 0, 0, 255), 64 * a / 400, 0, 0);
     vita2d_draw_line(30, 30, 42, 18, with_alpha(TEXT, a));
     vita2d_draw_line(30, 30, 42, 42, with_alpha(TEXT, a));
     vita2d_draw_line(31, 30, 43, 18, with_alpha(TEXT, a));

@@ -101,6 +101,8 @@ int lv_vault_add(LvVault *v, const LvNew *n, const uint8_t *data, size_t len, co
 // file has no such column.
 int lv_item_set(LvVault *v, int i, const char *column, const char *value);
 int lv_vault_save_index(LvVault *v);
+// The day's backup of the vault at root (index.csv, views.csv, settings.json), for a writer thread.
+void lv_backup_today_root(const char *root);
 // The item's file (and its own thumbnail and clip) into the vault's _trash folder, as the PC does
 // for an Untraceable vault, and its row out of index.csv (saved). 0 on success.
 int lv_vault_delete(LvVault *v, int i, int save); // (save 0: several in a row, then lv_vault_save_index)

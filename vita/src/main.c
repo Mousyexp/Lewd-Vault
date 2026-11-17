@@ -48,6 +48,15 @@
 #include "net.h"
 #include <psp2/kernel/clib.h>
 #ifdef LV_DEBUG
+// (debug builds: PT("label") logs the time since the last mark when it's over 4 ms)
+static uint64_t pt_last;
+#define PT0() (pt_last = sceKernelGetProcessTimeWide())
+#define PT(label) do { uint64_t n_ = sceKernelGetProcessTimeWide(); if (pt_last && n_ - pt_last > 4000) { LOG("pt %s %.1fms\n", label, (n_ - pt_last) / 1000.0); n_ = sceKernelGetProcessTimeWide(); } pt_last = n_; } while (0)
+#else
+#define PT(label) do { } while (0)
+#define PT0() do { } while (0)
+#endif
+#ifdef LV_DEBUG
 #define LOG(...) do { char lb_[256]; int ln_ = snprintf(lb_, sizeof lb_, __VA_ARGS__); SceUID lf_ = sceIoOpen("ux0:data/LWDV00001/log.txt", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666); if (lf_ >= 0) { sceIoWrite(lf_, lb_, ln_ > 255 ? 255 : ln_); sceIoClose(lf_); } } while (0)
 #else
 #define LOG(...) do { } while (0)
@@ -431,15 +440,44 @@ static int pixels_close(const LvPixels *a, const LvPixels *b) {
   return n && diff / (n * 3) < 24;
 }
 
-static int thumb_pixels(int i, LvPixels *px) {
+// A picture decoded to exactly w x h: made just big enough to cover it, then cropped (a little above
+// the middle, where faces tend to be). A picture smaller than that stays its own size, cropped to the
+// shape: the GPU stretches it, nothing is made up.
+static int decode_exact(const uint8_t *b, size_t n, int w, int h, LvPixels *out) {
+  int iw = 0, ih = 0;
+  if (!lv_image_size(b, n, &iw, &ih) || iw <= 0 || ih <= 0) return -1;
+  float s = fmaxf(w / (float)iw, h / (float)ih);
+  int dw = s < 1 ? (int)ceilf(iw * s) : iw, dh = s < 1 ? (int)ceilf(ih * s) : ih;
+  LvPixels px;
+  if (lv_decode(b, n, dw, dh, &px) != 0) return -1;
+  // the crop: the card's shape, at most the card's size
+  float sh = fminf(px.w / (float)w, px.h / (float)h);
+  int cw = (int)(w * sh), ch = (int)(h * sh);
+  if (cw > px.w) cw = px.w;
+  if (ch > px.h) ch = px.h;
+  if (cw < 1 || ch < 1) { free(px.rgba); return -1; }
+  int ox = (px.w - cw) / 2, oy = (int)((px.h - ch) * 0.3f);
+  uint8_t *o = malloc((size_t)cw * ch * 4);
+  if (!o) { free(px.rgba); return -1; }
+  for (int y = 0; y < ch; y++) memcpy(o + (size_t)y * cw * 4, px.rgba + ((size_t)(y + oy) * px.w + ox) * 4, (size_t)cw * 4);
+  free(px.rgba);
+  out->rgba = o;
+  out->w = cw;
+  out->h = ch;
+  return 0;
+}
+
+// The size each item's card wants its thumbnail at (0: a cell's), set as the screen asks for it
+static unsigned short *tsize_w, *tsize_h;
+static int thumb_pixels(int i, LvPixels *px, int want_w, int want_h) {
   LvItem *it = &vault.items[i];
   char cp[800];
-  snprintf(cp, sizeof cp, "%s/%08lx%08lx-w.jpg", cache_dir, fnv(it->thumb), fnv(it->id)); // (-w: whole, not cropped)
+  // (exactly the card's pixels: the card's size, the picture covering it and cropped; cached at it)
+  int cw = want_w > 0 ? want_w : CELL_W, ch = want_h > 0 ? want_h : CELL_H;
+  snprintf(cp, sizeof cp, "%s/%08lx%08lx-%dx%d.jpg", cache_dir, fnv(it->thumb), fnv(it->id), cw, ch);
   size_t n = 0;
   uint8_t *b = lv_read_all(cp, lv_key(&vault), &n);
   if (b) {
-    int cw, ch;
-    cover_size(b, n, &cw, &ch);
     int r = lv_decode(b, n, cw, ch, px);
     free(b);
     if (r == 0) return 0;
@@ -447,11 +485,8 @@ static int thumb_pixels(int i, LvPixels *px) {
   b = lv_thumb_bytes(&vault, it, &n);
   if (!b && it->path && !is_video(it) && !is_gif(it)) b = lv_read_all(it->path, lv_key(&vault), &n); // (no thumbnail: the picture itself)
   if (!b) return -1;
-  // cover the card: decode to its width (the card crops the height)
-  int sw = 0, shh = 0, small = lv_image_size(b, n, &sw, &shh) && sw <= CELL_W * 3 / 2 && shh <= CELL_H * 3 / 2;
-  int cw, ch;
-  cover_size(b, n, &cw, &ch);
-  int r = lv_decode(b, n, cw, ch, px);
+  int sw = 0, shh = 0, small = lv_image_size(b, n, &sw, &shh) && sw <= cw * 3 / 2 && shh <= ch * 3 / 2;
+  int r = decode_exact(b, n, cw, ch, px);
   free(b);
   if (r != 0) return -1;
   if (small) return 0; // (already card-sized, like the Browser's saves: nothing to gain from a copy)
@@ -484,6 +519,7 @@ static void *worker(void *arg) {
     } else {
       item = want[0];
       memmove(want, want + 1, --nwant * sizeof *want);
+      if (tsize_w && item >= 0 && item < vault.n) { mw = tsize_w[item]; mh = tsize_h[item]; }
     }
     int full = ndone >= (int)(sizeof done / sizeof *done);
     int my_vgen = vgen;
@@ -500,7 +536,7 @@ static void *worker(void *arg) {
       if (b) { r = lv_decode(b, n, mw, mh, &px); free(b); }
       if (r != 0) { b = lv_thumb_bytes(&vault, it, &n); if (b) { r = lv_decode(b, n, mw, mh, &px); free(b); } }
     } else {
-      r = thumb_pixels(item, &px);
+      r = thumb_pixels(item, &px, mw, mh);
     }
     pthread_mutex_unlock(&vmx);
     pthread_mutex_lock(&mx);
@@ -516,17 +552,24 @@ static void *worker(void *arg) {
 // Textures are freed at the start of the next frame, once the GPU is done with the last one: never
 // while a frame is being put together (it may already use them). The list grows as it must.
 static vita2d_texture **pending_free;
+static unsigned *pending_at; // (the frame each was let go in)
 static int npending, cappending;
+static pthread_mutex_t fmx = PTHREAD_MUTEX_INITIALIZER; // (a video closing on its own thread frees too)
 static void free_later(vita2d_texture *t) {
   if (!t) return;
+  pthread_mutex_lock(&fmx);
   if (npending == cappending) {
     int cap = cappending ? cappending * 2 : 64;
     vita2d_texture **p = realloc(pending_free, cap * sizeof *p);
-    if (!p) return; // (a leak, not a crash)
-    pending_free = p;
+    if (p) pending_free = p;
+    unsigned *pa = p ? realloc(pending_at, cap * sizeof *pa) : NULL;
+    if (pa) pending_at = pa;
+    if (!p || !pa) { pthread_mutex_unlock(&fmx); return; } // (a leak, not a crash)
     cappending = cap;
   }
+  pending_at[npending] = frame_no;
   pending_free[npending++] = t;
+  pthread_mutex_unlock(&fmx);
 }
 static vita2d_texture *upload(const LvPixels *px) {
   vita2d_texture *t = vita2d_create_empty_texture(px->w, px->h);
@@ -596,6 +639,37 @@ static vita2d_texture *put_cell(int cell, const LvPixels *px) {
 
 
 static vita2d_texture *big_tex;
+static vita2d_texture *upload(const LvPixels *px);
+static void free_later(vita2d_texture *t);
+
+// Screen-size pictures (the full views'): copied into one of three buffers made once, a view of exactly
+// the picture's size onto it (no GPU memory made or freed per picture; three, so one is never written
+// while the GPU may still draw it). Larger ones (zoomed in) get a texture of their own.
+static vita2d_texture *scr_buf[6];
+static vita2d_texture scr_view[6];
+static int scr_next[2];
+static int is_view(const vita2d_texture *t) { return t >= scr_view && t < scr_view + 6; }
+static void release_tex(vita2d_texture *t) { if (t && !is_view(t)) free_later(t); }
+// set: 0 the Library's full view, 1 the Browser's
+static vita2d_texture *screen_upload(int set, const LvPixels *px) {
+  if (!px->rgba || px->w <= 0 || px->h <= 0) return NULL;
+  if (px->w > W || px->h > H) return upload(px);
+  int k = set * 3 + scr_next[set];
+  scr_next[set] = (scr_next[set] + 1) % 3;
+  if (!scr_buf[k]) {
+    scr_buf[k] = vita2d_create_empty_texture(W, H);
+    if (!scr_buf[k]) return upload(px);
+  }
+  unsigned stride = vita2d_texture_get_stride(scr_buf[k]);
+  uint8_t *d = vita2d_texture_get_datap(scr_buf[k]);
+  for (int y = 0; y < px->h; y++) memcpy(d + (size_t)y * stride, px->rgba + (size_t)y * px->w * 4, (size_t)px->w * 4);
+  vita2d_texture *v = &scr_view[k];
+  *v = *scr_buf[k];
+  sceGxmTextureInitLinearStrided(&v->gxm_tex, d, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, px->w, px->h, stride);
+  sceGxmTextureSetMinFilter(&v->gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
+  sceGxmTextureSetMagFilter(&v->gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
+  return v;
+}
 static int big_item = -1, big_gen, big_failed;
 // (a slideshow that fades: the picture before stays a moment, fading out under the new one)
 static vita2d_texture *fade_tex;
@@ -610,19 +684,21 @@ static vita2d_texture *thumb_of(int i) {
 }
 static void take_results(void) {
   pthread_mutex_lock(&mx);
-  int n = ndone;
+  // (at most six a frame: the rest the next, so a flood of them never holds a frame up)
+  int n = ndone < 6 ? ndone : 6;
   Done got[16];
   memcpy(got, done, n * sizeof *got);
-  ndone = 0;
+  memmove(done, done + n, (ndone - n) * sizeof *done);
+  ndone -= n;
   pthread_mutex_unlock(&mx);
   for (int k = 0; k < n; k++) {
     Done *d = &got[k];
     if (d->vgen != vgen || d->item >= vault.n) { free(d->px.rgba); continue; }
     if (d->big) {
       if (d->gen == big_gen) {
-        if (xfade_wanted && big_tex && big_item != d->item) { free_later(fade_tex); fade_tex = big_tex; fade_at = frame_no; }
-        else free_later(big_tex);
-        big_tex = d->px.rgba ? upload(&d->px) : NULL;
+        if (xfade_wanted && big_tex && big_item != d->item) { release_tex(fade_tex); fade_tex = big_tex; fade_at = frame_no; }
+        else release_tex(big_tex);
+        big_tex = d->px.rgba ? screen_upload(0, &d->px) : NULL;
         big_item = d->item;
         LOG("big %d: %dx%d tex=%p\n", d->item, d->px.w, d->px.h, (void *)big_tex);
         big_failed = !big_tex;
@@ -643,6 +719,13 @@ static void take_results(void) {
 }
 // The cards the screen wants now; the ones asked for before and no longer wanted go back to "not
 // asked" (only those few are looked at, not every item, every frame).
+// The size a card is drawn at, for its thumbnail (at most a cell's; the same shape)
+static void want_size(int item, float w, float h) {
+  if (!tsize_w || item < 0 || item >= vault.n || w < 1 || h < 1) return;
+  float s = fminf(1, fminf(CELL_W / w, CELL_H / h));
+  tsize_w[item] = (unsigned short)(w * s + 0.5f);
+  tsize_h[item] = (unsigned short)(h * s + 0.5f);
+}
 static void ask_thumbs(const int *items, int n) {
   pthread_mutex_lock(&mx);
   for (int k = 0; k < nwant; k++) if (tstate[want[k]] == 1) tstate[want[k]] = 0;
@@ -652,13 +735,14 @@ static void ask_thumbs(const int *items, int n) {
   if (nwant) pthread_cond_signal(&cv);
   pthread_mutex_unlock(&mx);
 }
+static int big_hi, big_hi_item = -1;
 static void ask_big(int item) {
   pthread_mutex_lock(&mx);
   big_gen++;
   big_ask.item = item;
   big_ask.gen = big_gen;
-  big_ask.max_w = 1920;
-  big_ask.max_h = 1920;
+  big_ask.max_w = big_hi ? 1920 : W; // (the screen's pixels; twice that only once zoomed in)
+  big_ask.max_h = big_hi ? 1920 : H;
   big_failed = 0;
   pthread_cond_signal(&cv);
   pthread_mutex_unlock(&mx);
@@ -666,13 +750,15 @@ static void ask_big(int item) {
 static void drop_textures(void) {
   vita2d_wait_rendering_done();
   for (int k = 0; k < SLOTS; k++) { slots[k].tex = NULL; slots[k].item = -1; slots[k].used = 0; } // (the cells stay: the atlases are for good)
-  if (big_tex) vita2d_free_texture(big_tex);
+  if (big_tex && !is_view(big_tex)) vita2d_free_texture(big_tex);
   big_tex = NULL;
   big_item = -1;
-  if (fade_tex) vita2d_free_texture(fade_tex);
+  if (fade_tex && !is_view(fade_tex)) vita2d_free_texture(fade_tex);
   fade_tex = NULL;
+  pthread_mutex_lock(&fmx);
   for (int k = 0; k < npending; k++) vita2d_free_texture(pending_free[k]);
   npending = 0;
+  pthread_mutex_unlock(&fmx);
 }
 
 // Draws a texture to cover a box (cropped to fill it, like object-fit: cover).
@@ -861,6 +947,99 @@ static void apply_theme(void) {
 
 static int sel;
 static float scroll, scroll_v;
+
+// ---------- the writer: the vault's lists written to the card off the drawing thread ----------
+// The drawing thread only makes the text (fast, in memory); this thread makes the day's backup and
+// writes it (slow on a memory card, and more so encrypted). The same file asked for twice before it's
+// written is written once, the newer text. saver_flush() waits for all of it (a vault closing, a sync
+// starting, the vault read again).
+typedef struct { char root[512], name[32]; uint8_t key[32]; int has_key; char *data; size_t n; } SaveJob;
+static SaveJob sjobs[4];
+static int nsjobs;
+static volatile int saver_busy, saver_failed;
+static pthread_mutex_t smx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t scv = PTHREAD_COND_INITIALIZER;
+static int saver_started;
+static void *saver_main(void *arg) {
+  (void)arg;
+  for (;;) {
+    pthread_mutex_lock(&smx);
+    while (!nsjobs) pthread_cond_wait(&scv, &smx);
+    SaveJob j = sjobs[0];
+    memmove(sjobs, sjobs + 1, --nsjobs * sizeof *sjobs);
+    saver_busy = 1;
+    pthread_mutex_unlock(&smx);
+    lv_backup_today_root(j.root);
+    char p[600];
+    snprintf(p, sizeof p, "%s/%s", j.root, j.name);
+    if (lv_write_all(p, j.has_key ? j.key : NULL, j.data, j.n) != 0) saver_failed = 1;
+    free(j.data);
+    memset(j.key, 0, sizeof j.key);
+    saver_busy = 0;
+  }
+  return NULL;
+}
+// data: malloc'd, the writer's from now on
+static void saver_start(void) {
+  if (saver_started) return;
+  pthread_t t;
+  pthread_attr_t at;
+  pthread_attr_init(&at);
+  pthread_attr_setstacksize(&at, 64 * 1024);
+  saver_started = pthread_create(&t, &at, saver_main, NULL) == 0;
+}
+static void save_async(const char *name, char *data) {
+  if (!data) return;
+  saver_start();
+  if (!saver_started) {
+    { // (no thread: written here, as before)
+      lv_backup_today_root(vault.root);
+      char p[600];
+      snprintf(p, sizeof p, "%s/%s", vault.root, name);
+      if (lv_write_all(p, lv_key(&vault), data, strlen(data)) != 0) saver_failed = 1;
+      free(data);
+      return;
+    }
+  }
+  pthread_mutex_lock(&smx);
+  int k = 0;
+  for (; k < nsjobs; k++) if (!strcmp(sjobs[k].name, name) && !strcmp(sjobs[k].root, vault.root)) { free(sjobs[k].data); break; }
+  if (k == nsjobs) {
+    if (nsjobs == 4) { pthread_mutex_unlock(&smx); while (nsjobs == 4) sceKernelDelayThread(2000); pthread_mutex_lock(&smx); k = nsjobs; }
+    nsjobs++;
+  }
+  SaveJob *j = &sjobs[k];
+  snprintf(j->root, sizeof j->root, "%s", vault.root);
+  snprintf(j->name, sizeof j->name, "%s", name);
+  j->has_key = vault.has_key;
+  if (vault.has_key) memcpy(j->key, vault.key, 32);
+  j->data = data;
+  j->n = strlen(data);
+  pthread_cond_signal(&scv);
+  pthread_mutex_unlock(&smx);
+}
+static void saver_flush(void) {
+  for (int k = 0; k < 2000 && (nsjobs || saver_busy); k++) sceKernelDelayThread(2000);
+}
+// views.csv, when it has changed
+static void views_save_async(void) {
+  if (!loaded_vault || !vault.views_dirty) return;
+  char *t = lv_views_csv(&vault);
+  if (!t) return;
+  vault.views_dirty = 0;
+  save_async("views.csv", t);
+}
+// index.csv, when it has changed (never without its columns)
+static int index_save_async(void) {
+  if (!loaded_vault || !vault.index_dirty) return 0;
+  if (!vault.nhead) return -1;
+  char *t = lv_index_csv(&vault);
+  if (!t) return -1;
+  vault.index_dirty = 0;
+  save_async("index.csv", t);
+  return 0;
+}
+
 static void close_vault(void) {
   if (!loaded_vault) return;
   pthread_mutex_lock(&mx);
@@ -868,6 +1047,7 @@ static void close_vault(void) {
   nwant = 0;
   big_ask.item = -1;
   pthread_mutex_unlock(&mx);
+  saver_flush();
   pthread_mutex_lock(&vmx);
   lv_vault_save_views(&vault);
   drop_textures();
@@ -931,7 +1111,10 @@ static void finish_open(void) {
   tstate = calloc(vault.n + 1, 1);
   free(slot_of);
   slot_of = malloc((vault.n + 1) * sizeof *slot_of);
-  if (!tstate || !slot_of) {
+  free(tsize_w); free(tsize_h);
+  tsize_w = calloc(vault.n + 1, sizeof *tsize_w);
+  tsize_h = calloc(vault.n + 1, sizeof *tsize_h);
+  if (!tstate || !slot_of || !tsize_w || !tsize_h) {
     pthread_mutex_unlock(&mx);
     say("Not enough memory for this vault");
     pthread_mutex_lock(&vmx);
@@ -1140,6 +1323,42 @@ static void draw_bar(void) {
   }
 }
 
+
+// ---------- gradients: one stretched, tinted ramp each (not a rectangle per line) ----------
+// ramps[0] alpha 0->255 down, [1] 255->0 down, [2] 0->255 across, [3] 255->0 across (white)
+static vita2d_texture *ramps[4];
+static void ramps_init(void) {
+  for (int k = 0; k < 4; k++) {
+    int across = k >= 2;
+    ramps[k] = vita2d_create_empty_texture(across ? 256 : 1, across ? 1 : 256);
+    if (!ramps[k]) continue;
+    uint32_t *d = vita2d_texture_get_datap(ramps[k]);
+    unsigned stride = vita2d_texture_get_stride(ramps[k]) / 4;
+    for (int i = 0; i < 256; i++) {
+      unsigned a = (k & 1) ? 255 - i : i;
+      d[across ? i : i * stride] = RGBA(255, 255, 255, a);
+    }
+    vita2d_texture_set_filters(ramps[k], SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
+  }
+}
+// (x, y, w, h) in col's colour, its alpha going from a0 to a1 (down, or across)
+static void grad(float x, float y, float w, float h, unsigned col, int a0, int a1, int across) {
+  if (!ramps[0]) ramps_init();
+  if (a0 < 0) a0 = 0;
+  if (a0 > 255) a0 = 255;
+  if (a1 < 0) a1 = 0;
+  if (a1 > 255) a1 = 255;
+  if (w <= 0 || h <= 0 || (a0 == 0 && a1 == 0)) return;
+  int up = a0 <= a1;
+  vita2d_texture *t = ramps[(across ? 2 : 0) + (up ? 0 : 1)];
+  if (!t) return;
+  // the part of the ramp from a0 to a1 (on the falling one, 255 - a)
+  int p0 = up ? a0 : 255 - a0, p1 = up ? a1 : 255 - a1;
+  float span = p1 - p0 < 1 ? 1 : p1 - p0;
+  unsigned c = (col & 0x00FFFFFF) | 0xFF000000u;
+  if (across) vita2d_draw_texture_tint_part_scale(t, x, y, p0, 0, span, 1, w / span, h, c);
+  else vita2d_draw_texture_tint_part_scale(t, x, y, 0, p0, 1, span, w, h / span, c);
+}
 static int chip(int x, int y, const char *label, int on) {
   int w = text_w(17, label) + 36;
   rrect(x, y, w, 38, 19, on ? ACC : SURF2);
@@ -1225,7 +1444,7 @@ static void draw_library(void) {
     else {
       rrect(x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, 8, SURF);
       if (tstate[i] == 3) text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No picture");
-      else if (nw < 64) wanted[nw++] = i;
+      else if (nw < 64) { want_size(i, cw, ch); wanted[nw++] = i; }
     }
     if (is_video(it) || is_gif(it)) {
       char d[24];
@@ -1254,7 +1473,8 @@ static void draw_library(void) {
     }
   }
   // (and the next screenful, ready before it's needed)
-  for (int k = last; k < last + 18 && k < nshown && nw < 64; k++) if (!thumb_of(shown[k]) && tstate[shown[k]] != 3) wanted[nw++] = shown[k];
+  for (int k = last; k < last + 18 && k < nshown && nw < 64; k++)
+    if (!thumb_of(shown[k]) && tstate[shown[k]] != 3) { if (k < lgrid.n) want_size(shown[k], lgrid.r[k].w, lgrid.r[k].h); wanted[nw++] = shown[k]; }
   ask_thumbs(wanted, nw);
   if (!nshown) {
     text_center(W / 2, TOP + 150, DIM, 20, query[0] ? "Nothing matches that search" : "Nothing here");
@@ -1361,13 +1581,90 @@ static void video_close_later(LvVideo *v) {
   if (nclosing < 8) closing[nclosing++] = v;
   // (eight in one frame can't happen; if it did, a leak is better than a crash)
 }
+// (closed on a thread of their own: a software player's threads take a while to stop, and the screen
+// mustn't wait for them; it waits three frames first, so the GPU is surely done with the last picture)
+static LvVideo *to_close[16];
+static int nto_close, closer_on;
+static pthread_mutex_t cmx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ccv = PTHREAD_COND_INITIALIZER;
+// ...and videos are opened there too (opening a file, reading its streams, starting its decoder: too
+// slow for the drawing thread): the full view asks, shows the thumbnail meanwhile, and takes the player
+// when it's ready, if it's still for the same picture (vopen_gen).
+static struct { char path[800], clip[800]; int loop; uint8_t key[32]; int has_key, gen; } vopen_job;
+static volatile int vopen_want, vopen_gen, vopen_ready_gen = -1, vopen_ready_clip;
+static LvVideo *volatile vopen_ready;
+static void *closer_main(void *arg) {
+  (void)arg;
+  for (;;) {
+    pthread_mutex_lock(&cmx);
+    while (!nto_close && !vopen_want) pthread_cond_wait(&ccv, &cmx);
+    if (vopen_want) {
+      typeof(vopen_job) j = vopen_job;
+      vopen_want = 0;
+      pthread_mutex_unlock(&cmx);
+      int clip = 0;
+      LvVideo *v = j.path[0] ? lv_video_open(j.path, j.has_key ? j.key : NULL, j.loop) : NULL;
+      if (!v && j.clip[0]) { v = lv_video_open(j.clip, j.has_key ? j.key : NULL, 1); clip = 1; }
+      memset(j.key, 0, sizeof j.key);
+      pthread_mutex_lock(&cmx);
+      if (v && j.gen == vopen_gen && !vopen_ready) { vopen_ready = v; vopen_ready_gen = j.gen; vopen_ready_clip = clip; v = NULL; }
+      pthread_mutex_unlock(&cmx);
+      if (v) lv_video_close(v); // (too late: another picture by now)
+      continue;
+    }
+    LvVideo *v = to_close[--nto_close];
+    pthread_mutex_unlock(&cmx);
+    sceKernelDelayThread(50000);
+    lv_video_close(v);
+  }
+  return NULL;
+}
+static void video_open_async(const char *path, const char *clip, int loop) {
+  pthread_mutex_lock(&cmx);
+  vopen_gen++;
+  snprintf(vopen_job.path, sizeof vopen_job.path, "%s", path ? path : "");
+  snprintf(vopen_job.clip, sizeof vopen_job.clip, "%s", clip ? clip : "");
+  vopen_job.loop = loop;
+  vopen_job.has_key = vault.has_key;
+  if (vault.has_key) memcpy(vopen_job.key, vault.key, 32);
+  vopen_job.gen = vopen_gen;
+  vopen_want = 1;
+  pthread_cond_signal(&ccv);
+  pthread_mutex_unlock(&cmx);
+}
+// (a player opened for a picture no longer shown, or not yet taken: let go)
+static void video_open_cancel(void) {
+  pthread_mutex_lock(&cmx);
+  vopen_gen++;
+  vopen_want = 0;
+  LvVideo *v = vopen_ready;
+  vopen_ready = NULL;
+  pthread_mutex_unlock(&cmx);
+  if (v) video_close_later(v);
+}
+static void closer_start(void) {
+  if (closer_on) return;
+  pthread_t t;
+  pthread_attr_t at;
+  pthread_attr_init(&at);
+  pthread_attr_setstacksize(&at, 64 * 1024);
+  closer_on = pthread_create(&t, &at, closer_main, NULL) == 0 ? 1 : -1;
+}
 static void videos_close_now(void) {
   if (!nclosing) return;
-  vita2d_wait_rendering_done();
-  for (int k = 0; k < nclosing; k++) lv_video_close(closing[k]);
+  closer_start();
+  pthread_mutex_lock(&cmx);
+  for (int k = 0; k < nclosing; k++) {
+    if (closer_on == 1 && nto_close < 16) to_close[nto_close++] = closing[k];
+    else { pthread_mutex_unlock(&cmx); vita2d_wait_rendering_done(); lv_video_close(closing[k]); pthread_mutex_lock(&cmx); }
+  }
   nclosing = 0;
+  pthread_cond_signal(&ccv);
+  pthread_mutex_unlock(&cmx);
 }
+static void video_open_cancel(void);
 static void stop_video(void) {
+  video_open_cancel();
   if (vid) {
     // Continue watching: a real video left part-way (as the PC: after 20 s; forgotten near the end)
     if (!vid_clip && vid_item >= 0 && vid_item < vault.n && resume_to < 0) {
@@ -1400,6 +1697,7 @@ static void show_item(int k) {
   vk = k;
   LvItem *it = &vault.items[shown[vk]];
   zoom = 1; pan_x = pan_y = 0;
+  big_hi_item = -1;
   mo_x = (rnd() % 2001) / 1000.0f - 1; mo_y = (rnd() % 2001) / 1000.0f - 1;
   char now[40];
   now_iso(now, sizeof now);
@@ -1410,10 +1708,8 @@ static void show_item(int k) {
   if (is_video(it) || is_gif(it)) {
     char clip[800];
     int can = is_video(it) && it->path && (ext_is(it->path, "mp4", "m4v", "mov") || ext_is(it->path, "webm", "mkv", NULL));
-    if (can) { vid = lv_video_open(it->path, lv_key(&vault), slideshow); vid_clip = 0; }
-    if (!vid && lv_clip_path(&vault, it, clip, sizeof clip)) { vid = lv_video_open(clip, lv_key(&vault), 1); vid_clip = 1; }
-    if (vid) { vid_item = shown[vk]; lv_video_set_volume(vid, cfg.volume * 32768 / 100); }
-    if (vid && !vid_clip && !slideshow) { int t = resume_of(it); if (t > 0) resume_to = (int64_t)t * 1000; }
+    int has_clip = lv_clip_path(&vault, it, clip, sizeof clip);
+    if (can || has_clip) video_open_async(can ? it->path : NULL, has_clip ? clip : NULL, slideshow);
   }
   ask_big(shown[vk]);
 }
@@ -1432,17 +1728,24 @@ static void open_viewer(int k, int show) {
   swipe_x = 0;
   chrome_until = frame_no + 180;
   screen = S_VIEWER;
+  PT("open_viewer start");
   scePowerSetArmClockFrequency(444);
+  PT("clock");
   show_item(k);
+  PT("show_item");
 }
 static void close_viewer(void) {
   sfx(SFX_BACK);
+  PT("close start");
   save_edits_now();
-  LOG("close_viewer screen=%d\n", screen);
+  PT("save_edits");
   account_time();
   stop_video();
+  PT("stop_video");
   resume_save();
-  if (lv_vault_save_views(&vault) != 0) LOG("views.csv could not be saved\n");
+  PT("resume_save");
+  views_save_async();
+  PT("views_save_async");
   screen = S_LIBRARY;
   sel = vk;
   if (sel >= 0 && sel < lgrid.n) {
@@ -1456,6 +1759,17 @@ static void fmt_time(uint64_t ms, char *o, size_t n) { int s = (int)(ms / 1000);
 static void draw_viewer(void) {
   if (nshown == 0) { screen = S_LIBRARY; return; }
   LvItem *it = &vault.items[shown[vk]];
+  // the player opened on the other thread, for this picture
+  if (vopen_ready && !vid) {
+    pthread_mutex_lock(&cmx);
+    if (vopen_ready && vopen_ready_gen == vopen_gen) {
+      vid = vopen_ready; vid_clip = vopen_ready_clip; vopen_ready = NULL;
+      vid_item = shown[vk];
+      lv_video_set_volume(vid, cfg.volume * 32768 / 100);
+      if (!vid_clip && !slideshow) { int t = resume_of(it); if (t > 0) resume_to = (int64_t)t * 1000; }
+    }
+    pthread_mutex_unlock(&cmx);
+  }
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 255));
   xfade_wanted = slideshow && so.fade;
   // the thumbnails wanted here: this one (its glow) and the filmstrip's
@@ -1493,7 +1807,7 @@ static void draw_viewer(void) {
   float fade = 1;
   if (fade_tex) {
     unsigned age = frame_no - fade_at;
-    if (age >= 36 || !slideshow) { free_later(fade_tex); fade_tex = NULL; }
+    if (age >= 36 || !slideshow) { release_tex(fade_tex); fade_tex = NULL; }
     else {
       fade = age / 36.0f;
       float fw = vita2d_texture_get_width(fade_tex), fh = vita2d_texture_get_height(fade_tex);
@@ -1528,6 +1842,8 @@ static void draw_viewer(void) {
   if (vid && !vid_clip && ab_a >= 0 && ab_b > ab_a && (int64_t)lv_video_pos(vid) >= ab_b) lv_video_seek(vid, ab_a);
   if (vid && vid_clip && is_video(it)) text_center(W / 2, 30, with_alpha(TEXT, 200), 15, "Preview clip: the Vita can't play this video's own file");
 
+  // (zoomed in past 1.25x: the picture again at up to 1920 px, once; back to the screen's size with the next)
+  if (zoom > 1.25f && big_item == shown[vk] && big_hi_item != shown[vk] && !vid) { big_hi = 1; big_hi_item = shown[vk]; ask_big(shown[vk]); big_hi = 0; }
   // --- touch: swipe for the next one, pinch to zoom, drag when zoomed, tap for the controls ---
   if (in.touching && details_y < 0.5f) {
     if (in.tcount >= 2) {
@@ -1643,7 +1959,7 @@ static void draw_viewer(void) {
   if (chrome) {
     int a = frame_no + 30 > chrome_until && !details ? (int)((chrome_until - frame_no) * 8) : 240;
     if (a > 240 || a < 0) a = 240;
-    for (int k = 0; k < 64; k++) vita2d_draw_rectangle(0, k, W, 1, RGBA(0, 0, 0, (64 - k) * a / 400));
+    grad(0, 0, W, 64, RGBA(0, 0, 0, 255), 64 * a / 400, 0, 0);
     // back
     vita2d_draw_line(30, 30, 42, 18, with_alpha(TEXT, a));
     vita2d_draw_line(30, 30, 42, 42, with_alpha(TEXT, a));
@@ -1658,7 +1974,7 @@ static void draw_viewer(void) {
     circle(W - 38, 30, 11, RGBA(0, 0, 0, a));
     text_center(W - 38, 36, with_alpha(TEXT, a), 15, "i");
     if (vid && !vid_clip) {
-      for (int k = 0; k < 70; k++) vita2d_draw_rectangle(0, H - 70 + k, W, 1, RGBA(0, 0, 0, k * a / 400));
+      grad(0, H - 70, W, 70, RGBA(0, 0, 0, 255), 0, 70 * a / 400, 0);
       uint64_t d = lv_video_duration(vid), p = lv_video_pos(vid);
       float f = d ? fminf(1, p / (float)d) : 0;
       rrect(40, H - 34, W - 80, 6, 3, with_alpha(TEXT, a / 3));
@@ -1687,7 +2003,7 @@ static void draw_viewer(void) {
   if (chrome && !(vid && !vid_clip) && details_y < 0.05f && nshown > 1 && !slideshow) {
     int a = frame_no + 30 > chrome_until ? (int)((chrome_until - frame_no) * 8) : 240;
     if (a > 240 || a < 0) a = 240;
-    for (int k = 0; k < 90; k++) vita2d_draw_rectangle(0, H - 90 + k, W, 1, RGBA(0, 0, 0, k * a / 300));
+    grad(0, H - 90, W, 90, RGBA(0, 0, 0, 255), 0, 90 * a / 300, 0);
     for (int d = -6; d <= 6; d++) {
       int k = vk + d;
       if (k < 0 || k >= nshown) continue;
@@ -1881,7 +2197,7 @@ static void draw_settings(void) {
         break;
       case ST_STATS: if (cross) { sfx(SFX_OPEN); screen = S_STATS; return; } break;
       case ST_WIFI: if (cross) { sfx(SFX_OPEN); wf_return = S_SETTINGS; wf_last[0] = 0; screen = S_WIFI; return; } break;
-      case ST_VAULT: if (cross) { lv_vault_save_views(&vault); resume_save(); find_vaults(); screen = S_PICK; return; } break;
+      case ST_VAULT: if (cross) { views_save_async(); resume_save(); find_vaults(); screen = S_PICK; return; } break;
       case ST_CACHE:
         if (cross) {
           DIR *dd = opendir(cache_dir);
@@ -1935,9 +2251,13 @@ static void library_grew(int before) {
   pthread_mutex_lock(&mx);
   signed char *t = realloc(tstate, vault.n + 1);
   short *so = realloc(slot_of, (vault.n + 1) * sizeof *so);
+  unsigned short *zw = realloc(tsize_w, (vault.n + 1) * sizeof *zw), *zh = zw ? realloc(tsize_h, (vault.n + 1) * sizeof *zh) : NULL;
   if (t) tstate = t;
   if (so) slot_of = so;
+  if (zw) tsize_w = zw;
+  if (zh) tsize_h = zh;
   if (t && so) for (int i = before; i <= vault.n; i++) { tstate[i] = 0; slot_of[i] = -1; }
+  if (zw && zh) for (int i = before; i <= vault.n; i++) tsize_w[i] = tsize_h[i] = 0;
   pthread_mutex_unlock(&mx);
   if (picked) { unsigned char *pk = realloc(picked, vault.n + 64); if (pk) { picked = pk; memset(picked + before, 0, vault.n + 64 - before); } }
   refilter();
@@ -1988,6 +2308,8 @@ int main(void) {
   SceUID pt = sceKernelCreateThread("lv_power", power_main, 0x10000100, 0x10000, 0, 0, NULL);
   if (pt >= 0) sceKernelStartThread(pt, 0, NULL);
   atlas_init();
+  saver_start();
+  closer_start();
 
   find_vaults();
   pin_load();
@@ -2002,7 +2324,12 @@ int main(void) {
   unsigned idle_save = 0;
   for (;;) {
     frame_no++;
+#ifdef LV_DEBUG
+    uint64_t perf_t0 = sceKernelGetProcessTimeWide();
+#endif
+    PT0();
     read_input();
+    PT("read_input");
     if (frame_no < splash_until) { in.pressed = 0; in.tap = 0; in.touching = 0; } // (nothing happens under the loading screen)
     // touch lock: nothing gets through but SELECT (the disguise still works)
     if (screen != S_PIN && screen != S_CALC && touch_lock_filter()) {
@@ -2012,8 +2339,21 @@ int main(void) {
       in.lx = in.ly = in.bdx = in.bdy = in.drag_dx = in.drag_dy = 0;
       in.back_on = 0;
     }
-    if (npending) { vita2d_wait_rendering_done(); for (int k = 0; k < npending; k++) vita2d_free_texture(pending_free[k]); npending = 0; }
+    // textures let go three frames ago or more: the GPU is done with them (vita2d has two frames in
+    // flight at most), so they're freed without waiting for it
+    if (npending) {
+      pthread_mutex_lock(&fmx);
+      int kept = 0;
+      for (int k = 0; k < npending; k++) {
+        if (frame_no - pending_at[k] >= 3) vita2d_free_texture(pending_free[k]);
+        else { pending_free[kept] = pending_free[k]; pending_at[kept++] = pending_at[k]; }
+      }
+      npending = kept;
+      pthread_mutex_unlock(&fmx);
+      PT("textures freed");
+    }
     videos_close_now();
+    PT("videos closed");
     if (woke) {
       woke = 0;
       lv_net_reset();
@@ -2024,8 +2364,11 @@ int main(void) {
     // (a video playing, or a slideshow: the Vita doesn't dim or sleep)
     if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow) || drive.state == DRV_SYNCING || drive.state == DRV_CODE || wf_run)
       sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
+    PT("frame start");
     if (loaded_vault) take_results();
+    PT("take_results");
     if (web_started) web_take_results();
+    PT("web_take_results");
     if (loaded_vault) wf_take();
     if (frame_no % 30 == 0) la_poll_events();
     if (wf_run && screen != S_WIFI && screen != S_COVER) wf_stop(); // (the server only while its screen is open)
@@ -2069,6 +2412,7 @@ int main(void) {
       in.pressed = 0;
     }
 
+    PT("before drawing");
     vita2d_start_drawing();
     vita2d_clear_screen();
     switch (screen) {
@@ -2105,7 +2449,23 @@ int main(void) {
       rrect(W / 2 - w / 2, H - BAR - 56, w, 38, 19, RGBA(0, 0, 0, a * 3 / 4));
       text_center(W / 2, H - BAR - 31, with_alpha(TEXT, a), 16, message);
     }
+    PT("the screen");
     if (screen != S_CALC && screen != S_COVER) draw_touch_lock();
+#ifdef LV_DEBUG
+    // (debug builds: how long each frame's work took, per screen, written to the log every 5 s)
+    {
+      static uint64_t sum, worst;
+      static unsigned n, slow, last_screen = 999;
+      uint64_t dt = sceKernelGetProcessTimeWide() - perf_t0;
+      if ((unsigned)screen != last_screen || n >= 300) {
+        if (n && last_screen != 999) LOG("perf screen=%u frames=%u avg=%.2fms worst=%.2fms over16ms=%u\n", last_screen, n, sum / 1000.0 / n, worst / 1000.0, slow);
+        sum = worst = 0; n = slow = 0; last_screen = (unsigned)screen;
+      }
+      sum += dt; n++;
+      if (dt > worst) worst = dt;
+      if (dt > 16600) slow++;
+    }
+#endif
     vita2d_end_drawing();
     vita2d_common_dialog_update();
     vita2d_swap_buffers();
@@ -2130,7 +2490,8 @@ int main(void) {
     static unsigned cfg_tick;
     if ((screen == S_WEB || screen == S_WEBVIEW) && ++cfg_tick % 600 == 0) cfg_save();
     // views reach the card now and then while looking (and always when leaving the full view)
-    if (loaded_vault && vault.views_dirty && ++idle_save > 60 * 30) { lv_vault_save_views(&vault); idle_save = 0; }
+    if (loaded_vault && vault.views_dirty && ++idle_save > 60 * 30) { views_save_async(); idle_save = 0; }
+    if (saver_failed) { saver_failed = 0; sfx(SFX_ERROR); say("The changes couldn't be written to the card"); }
   }
   return 0;
 }

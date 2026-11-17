@@ -18,7 +18,7 @@ static unsigned edits_at;       // (an edit waiting to be written: when the last
 static void edited(void) { edits_at = frame_no ? frame_no : 1; }
 static void save_edits_now(void) {
   if (!vault.index_dirty) return;
-  if (lv_vault_save_index(&vault) != 0) { sfx(SFX_ERROR); say("The changes couldn't be written to the card"); }
+  if (index_save_async() != 0) { sfx(SFX_ERROR); say("The changes couldn't be written to the card"); }
   edits_at = 0;
 }
 
@@ -355,6 +355,7 @@ static void library_shrank(void) {
   lib_after_change();
 }
 static int delete_item(int i) {
+  saver_flush(); // (a queued write mustn't land after this one)
   pthread_mutex_lock(&vmx);
   int r = lv_vault_delete(&vault, i, 1);
   pthread_mutex_unlock(&vmx);
@@ -479,6 +480,7 @@ static void draw_batch_sheet(void) {
     if (lsheet_sel == B_TAG) { if (!ime_open) ime_start(6, "A tag for all of them", "", 0); }
     else if (lsheet_sel == B_DELETE) {
       if (delete_confirmed()) {
+        saver_flush(); // (a queued write mustn't land after this one)
         pthread_mutex_lock(&vmx);
         for (int i = vault.n - 1; i >= 0; i--) if (picked && picked[i]) lv_vault_delete(&vault, i, 0);
         int r = lv_vault_save_index(&vault);
