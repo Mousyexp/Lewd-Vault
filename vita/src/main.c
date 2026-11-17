@@ -21,6 +21,7 @@
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/cpu.h>
+#include <psp2/kernel/sysmem.h>
 #include <psp2/power.h>
 #include <psp2/sysmodule.h>
 #include <psp2/touch.h>
@@ -79,14 +80,37 @@ static void pin_to_core(int core) {
 int _newlib_heap_size_user = 128 * 1024 * 1024;
 // A texture: in video memory (vita2d's default) and, when that's full, in main memory instead of
 // failing (the GPU reads either; video memory is only 128 MB, shared with the screen's buffers).
+// Never right up to the limit: a little over it is a crash, so each memory keeps a reserve free (about
+// 6% of video memory's 128 MB, and of an app's ~256 MB of main memory). A texture that would eat into
+// a reserve goes to the other memory, or isn't made at all (its card shows a ring, or "can't be shown").
+#define RESERVE_CDRAM (8u << 20)
+#define RESERVE_USER (16u << 20)
+static int mem_free(int *user, int *cdram) {
+  SceKernelFreeMemorySizeInfo i;
+  memset(&i, 0, sizeof i);
+  i.size = sizeof i;
+  if (sceKernelGetFreeMemorySize(&i) < 0) return -1;
+  *user = i.size_user; *cdram = i.size_cdram;
+  return 0;
+}
 vita2d_texture *tex_new(unsigned w, unsigned h) {
-  vita2d_texture *t = vita2d_create_empty_texture(w, h);
+  long need = (long)((w + 7) & ~7u) * h * 4 + 4096;
+  int user = 0, cdram = 0, known = mem_free(&user, &cdram) == 0;
+  vita2d_texture *t = NULL;
+  if (!known || cdram - need >= (long)RESERVE_CDRAM) t = vita2d_create_empty_texture(w, h);
   if (t) return t;
+  if (known && user - need < (long)RESERVE_USER) { LOG("tex_new %ux%u: no room (user %d, cdram %d)\n", w, h, user, cdram); return NULL; }
   SceKernelMemBlockType was = vita2d_texture_get_alloc_memblock_type();
   vita2d_texture_set_alloc_memblock_type(SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE);
   t = vita2d_create_empty_texture(w, h);
   vita2d_texture_set_alloc_memblock_type(was);
   return t;
+}
+// The C heap the same way: room for `need` more bytes and still under 95% of it.
+static int heap_room(size_t need) {
+  struct mallinfo mi = mallinfo();
+  size_t heap = (size_t)_newlib_heap_size_user, used = (size_t)mi.uordblks;
+  return used + need <= heap / 100 * 95;
 }
 
 #define W 960
@@ -826,6 +850,8 @@ static void ask_big(int item) {
   // (a tall page, a webtoon's strip: read at the screen's width, scrolling down, so it's decoded to
   //  that width, as tall as a texture can be)
   if (item >= 0 && item < vault.n && is_tall(&vault.items[item])) { big_ask.max_w = W; big_ask.max_h = 4096; }
+  // (the decode and its copy must leave the heap under 95%: else the screen's size, which always fits)
+  if ((size_t)big_ask.max_w * big_ask.max_h * 8 > 0 && !heap_room((size_t)big_ask.max_w * big_ask.max_h * 8)) { big_ask.max_w = W; big_ask.max_h = H; }
   big_failed = 0;
   pthread_cond_signal(&cv);
   pthread_mutex_unlock(&mx);

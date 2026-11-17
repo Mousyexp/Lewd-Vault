@@ -187,6 +187,7 @@ static void *mg_main(void *arg) {
           int iw = 0, ih = 0;
           // (a tall page, a webtoon's: the screen's width, as tall as a texture can be)
           int tall = lv_image_size(b, n, &iw, &ih) && iw > 0 && ih > iw * 2.2f;
+          if ((tall || hi) && !heap_room((size_t)W * 4096 * 8)) { tall = 0; hi = 0; } // (keeping the heap under 95%)
           if (lv_decode(b, n, tall ? W : hi ? W * 2 : W, tall ? 4096 : hi ? H * 2 : H, &d.px) != 0) d.px.rgba = NULL;
         }
         if (!d.px.rgba) snprintf(d.err, sizeof d.err, "%s", err && err[0] ? err : "This page couldn't be loaded");

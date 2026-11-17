@@ -104,7 +104,10 @@ already: most of what turns up are the video sources (AIBooru, Hypnohub, Safeboo
 tab says why it can't offer more: each reader site is a program of its own. **Videos**, the video sources, which
 open the **video browser**: a banner with what's trending, then rows (Trending, New, Top this month,
 Top of all time, Something random) of cards, as the TV apps have them; a video plays in the
-Browser's own full view. hanime.tv and MissAV are listed but locked: both only answer after a
+Browser's own full view. **Rule34Video** (its hentai, Genshin Impact and Blue Archive tags) is read as a
+KVS site: its list pages as HTML, each video's MP4 (the 360p one, quickest to come) from its own page,
+whose tags are checked again. **Check sources** in the sites window asks every source of the tab and
+moves the ones that don't answer to the end, greyed. hanime.tv and MissAV are listed but locked: both only answer after a
 Cloudflare browser check, which an app can't pass. Sakugabooru brings anime animation clips; Xbooru Comics and Danbooru Comics are those sites' comic pages. Gelbooru and Rule34 are there too, with your account's API key (Filter → API key: the user ID and the
 key from the site's My Account → Options). As on the desktop, posts tagged as sexual content involving
 minors are never shown or searched for.
@@ -213,6 +216,26 @@ reading it back, and if a compressed download ever fails to unpack the app asks 
 then on. Neither should happen on a Vita.
 
 ## Speed
+
+**Layout and gestures.** The Library's and the Browser's headers are one row of large buttons (the
+Library: the modes, a category list, Filters, the sort, a Wi-Fi light that is green online and red
+not; the Browser: the site, the search, Filter, the sort, the light). Scrolling down tucks the header
+away and shrinks the tab bar to its icons; scrolling up brings them back. A sideways flick across the
+grid changes the Library's mode or the Browser's site. The **tags sidebar** opens from the small arrow
+at the right edge or a swipe in from it (a tap on a tag searches for it, a swipe left on it leaves it
+out, a tap on a search word takes it away); a drag down the right edge is still the month scrubber.
+**Save** in the Browser's full view opens the **save page**: a step a screen (how explicit, 0-10;
+the category, or a new one; stars and whether to keep the site's tags), then an overview whose rows
+go back to their step, and Save (Save now on every step).
+
+**Scrolling never waits.** Cards whose picture isn't here yet show a loading ring; pictures are
+decoded on other cores and put on the GPU at most 3 ms a frame; while the grid is flung fast nothing
+new is asked for, and the next screenful is fetched in the direction it's going.
+
+**Memory, with a margin.** Never right up to a limit: the C heap is 128 MB (measured in use: a few MB,
+~30 MB while a big picture is decoded) and a big decode that would take it past 95% is made at the
+screen's size instead; textures keep 8 MB of video memory and 16 MB of main memory free, going to main
+memory when video memory is short, and not made at all rather than crash (`tex_new` in `src/main.c`).
 
 The tab bar is a pill floating over the bottom, with icons in the manner of iOS's symbols
 (`tools/make-ui-icons.mjs`, drawn at exactly their size); buttons, chips and rows are at least 36 px
