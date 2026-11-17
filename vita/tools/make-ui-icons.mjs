@@ -47,6 +47,7 @@ const ICONS = {
   xmark: `<path d="M6 6 L18 18 M18 6 L6 18" ${S} stroke-width="2.3"/>`,
   more: `<circle cx="5.5" cy="12" r="1.8" ${F}/><circle cx="12" cy="12" r="1.8" ${F}/><circle cx="18.5" cy="12" r="1.8" ${F}/>`,
   film: `<rect x="3" y="4" width="18" height="16" rx="2.8" ${S}/><path d="M7.5 4 V20 M16.5 4 V20 M3 9.3 H7.5 M3 14.7 H7.5 M16.5 9.3 H21 M16.5 14.7 H21" ${S}/>`,
+  book: `<path d="M12 6.5 C9.8 4.9 6.8 4.4 3 4.6 V18.6 C6.8 18.4 9.8 18.9 12 20.5 C14.2 18.9 17.2 18.4 21 18.6 V4.6 C17.2 4.4 14.2 4.9 12 6.5 Z M12 6.5 V20.5" ${S}/>`,
   image: `<rect x="3" y="4.5" width="18" height="15" rx="2.8" ${S}/><path d="M5.5 17 l4.5 -4.6 l3.2 3.2 l2.2 -2.2 l3.2 3.4" ${S}/><circle cx="8.6" cy="9.2" r="1.4" ${F}/>`,
 };
 const TAB = ['photos', 'photos_fill', 'compass', 'compass_fill', 'play', 'play_fill', 'gear', 'gear_fill'];

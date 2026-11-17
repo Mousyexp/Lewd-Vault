@@ -117,7 +117,8 @@ static void draw_drive(void) {
     in.pressed &= ~SCE_CTRL_CIRCLE;
   } else if (drive.state == DRV_SYNCING) {
     // ---- busy: asking for a code, or a sync ----
-    text(30, y + 10, TEXT, 20, drive.message);
+    spinner(44, y + 4, 12);
+    text(66, y + 10, TEXT, 20, drive.message);
     if (!drive.signing) {
       float f = drive.total ? drive.done / (float)drive.total : 0;
       rrect(30, y + 40, W - 60, 12, 6, SURF2);

@@ -208,6 +208,7 @@ static void saved_add(const char *src) {
 // ---------- the threads ----------
 
 static void *list_main(void *arg) {
+  pin_to_core(2); // (off the drawing thread's core)
   LvHttp *h = lv_http_new();
   while (worker_run) {
     pthread_mutex_lock(&wmx);
@@ -261,6 +262,7 @@ static void *list_main(void *arg) {
 }
 
 static void *preview_main(void *arg) {
+  pin_to_core(1); // (off the drawing thread's core)
   LvHttp *h = lv_http_new();
   while (worker_run) {
     pthread_mutex_lock(&wmx);
@@ -405,6 +407,7 @@ static void write_save(const LvPost *post, WDone *d, int vgen_asked, const char 
 }
 
 static void *sample_main(void *arg) {
+  pin_to_core(2); // (off the drawing thread's core)
   LvHttp *h = lv_http_new();
   while (worker_run) {
     pthread_mutex_lock(&wmx);
@@ -767,6 +770,13 @@ static const char *vsource_icon(int k);
 static const char *vsource_about(int k);
 static int vsource_blocked(int k);
 static void vb_open(int k);
+// (the manga sources: manga_ui.c)
+static const char *msource_name(int k);
+static const char *msource_icon(int k);
+static const char *msource_about(int k);
+static int nmsources(void);
+static int mg_src_now(void);
+static void manga_open(int src);
 static int vb_cur = -1;
 // sites added by hand (ux0:data/LWDV00001/web_sites.txt: "<name>\t<kind>\t<address>" a line)
 static void custom_sites_load(void) {
@@ -792,6 +802,7 @@ static char add_base[160];
 static volatile int add_state; // 0 idle, 1 asking, 2 found (add_kind), 3 none
 static volatile int add_kind;
 static void *add_main(void *arg) {
+  pin_to_core(2); // (off the drawing thread's core)
   (void)arg;
   LvHttp *h = lv_http_new();
   static const int order[] = {BK_E621, BK_DANBOORU, BK_MOEBOORU, BK_GELBOORU};
@@ -849,7 +860,7 @@ static void add_site_poll(void) {
 
 // The site switcher: a window with two tabs, Pictures (the sites, and + to add one) and Videos (the
 // video sources, opening the video browser); each with its icon (sites/*.png).
-static int sites_tab;      // 0 pictures, 1 videos
+static int sites_tab;      // 0 pictures, 1 videos, 2 manga
 static float sites_scroll;
 static vita2d_texture *site_tex[64];
 static int site_tex_tried[64];
@@ -876,23 +887,31 @@ static void draw_letter_icon(int x, int y, int sz, const char *name) {
 static void draw_sites_sheet(void) {
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 170));
   const int cols = 6, tw = 142, th = 136, gap = 10;
-  int n = sites_tab ? nvsources() : LV_NSITES + 1; // (+ the add tile)
+  int n = sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : LV_NSITES + 1; // (+ the add tile)
   int rows = (n + cols - 1) / cols, vis_rows = rows < 3 ? rows : 3;
   int ww = cols * tw + (cols - 1) * gap + 36, wh = vis_rows * th + (vis_rows - 1) * gap + 100;
   int wx = (W - ww) / 2, wy = 18;
   rrect(wx, wy, ww, wh, 26, SURF);
   // the tabs: a segmented control
-  static const char *tabs[] = {"Pictures", "Videos"};
-  int segw = 300, segx = W / 2 - segw / 2, segy = wy + 14;
+  static const char *tabs[] = {"Pictures", "Videos", "Manga"};
+  static const char *tab_icons[] = {"image", "film", "book"};
+  int segw = 450, tw3 = segw / 3, segx = W / 2 - segw / 2, segy = wy + 14;
   rrect(segx, segy, segw, 40, 20, SURF2);
-  rrect(segx + 3 + sites_tab * (segw / 2), segy + 3, segw / 2 - 6, 34, 17, ACC);
-  for (int t = 0; t < 2; t++) {
-    icon(t ? "film" : "image", segx + t * segw / 2 + 44, segy + 20, t == sites_tab ? RGBA(20, 12, 16, 255) : TEXT);
-    text(segx + t * segw / 2 + 62, segy + 27, t == sites_tab ? RGBA(20, 12, 16, 255) : TEXT, 17, tabs[t]);
-    if (hit(segx + t * segw / 2, segy, segw / 2, 40)) { if (sites_tab != t) { sites_tab = t; sheet_sel = 0; sites_scroll = 0; sfx(SFX_TAB); } in.tap = 0; }
+  rrect(segx + 3 + sites_tab * tw3, segy + 3, tw3 - 6, 34, 17, ACC);
+  for (int t = 0; t < 3; t++) {
+    unsigned c = t == sites_tab ? RGBA(20, 12, 16, 255) : TEXT;
+    int lw = text_w(17, tabs[t]) + 30, lx = segx + t * tw3 + (tw3 - lw) / 2;
+    icon(tab_icons[t], lx + 11, segy + 20, c);
+    text(lx + 28, segy + 27, c, 17, tabs[t]);
+    if (hit(segx + t * tw3, segy, tw3, 40)) { if (sites_tab != t) { sites_tab = t; sheet_sel = 0; sites_scroll = 0; sfx(SFX_TAB); } in.tap = 0; }
   }
   text(wx + 20, segy + 27, FAINT, 13, "L / R");
-  if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) { sites_tab = !sites_tab; sheet_sel = 0; sites_scroll = 0; sfx(SFX_TAB); n = sites_tab ? nvsources() : LV_NSITES + 1; rows = (n + cols - 1) / cols; }
+  if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
+    sites_tab = (sites_tab + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : 2)) % 3;
+    sheet_sel = 0; sites_scroll = 0; sfx(SFX_TAB);
+    n = sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : LV_NSITES + 1;
+    rows = (n + cols - 1) / cols;
+  }
   if (sheet_sel >= n) sheet_sel = n - 1;
   // (the chosen tile's row kept in sight)
   int srow = sheet_sel / cols;
@@ -906,7 +925,8 @@ static void draw_sites_sheet(void) {
     int on = k == sheet_sel;
     const char *name, *about, *ic;
     int cur, blocked = 0, add = !sites_tab && k == LV_NSITES, slot;
-    if (sites_tab) { name = vsource_name(k); about = vsource_about(k); ic = vsource_icon(k); cur = k == vb_cur; blocked = vsource_blocked(k); slot = 32 + k; }
+    if (sites_tab == 2) { name = msource_name(k); about = msource_about(k); ic = msource_icon(k); cur = screen == S_MANGA && k == mg_src_now(); slot = 48 + k; }
+    else if (sites_tab) { name = vsource_name(k); about = vsource_about(k); ic = vsource_icon(k); cur = k == vb_cur; blocked = vsource_blocked(k); slot = 32 + k; }
     else if (add) { name = "Add a site"; about = "Any booru, by its address"; ic = "add"; cur = 0; slot = 31; }
     else { name = LV_SITES[k].name; about = LV_SITES[k].about; ic = LV_SITES[k].icon; cur = k == cfg.site; slot = k; }
     if (on) rrect(x - 3, y - 3, tw + 6, th + 6, 20, ACC);
@@ -935,7 +955,8 @@ static void draw_sites_sheet(void) {
   if (in.pressed & SCE_CTRL_UP) { row = (row + rows - 1) % rows; while (row * cols + col >= n) row--; sheet_sel = row * cols + col; }
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP | SCE_CTRL_LEFT | SCE_CTRL_RIGHT)) sfx(SFX_TICK);
   if (in.pressed & SCE_CTRL_CROSS) {
-    if (sites_tab) {
+    if (sites_tab == 2) { sfx(SFX_SELECT); sheet = SH_NONE; manga_open(sheet_sel); }
+    else if (sites_tab) {
       if (vsource_blocked(sheet_sel)) { sfx(SFX_ERROR); say("This site only answers after a browser check (Cloudflare), so the Vita can't reach it"); }
       else { sfx(SFX_SELECT); sheet = SH_NONE; vb_open(sheet_sel); }
     } else if (sheet_sel == LV_NSITES) {
@@ -1177,6 +1198,7 @@ static void draw_web(void) {
   web_start();
   PT("web_start");
   add_site_poll();
+  if (add_state == 1) { rrect(W - 210, H - BAR - 52, 194, 40, 20, with_alpha(SURF2, 240)); spinner(W - 186, H - BAR - 32, 10); text(W - 166, H - BAR - 26, DIM, 14, "Looking at the site\u2026"); }
   if (!saved_src && loaded_vault) saved_build();
   PT("saved_build");
   if (!nposts && !wloading && !wend && !werr[0]) {
@@ -1232,6 +1254,7 @@ static void draw_web(void) {
     if (t) draw_cover(t, x - g, y - g, cw + 2 * g, ch + 2 * g, RGBA(255, 255, 255, 255));
     else {
       rrect(x - g, y - g, cw + 2 * g, ch + 2 * g, 8, SURF);
+      if (wstate[k] == 1) spinner(x + cw / 2, y + ch / 2, 10);
       if (wstate[k] == 3) text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No preview");
       else if (nw < 48) wanted[nw++] = k;
     }
@@ -1251,7 +1274,7 @@ static void draw_web(void) {
   if (!nposts) {
     if (!lv_net_online()) text_center(W / 2, TOP + 150, DIM, 20, "Not connected: turn on Wi-Fi in the Vita's settings");
     else if (wloading) {
-      for (int k = 0; k < 8; k++) { float a = frame_no * 0.12f + k * 0.785f; circle(W / 2 + cosf(a) * 22, TOP + 150 + sinf(a) * 22, 3 + k * 0.5f, with_alpha(ACC, 80 + k * 20)); }
+      spinner(W / 2, TOP + 150, 22);
     } else text_center(W / 2, TOP + 150, DIM, 18, werr[0] ? werr : "Nothing found: try other tags or ratings");
   } else if (wloading && last >= nposts) text_center(W / 2, H - BAR - 14, FAINT, 14, "Loading more…");
   else if (wend && werr[0] && last >= nposts) text_center(W / 2, H - BAR - 14, FAINT, 14, werr);
@@ -1344,6 +1367,7 @@ static void draw_webview(void) {
     vita2d_draw_texture_scale(t, (W - dw) / 2 + wpan_x + wswipe, (avail_h - dh) / 2 + wpan_y, s, s);
   }
   if (wv_loading) {
+    spinner(W / 2, H / 2 - 30, 22);
     float f = big_progress;
     rrect(W / 2 - 120, H - 30, 240, 6, 3, with_alpha(TEXT, 50));
     if (f > 0) rrect(W / 2 - 120, H - 30, 240 * fminf(1, f), 6, 3, ACC);

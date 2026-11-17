@@ -64,6 +64,7 @@ static struct { int row, gen; LvPost *p; int n; char err[96]; int ready; } vb_li
 
 static int vb_src = -1;
 static void *vb_main(void *arg) {
+  pin_to_core(2); // (off the drawing thread's core)
   (void)arg;
   LvHttp *h = lv_http_new();
   while (worker_run) {
@@ -283,7 +284,7 @@ static void draw_videos(void) {
     if (hit(bx + 144, by, 184, 44)) { sfx(SFX_TAB); vb_play(0, 0); if (screen == S_WEBVIEW) { wv_drop(); screen = S_WEB; } return; }
   } else if (r0->state == 3) text_fit(30, y0 + 134, ACC2, 16, r0->err, 600);
   else if (site >= 0 && LV_SITES[site].needs_key && !wkeys[site][0]) text_fit(30, y0 + 134, ACC2, 16, "Needs your account's API key: the Browser's Filter → API key", 600);
-  else text(30, y0 + 134, DIM, 16, "Loading…");
+  else spinner(60, y0 + 140, 16);
   // ---- the rows ----
   int ry = (int)y0 + HERO_H - 30;
   for (int r = 0; r < VB_ROWS; r++, ry += VB_CH + 52) {
@@ -291,7 +292,7 @@ static void draw_videos(void) {
     if (ry > H || ry + VB_CH + 40 < 0) continue;
     text(30, ry + 20, r == vb_row ? TEXT : DIM, 18, VROWS[r].title);
     if (row->state == 3) { text(30, ry + 60, FAINT, 14, row->err[0] ? row->err : "Nothing here"); continue; }
-    if (row->state < 2) { for (int k = 0; k < 5; k++) rrect(30 + k * (VB_CW + 12), ry + 32, VB_CW, VB_CH, 10, RGBA(28, 22, 30, 255)); continue; }
+    if (row->state < 2) { for (int k = 0; k < 5; k++) rrect(30 + k * (VB_CW + 12), ry + 32, VB_CW, VB_CH, 10, RGBA(28, 22, 30, 255)); spinner(30 + VB_CW / 2, ry + 32 + VB_CH / 2, 14); continue; }
     if (!row->n) { text(30, ry + 60, FAINT, 14, "No videos here"); continue; }
     // (the chosen card kept in sight)
     float want = vb_col[r] * (VB_CW + 12) - (W - 60 - VB_CW) / 2.0f;
@@ -309,7 +310,7 @@ static void draw_videos(void) {
       if (t) {
         float sx = (VB_CW + 2 * g) / (float)vita2d_texture_get_width(t), sy = (VB_CH + 2 * g) / (float)vita2d_texture_get_height(t);
         vita2d_draw_texture_scale(t, x - g, cy - g, sx, sy);
-      } else rrect(x - g, cy - g, VB_CW + 2 * g, VB_CH + 2 * g, 10, RGBA(34, 26, 36, 255));
+      } else { rrect(x - g, cy - g, VB_CW + 2 * g, VB_CH + 2 * g, 10, RGBA(34, 26, 36, 255)); if (k < VB_PER && row->ts[k] == 1) spinner(x + VB_CW / 2, cy + VB_CH / 2, 12); }
       // the play badge, the kind
       circle(x + 22, cy + VB_CH - 20, 13, RGBA(0, 0, 0, 150));
       text_center(x + 23, cy + VB_CH - 15, TEXT, 13, "▶");

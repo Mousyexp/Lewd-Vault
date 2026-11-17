@@ -178,6 +178,7 @@ static void wf_serve(int c) {
 }
 
 static void *wf_main(void *arg) {
+  pin_to_core(2); // (off the drawing thread's core)
   (void)arg;
   int s = socket(AF_INET, SOCK_STREAM, 0);
   if (s < 0) { snprintf(wf_last, sizeof wf_last, "No network socket"); wf_run = 0; return NULL; }
@@ -272,6 +273,7 @@ static void draw_wifi(void) {
     snprintf(b, sizeof b, "They go into “%s”.  %d in so far%s", cfg.save_cat[0] ? cfg.save_cat : "Wi-Fi", wf_got, wf_failed ? ", some didn't" : "");
     text(x, 230, TEXT, 17, b);
     if (wf_busy && wf_total > 0) {
+      spinner(x + 494, 257, 10);
       float f = (float)wf_bytes / (float)wf_total;
       rrect(x, 252, 480, 10, 5, SURF2);
       rrect(x, 252, 480 * f < 10 ? 10 : 480 * f, 10, 5, ACC);

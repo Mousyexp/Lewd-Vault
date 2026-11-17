@@ -88,7 +88,7 @@ static void draw_clean(void) {
       float tw = vita2d_texture_get_width(t), th = vita2d_texture_get_height(t);
       float s = fminf((W - 160) / tw, (H - 110) / th);
       vita2d_draw_texture_scale_rotate(t, W / 2 + cl_swipe, H / 2 - 10 + fabsf(cl_swipe) * 0.1f, s, s, f * 0.25f);
-    } else text_center(W / 2 + (int)cl_swipe, H / 2, DIM, 18, "Loading…");
+    } else spinner(W / 2 + cl_swipe, H / 2, 22);
     if (cl_swipe < -20) { int a = (int)fminf(200, -cl_swipe); text_center(W / 2 - 300, H / 2, RGBA(240, 80, 90, a), 30, "LET GO"); }
     if (cl_swipe > 20) { int a = (int)fminf(200, cl_swipe); text_center(W / 2 + 300, H / 2, RGBA(90, 220, 140, a), 30, "KEEP"); }
     const LvItem *it = &vault.items[i];
@@ -142,7 +142,15 @@ static void health_scan(void) {
 static int hc_sel;
 static void draw_health(void) {
   text(30, 44, TEXT, 26, "Health check");
-  if (!hc.done) { text(30, 100, DIM, 18, "Looking…"); health_scan(); return; }
+  if (!hc.done) {
+    // (one frame of the spinner first: the look round can take a moment on a big vault)
+    static unsigned shown_at;
+    if (!shown_at || frame_no - shown_at > 2) shown_at = frame_no;
+    spinner(W / 2, H / 2, 22);
+    text_center(W / 2, H / 2 + 50, DIM, 16, "Looking through the vault\u2026");
+    if (frame_no - shown_at >= 1) { health_scan(); shown_at = 0; }
+    return;
+  }
   struct { const char *what; int n; const char *fix; } rows[] = {
     {"Items whose file isn't on the card", hc.missing, "✕ removes their rows (their thumbnails go with them)"},
     {"Counts for items that are gone (views.csv)", hc.stale_views, "✕ drops them"},

@@ -1,3 +1,5 @@
+#include <psp2/kernel/cpu.h>
+#include <psp2/kernel/threadmgr.h>
 // Videos on the Vita, two ways, behind one small API (video.h):
 //
 //  * MP4 / M4V / MOV: sceAvPlayer, the system's own player, which decodes H.264 in hardware. Set up
@@ -168,6 +170,7 @@ static void av_event(void *p, int32_t id, int32_t src, void *data) {
 }
 
 static int av_add_main(SceSize args, void *argp) {
+  sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << 1); // (off the drawing thread's core)
   LvVideo *v = *(LvVideo **)argp;
   if (sceAvPlayerAddSource(v->h_av, v->path) < 0) v->failed = 1;
   v->dec_done = 1;
@@ -175,6 +178,7 @@ static int av_add_main(SceSize args, void *argp) {
 }
 
 static int av_sound_main(SceSize args, void *argp) {
+  sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << 2); // (off the drawing thread's core)
   LvVideo *v = *(LvVideo **)argp;
   int rate = 48000, ch = 2;
   int port = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_BGM, GRAIN, rate, SCE_AUDIO_OUT_MODE_STEREO);
@@ -294,6 +298,7 @@ static void ring_put(LvVideo *v, const int16_t *s, int frames) {
 }
 
 static void *sw_sound_main(void *arg) {
+  sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << 2); // (off the drawing thread's core)
   LvVideo *v = arg;
   int port = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_BGM, GRAIN, 48000, SCE_AUDIO_OUT_MODE_STEREO);
   int16_t *blk = memalign(64, GRAIN * 2 * sizeof(int16_t));
@@ -381,6 +386,7 @@ static void sw_seek_now(LvVideo *v) {
 }
 
 static void *sw_decode_main(void *arg) {
+  sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << 1); // (off the drawing thread's core)
   LvVideo *v = arg;
   AVPacket *pkt = av_packet_alloc();
   AVFrame *af = av_frame_alloc();

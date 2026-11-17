@@ -1,3 +1,5 @@
+#include <psp2/kernel/cpu.h>
+#include <psp2/kernel/threadmgr.h>
 // Google Drive on the Vita (drive.h): src-tauri/src/gdrive.rs in C, with the sign-in Google offers to
 // devices without a keyboard: the Vita shows a short code and a QR code, you open google.com/device on
 // a phone (the QR code), type the code and allow it; the Vita then gets its own token.
@@ -311,6 +313,7 @@ static int call_json(const char *url, LvReq *rq, Json *j, uint8_t **raw, const c
 
 // ---------- signing in: the device code ----------
 static void *sign_in_main(void *arg) {
+  sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << 2); // (off the drawing thread's core)
   (void)arg;
   if (!http) http = lv_http_new();
   const char *why = NULL;
@@ -865,6 +868,7 @@ static void to_trash(const char *full, const char *rel) {
 }
 
 static void *sync_main(void *arg) {
+  sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << 2); // (off the drawing thread's core)
   (void)arg;
   if (!http) http = lv_http_new();
   Plan pl;

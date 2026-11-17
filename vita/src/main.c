@@ -20,6 +20,7 @@
 #include <psp2/io/stat.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
+#include <psp2/kernel/cpu.h>
 #include <psp2/power.h>
 #include <psp2/sysmodule.h>
 #include <psp2/touch.h>
@@ -62,6 +63,11 @@ static uint64_t pt_last;
 #define LOG(...) do { } while (0)
 #endif
 
+// A worker thread onto one of the user cores (0: the drawing thread's; 1 and 2 for the work), as
+// the Vita wants it: the drawing thread is never pre-empted by decoding or the network.
+static void pin_to_core(int core) {
+  sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << (core < 0 ? 0 : core > 2 ? 2 : core));
+}
 int _newlib_heap_size_user = 200 * 1024 * 1024;
 
 #define W 960
@@ -508,6 +514,7 @@ static int thumb_pixels(int i, LvPixels *px, int want_w, int want_h) {
 }
 
 static void *worker(void *arg) {
+  pin_to_core(1); // (off the drawing thread's core)
   while (worker_run) {
     pthread_mutex_lock(&mx);
     while (worker_run && big_ask.item < 0 && nwant == 0) pthread_cond_wait(&cv, &mx);
@@ -913,7 +920,7 @@ static int ime_poll(char *out, int cap) {
 }
 
 // ---------- screens ----------
-enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI, S_CALC, S_CLEAN, S_HEALTH, S_VIDEOS };
+enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI, S_CALC, S_CLEAN, S_HEALTH, S_VIDEOS, S_MANGA, S_BOOK, S_READER };
 static int screen = S_PICK, cover_return = S_LIBRARY;
 static char found[16][512];
 static int nfound, pick_sel;
@@ -961,6 +968,7 @@ static pthread_mutex_t smx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t scv = PTHREAD_COND_INITIALIZER;
 static int saver_started;
 static void *saver_main(void *arg) {
+  pin_to_core(2); // (off the drawing thread's core)
   (void)arg;
   for (;;) {
     pthread_mutex_lock(&smx);
@@ -1079,6 +1087,7 @@ static volatile int load_state; // 0 idle, 1 working, 2 done, 3 failed, 4 wrong 
 static const char *load_why;
 static char password[128];
 static void *load_main(void *arg) {
+  pin_to_core(1); // (off the drawing thread's core)
   int unlock = (int)(intptr_t)arg;
   pthread_mutex_lock(&vmx);
   int st = 2;
@@ -1280,7 +1289,7 @@ static float pill_sel_x = -1;
 static int tab_of_screen(void) {
   switch (screen) {
     case S_LIBRARY: return 0;
-    case S_WEB: case S_VIDEOS: return 1;
+    case S_WEB: case S_VIDEOS: case S_MANGA: return 1;
     case S_SHOW: return 2;
     case S_SETTINGS: case S_DRIVE: case S_WIFI: case S_STATS: case S_HEALTH: return 3;
   }
@@ -1358,6 +1367,13 @@ static void grad(float x, float y, float w, float h, unsigned col, int a0, int a
   unsigned c = (col & 0x00FFFFFF) | 0xFF000000u;
   if (across) vita2d_draw_texture_tint_part_scale(t, x, y, p0, 0, span, 1, w / span, h, c);
   else vita2d_draw_texture_tint_part_scale(t, x, y, 0, p0, 1, span, w, h / span, c);
+}
+// A loading circle: eight dots going round (anything that takes a while shows one)
+static void spinner(float cx, float cy, float r) {
+  for (int k = 0; k < 8; k++) {
+    float a = frame_no * 0.12f + k * 0.785f;
+    circle(cx + cosf(a) * r, cy + sinf(a) * r, r * 0.13f + k * r * 0.022f, with_alpha(ACC, 70 + k * 22));
+  }
 }
 static int chip(int x, int y, const char *label, int on) {
   int w = text_w(17, label) + 36;
@@ -1444,6 +1460,7 @@ static void draw_library(void) {
     else {
       rrect(x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, 8, SURF);
       if (tstate[i] == 3) text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No picture");
+      else if (tstate[i] == 1) spinner(x + cw / 2, y + ch / 2, 10);
       else if (nw < 64) { want_size(i, cw, ch); wanted[nw++] = i; }
     }
     if (is_video(it) || is_gif(it)) {
@@ -1591,9 +1608,10 @@ static pthread_cond_t ccv = PTHREAD_COND_INITIALIZER;
 // slow for the drawing thread): the full view asks, shows the thumbnail meanwhile, and takes the player
 // when it's ready, if it's still for the same picture (vopen_gen).
 static struct { char path[800], clip[800]; int loop; uint8_t key[32]; int has_key, gen; } vopen_job;
-static volatile int vopen_want, vopen_gen, vopen_ready_gen = -1, vopen_ready_clip;
+static volatile int vopen_want, vopen_gen, vopen_ready_gen = -1, vopen_ready_clip, vopen_fail_gen = -1;
 static LvVideo *volatile vopen_ready;
 static void *closer_main(void *arg) {
+  pin_to_core(2); // (off the drawing thread's core)
   (void)arg;
   for (;;) {
     pthread_mutex_lock(&cmx);
@@ -1606,6 +1624,7 @@ static void *closer_main(void *arg) {
       LvVideo *v = j.path[0] ? lv_video_open(j.path, j.has_key ? j.key : NULL, j.loop) : NULL;
       if (!v && j.clip[0]) { v = lv_video_open(j.clip, j.has_key ? j.key : NULL, 1); clip = 1; }
       memset(j.key, 0, sizeof j.key);
+      if (!v) vopen_fail_gen = j.gen; // (nothing to play: the spinner stops)
       pthread_mutex_lock(&cmx);
       if (v && j.gen == vopen_gen && !vopen_ready) { vopen_ready = v; vopen_ready_gen = j.gen; vopen_ready_clip = clip; v = NULL; }
       pthread_mutex_unlock(&cmx);
@@ -1828,9 +1847,12 @@ static void draw_viewer(void) {
     if (fade < 1) vita2d_draw_texture_tint_scale(t, x, y, s, s, RGBA(255, 255, 255, (int)(255 * fade)));
     else vita2d_draw_texture_scale(t, x, y, s, s);
   } else {
-    text_center(W / 2, H / 2, DIM, 18, big_failed ? "This file can't be shown on the Vita" : "Loading…");
+    if (big_failed) text_center(W / 2, H / 2, DIM, 18, "This file can't be shown on the Vita");
+    else spinner(W / 2, H / 2, 24);
   }
   if (!it->path) text_center(W / 2, (int)avail_h - 30, ACC2, 16, "This file isn't on the memory card (only its thumbnail)");
+  // (the full picture, or the video, still on its way: a small spinner in the corner)
+  if (t && ((!vid && !is_video(it) && !is_gif(it) && big_item != shown[vk] && !big_failed) || ((is_video(it) || is_gif(it)) && !vid && !vopen_ready && vopen_fail_gen != vopen_gen))) spinner(W - 34, H - 34, 12);
   if (vid && !vid_clip && resume_to >= 0 && lv_video_duration(vid) > 0) {
     lv_video_seek(vid, resume_to);
     char a1[16], m[64];
@@ -2266,6 +2288,7 @@ static void library_grew(int before) {
 #include "web.c"
 #include "wifi.c"
 #include "vbrowse.c"
+#include "manga_ui.c"
 
 int main(void) {
   sceIoMkdir("ux0:data", 0777);
@@ -2282,6 +2305,8 @@ int main(void) {
   scePowerSetArmClockFrequency(444);
   scePowerSetBusClockFrequency(222);
   scePowerSetGpuClockFrequency(222);
+  scePowerSetGpuXbarClockFrequency(166);
+  pin_to_core(0); // (the drawing thread on the first core; the work on the other two)
   // (a bigger per-frame vertex pool than vita2d's 1 MB: room to spare on the busiest screen)
   vita2d_init_advanced(4 * 1024 * 1024);
   make_disc();
@@ -2384,6 +2409,7 @@ int main(void) {
       if (r == 1 && ime_for == 6) batch_add_tag(got);
       if (r == 1 && ime_for == 7 && got[0]) { snprintf(drive_new_id, sizeof drive_new_id, "%s", got); drive_ask_secret = 1; }
       if (r == 1 && ime_for == 14 && got[0]) add_site_start(got);
+      if (r == 1 && ime_for == 15) { snprintf(mg.query, sizeof mg.query, "%s", got); mg_search(); }
       if (r == 1 && ime_for == 9) { snprintf(whidden, sizeof whidden, "%s", got); hidden_save(); web_search(); }
       if (r == 1 && ime_for == 10 && got[0]) { snprintf(wkey_user, sizeof wkey_user, "%s", got); wkey_ask = 1; }
       if (r == 1 && ime_for == 11 && got[0]) { snprintf(wkeys[cfg.site], sizeof wkeys[cfg.site], "%s %s", wkey_user, got); wkeys_save(); sfx(SFX_DONE); web_search(); }
@@ -2434,6 +2460,9 @@ int main(void) {
       case S_CLEAN: draw_clean(); break;
       case S_HEALTH: draw_health(); break;
       case S_VIDEOS: draw_videos(); break;
+      case S_MANGA: draw_manga(); break;
+      case S_BOOK: draw_book(); break;
+      case S_READER: draw_reader(); break;
       case S_WEBVIEW: draw_webview(); break;
       case S_COVER: draw_cover_screen(); if (in.tap) { screen = cover_return; } break;
     }
