@@ -321,9 +321,10 @@ static void draw_favs(void) {
     float x = x0 + (i % cols) * (cw + gap), y = top + 8 + (i / cols) * rowh - fav_scroll;
     if (y > H || y + rowh < top) continue;
     int on = i == fav_sel && !in.touching;
-    if (on) rrect(x - 4, y - 4, cw + 8, ch + 8, 14, ACC);
     if (fav_tex[k]) draw_cover(fav_tex[k], x, y, cw, ch, RGBA(255, 255, 255, 255));
-    else { rrect(x, y, cw, ch, 10, SURF); if (fav_ts[k] == 3) text_center(x + cw / 2, y + ch / 2, FAINT, 13, "No preview"); else { spinner(x + cw / 2, y + ch / 2, 10); fav_ask(k, cw, ch); } }
+    else if (fav_ts[k] == 3) { rrect(x, y, cw, ch, 10, SURF); text_center(x + cw / 2, y + ch / 2, FAINT, 13, "No preview"); }
+    else { skeleton(x, y, cw, ch, 10); spinner(x + cw / 2, y + ch / 2, 8); fav_ask(k, cw, ch); }
+    if (on) focus_ring(x, y, cw, ch);
     char len[24] = "";
     if (!comic && v->length > 0) snprintf(len, sizeof len, v->length >= 3600 ? "%d:%02d:%02d" : "%d:%02d", v->length >= 3600 ? v->length / 3600 : v->length / 60, v->length >= 3600 ? v->length / 60 % 60 : v->length % 60, v->length % 60);
     if (comic && v->length > 0) snprintf(len, sizeof len, "%d p", v->length);

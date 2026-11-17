@@ -1510,8 +1510,8 @@ static void draw_sites_sheet(void) {
     else if (sites_tab == 2) { name = msource_name(k); about = msource_about(k); ic = msource_icon(k); cur = screen == S_MANGA && k == mg_src_now(); slot = 48 + k; }
     else if (sites_tab) { name = vsource_name(k); about = vsource_about(k); ic = vsource_icon(k); cur = k == vb_cur; blocked = vsource_blocked(k); slot = 32 + k; }
     else { name = LV_SITES[site].name; about = LV_SITES[site].about; ic = LV_SITES[site].icon; cur = site == cfg.site; slot = site; }
-    if (on) rrect(x - 3, y - 3, tw + 6, th + 6, 20, ACC);
     rrect(x, y, tw, th, 18, on ? SURF2 : with_alpha(SURF2, 140));
+    if (on) focus_ring(x, y, tw, th);
     vita2d_texture *t = site_icon_named(slot, ic);
     int isz = 70;
     if (t) vita2d_draw_texture_tint_scale(t, x + tw / 2 - isz / 2, y + 10, isz / 112.0f, isz / 112.0f, blocked ? RGBA(255, 255, 255, 110) : RGBA(255, 255, 255, 255));
@@ -1854,6 +1854,7 @@ static void draw_web(void) {
   if (first < wgrid.n && wgrid.row[first] != wlast_top_row) { if (wlast_top_row >= 0 && (in.touching || wscroll_v != 0 || in.ly)) sfx(SFX_TICK); wlast_top_row = wgrid.row[first]; }
   int wanted[48], nw = 0, last = first;
   int flinging = fabsf(wscroll_v) > 30; // (flung fast: no previews asked for in passing; rings shown)
+  float fr_x = -1, fr_y = 0, fr_w = 0, fr_h = 0;
   for (int k = first; k < nposts && k < wgrid.n; k++) {
     Rect rc = wgrid.r[k];
     float x = rc.x, y = TOP + 6 + rc.y - wscroll, cw = rc.w, ch = rc.h;
@@ -1863,14 +1864,14 @@ static void draw_web(void) {
     LvPost *p = &posts[k];
     vita2d_texture *t = preview_of(k);
     int on = k == wsel && !in.touching && !sheet_open;
-    float g = on ? 4 : 0;
-    if (on) rrect(x - g - 3, y - g - 3, cw + 2 * g + 6, ch + 2 * g + 6, 12, ACC);
+    float g = on ? 3 : 0;
+    if (on) { fr_x = x - g; fr_y = y - g; fr_w = cw + 2 * g; fr_h = ch + 2 * g; }
     if (t) draw_cover(t, x - g, y - g, cw + 2 * g, ch + 2 * g, RGBA(255, 255, 255, 255));
     else {
-      rrect(x - g, y - g, cw + 2 * g, ch + 2 * g, 8, SURF);
-      if (wstate[k] == 3) text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No preview");
+      if (wstate[k] == 3) { rrect(x - g, y - g, cw + 2 * g, ch + 2 * g, 8, SURF); text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No preview"); }
       else {
-        spinner(x + cw / 2, y + ch / 2, 10); // (a loading ring: the grid never waits for its preview)
+        skeleton(x - g, y - g, cw + 2 * g, ch + 2 * g, 8);
+        spinner(x + cw / 2, y + ch / 2, 8); // (a loading ring: the grid never waits for its preview)
         if (!flinging && nw < 48) wanted[nw++] = k;
       }
     }
@@ -1883,6 +1884,7 @@ static void draw_web(void) {
     if (is_saved(p)) { circle(x + 17, y + 17, 11, ACC); text_center(x + 17, y + 23, RGBA(20, 12, 16, 255), 14, "\u2713"); }
     if (!sheet_open && hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR) { wsel = k; sfx(SFX_SELECT); wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; wv_back = S_WEB; screen = S_WEBVIEW; wv_show(k); return; }
   }
+  if (fr_x >= 0) focus_ring(fr_x, fr_y, fr_w, fr_h);
   // (the next screenful the way it's going)
   if (!flinging) {
     int up = wscroll_v < -1 || in.ly < -0.2f || (in.touching && in.drag_dy > 2);

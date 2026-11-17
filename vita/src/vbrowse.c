@@ -388,7 +388,7 @@ static void draw_videos(void) {
     if (ry > H || ry + VB_CH + 40 < 0) continue;
     text(30, ry + 20, r == vb_row ? TEXT : DIM, 18, VROWS[r].title);
     if (row->state == 3) { text(30, ry + 60, FAINT, 14, row->err[0] ? row->err : "Nothing here"); continue; }
-    if (row->state < 2) { for (int k = 0; k < 5; k++) rrect(30 + k * (VB_CW + 12), ry + 32, VB_CW, VB_CH, 10, RGBA(28, 22, 30, 255)); spinner(30 + VB_CW / 2, ry + 32 + VB_CH / 2, 14); continue; }
+    if (row->state < 2) { for (int k = 0; k < 5; k++) skeleton(30 + k * (VB_CW + 12), ry + 32, VB_CW, VB_CH, 10); spinner(30 + VB_CW / 2, ry + 32 + VB_CH / 2, 12); continue; }
     if (!row->n) { text(30, ry + 60, FAINT, 14, "No videos here"); continue; }
     // (the chosen card kept in sight)
     float want = vb_col[r] * (VB_CW + 12) - (W - 60 - VB_CW) / 2.0f;
@@ -401,12 +401,13 @@ static void draw_videos(void) {
       vb_ask(r, k);
       int on = r == vb_row && k == vb_col[r] && !in.touching;
       float g = on ? 6 : 0, cy = ry + 32;
-      if (on) rrect(x - g - 3, cy - g - 3, VB_CW + 2 * g + 6, VB_CH + 2 * g + 6, 14, ACC);
       vita2d_texture *t = k < VB_PER ? row->tex[k] : NULL;
       if (t) {
         float sx = (VB_CW + 2 * g) / (float)vita2d_texture_get_width(t), sy = (VB_CH + 2 * g) / (float)vita2d_texture_get_height(t);
         vita2d_draw_texture_scale(t, x - g, cy - g, sx, sy);
-      } else { rrect(x - g, cy - g, VB_CW + 2 * g, VB_CH + 2 * g, 10, RGBA(34, 26, 36, 255)); if (k < VB_PER && row->ts[k] == 1) spinner(x + VB_CW / 2, cy + VB_CH / 2, 12); }
+      } else if (k < VB_PER && row->ts[k] == 1) { skeleton(x - g, cy - g, VB_CW + 2 * g, VB_CH + 2 * g, 10); spinner(x + VB_CW / 2, cy + VB_CH / 2, 10); }
+      else rrect(x - g, cy - g, VB_CW + 2 * g, VB_CH + 2 * g, 10, SURF);
+      if (on) focus_ring(x - g, cy - g, VB_CW + 2 * g, VB_CH + 2 * g);
       // the play badge, the kind
       circle(x + 22, cy + VB_CH - 20, 13, RGBA(0, 0, 0, 150));
       text_center(x + 23, cy + VB_CH - 15, TEXT, 13, "▶");

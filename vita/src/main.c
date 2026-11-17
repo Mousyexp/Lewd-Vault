@@ -150,6 +150,15 @@ static const struct { const char *name; unsigned a, b; } THEMES[] = {
   {"vaporwave", RGBA(255, 110, 200, 255), RGBA(90, 200, 255, 255)}, {"honey", RGBA(245, 180, 40, 255), RGBA(255, 120, 60, 255)},
   {"noir", RGBA(220, 220, 220, 255), RGBA(150, 150, 160, 255)}, {"galaxy", RGBA(140, 110, 255, 255), RGBA(255, 110, 200, 255)},
 };
+#define NTHEMES ((int)(sizeof THEMES / sizeof *THEMES)) // (and theme NTHEMES + 1: Custom, cfg.acc_*)
+// A colour from hue (degrees), saturation and value (0-1)
+static unsigned hsv(float h, float s, float v) {
+  h = fmodf(h, 360); if (h < 0) h += 360;
+  float c = v * s, x = c * (1 - fabsf(fmodf(h / 60, 2) - 1)), m = v - c, r, g, b;
+  if (h < 60) { r = c; g = x; b = 0; } else if (h < 120) { r = x; g = c; b = 0; } else if (h < 180) { r = 0; g = c; b = x; }
+  else if (h < 240) { r = 0; g = x; b = c; } else if (h < 300) { r = x; g = 0; b = c; } else { r = c; g = 0; b = x; }
+  return RGBA((int)((r + m) * 255 + .5f), (int)((g + m) * 255 + .5f), (int)((b + m) * 255 + .5f), 255);
+}
 static unsigned with_alpha(unsigned c, int a) { return (c & 0x00FFFFFF) | (unsigned)a << 24; }
 // The backgrounds: the page, its cards, their raised parts, and the text's three greys
 static const struct { const char *name; unsigned bg, surf, surf2, text, dim, faint; } BGS[] = {
@@ -262,6 +271,66 @@ static void rrect(float x, float y, float w, float h, float r, unsigned c) {
   vita2d_draw_texture_tint_part_scale(disc, x, y + h - r, 0, q, q, q, s, s, c);
   vita2d_draw_texture_tint_part_scale(disc, x + w - r, y + h - r, q, q, q, q, s, s, c);
 }
+// A rounded outline (a ring 64 px across, 3 px thick, radius 16), drawn 9-sliced to any size: the
+// focus ring, on top of whatever it marks (it never covers the cards next to it while it moves).
+static unsigned frame_no;
+static vita2d_texture *ring_tex;
+static void make_ring(void) {
+  const int S = 64, R = 16, T = 3;
+  ring_tex = vita2d_create_empty_texture(S, S);
+  if (!ring_tex) return;
+  uint8_t *d = vita2d_texture_get_datap(ring_tex);
+  unsigned stride = vita2d_texture_get_stride(ring_tex);
+  for (int y = 0; y < S; y++)
+    for (int x = 0; x < S; x++) {
+      // the distance to the rounded rectangle's edge, inside it
+      float px = x + 0.5f, py = y + 0.5f;
+      float cx = px < R ? R : px > S - R ? S - R : px, cy = py < R ? R : py > S - R ? S - R : py;
+      float dist = R - sqrtf((px - cx) * (px - cx) + (py - cy) * (py - cy)); // (0 at the edge, R inside)
+      if (px >= R && px <= S - R) dist = fminf(py, S - py);
+      if (py >= R && py <= S - R) dist = fminf(dist, fminf(px, S - px));
+      float a = fminf(fminf(dist + 0.5f, 1.0f), fminf(T + 0.5f - dist, 1.0f));
+      uint8_t *p = d + y * stride + x * 4;
+      p[0] = p[1] = p[2] = 255;
+      p[3] = a <= 0 ? 0 : (uint8_t)(a * 255);
+    }
+  vita2d_texture_set_filters(ring_tex, SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
+}
+static void ring9(float x, float y, float w, float h, unsigned c) {
+  if (!ring_tex || w < 34 || h < 34) { rrect(x, y, w, 3, 1, c); rrect(x, y + h - 3, w, 3, 1, c); return; }
+  const float q = 16, S = 64;
+  vita2d_draw_texture_tint_part_scale(ring_tex, x, y, 0, 0, q, q, 1, 1, c);
+  vita2d_draw_texture_tint_part_scale(ring_tex, x + w - q, y, S - q, 0, q, q, 1, 1, c);
+  vita2d_draw_texture_tint_part_scale(ring_tex, x, y + h - q, 0, S - q, q, q, 1, 1, c);
+  vita2d_draw_texture_tint_part_scale(ring_tex, x + w - q, y + h - q, S - q, S - q, q, q, 1, 1, c);
+  vita2d_draw_texture_tint_part_scale(ring_tex, x + q, y, q, 0, 1, q, w - 2 * q, 1, c);
+  vita2d_draw_texture_tint_part_scale(ring_tex, x + q, y + h - q, q, S - q, 1, q, w - 2 * q, 1, c);
+  vita2d_draw_texture_tint_part_scale(ring_tex, x, y + q, 0, q, q, 1, 1, h - 2 * q, c);
+  vita2d_draw_texture_tint_part_scale(ring_tex, x + w - q, y + q, S - q, q, q, 1, 1, h - 2 * q, c);
+}
+// The focus: one ring, the same on every screen, gliding to whatever is chosen (with the D-pad) and
+// breathing a little. Called after drawing, with the chosen thing's rectangle.
+static struct { float x, y, w, h; int scr; unsigned at; } fring = {0, 0, 0, 0, -1, 0};
+static int screen_now(void);
+static void focus_ring(float x, float y, float w, float h) {
+  int scr = screen_now();
+  if (fring.scr != scr || frame_no - fring.at > 3) { fring.x = x; fring.y = y; fring.w = w; fring.h = h; fring.scr = scr; }
+  else { fring.x += (x - fring.x) * 0.35f; fring.y += (y - fring.y) * 0.35f; fring.w += (w - fring.w) * 0.35f; fring.h += (h - fring.h) * 0.35f; }
+  fring.at = frame_no;
+  float br = 0.5f + 0.5f * sinf(frame_no * 0.1f);
+  ring9(fring.x - 6, fring.y - 6, fring.w + 12, fring.h + 12, with_alpha(ACC, (int)(60 + 50 * br)));
+  ring9(fring.x - 3, fring.y - 3, fring.w + 6, fring.h + 6, ACC);
+}
+// A card still loading: its shape, with a light passing over it (and its ring, small, in the middle)
+static void grad(float x, float y, float w, float h, unsigned col, int a0, int a1, int across);
+static void skeleton(float x, float y, float w, float h, float r) {
+  rrect(x, y, w, h, r, SURF);
+  float band = fmaxf(40, w * 0.4f), span = w + band;
+  float p = fmodf(frame_no * 6.0f + x * 0.7f + y * 0.3f, span * 1.6f) - band;
+  float b0 = fmaxf(x, x + p), mid = x + p + band / 2, b1 = fminf(x + w, x + p + band);
+  if (mid > b0 && mid < x + w) grad(b0, y + 2, fminf(mid, x + w) - b0, h - 4, TEXT, 0, 18, 1);
+  if (b1 > mid && mid > x) grad(fmaxf(mid, x), y + 2, b1 - fmaxf(mid, x), h - 4, TEXT, 18, 0, 1);
+}
 static void heart(float cx, float cy, float s, unsigned c) {
   circle(cx - s * 0.5f, cy - s * 0.2f, s * 0.55f, c);
   circle(cx + s * 0.5f, cy - s * 0.2f, s * 0.55f, c);
@@ -356,7 +425,8 @@ static struct {
   int theme, bgstyle;    // the accent (0: the vault's own, else THEMES[theme - 1]) and the background (BGS)
   int sndpack;           // the interface sounds: SND_PACKS
   int conv;              // offline copies made 480p by a conversion service: 0 off (as it starts), 1 on
-} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0};
+  int acc_h, acc_s, acc_v; // the custom accent (theme 11): hue 0-359, saturation and value 0-100
+} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100};
 static void cfg_load(void) {
   FILE *f = fopen(DATA "/config.txt", "r");
   if (!f) return;
@@ -392,6 +462,9 @@ static void cfg_load(void) {
     else if (!strcmp(line, "bgstyle")) cfg.bgstyle = atoi(eq);
     else if (!strcmp(line, "sndpack")) cfg.sndpack = atoi(eq);
     else if (!strcmp(line, "conv")) cfg.conv = atoi(eq) != 0;
+    else if (!strcmp(line, "acc_h")) cfg.acc_h = atoi(eq);
+    else if (!strcmp(line, "acc_s")) cfg.acc_s = atoi(eq);
+    else if (!strcmp(line, "acc_v")) cfg.acc_v = atoi(eq);
   }
   fclose(f);
   if (cfg.interval < 2 || cfg.interval > 60) cfg.interval = 5;
@@ -402,7 +475,10 @@ static void cfg_load(void) {
   if (cfg.wpages < 0 || cfg.wpages > 50) cfg.wpages = 0;
   if (cfg.kind < 0 || cfg.kind > 3) cfg.kind = 0;
   if (cfg.lmode < 0 || cfg.lmode > 3) cfg.lmode = 0;
-  if (cfg.theme < 0 || cfg.theme > 10) cfg.theme = 0;
+  if (cfg.theme < 0 || cfg.theme > NTHEMES + 1) cfg.theme = 0;
+  cfg.acc_h = ((cfg.acc_h % 360) + 360) % 360;
+  if (cfg.acc_s < 0 || cfg.acc_s > 100) cfg.acc_s = 65;
+  if (cfg.acc_v < 25 || cfg.acc_v > 100) cfg.acc_v = 100;
   if (cfg.bgstyle < 0 || cfg.bgstyle > 3) cfg.bgstyle = 0;
   if (cfg.sndpack < 0 || cfg.sndpack > 3) cfg.sndpack = 0;
   if (cfg.sort < 0 || cfg.sort >= 7) cfg.sort = 0;
@@ -413,9 +489,9 @@ static void cfg_load(void) {
 static void cfg_save(void) {
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
-          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv);
+          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -527,7 +603,6 @@ typedef struct { int item, big, gen, vgen; LvPixels px; } Done;
 static Done done[16];
 static int ndone;
 static volatile int worker_run = 1;
-static unsigned frame_no;
 static char cache_dir[600];
 
 static unsigned long fnv(const char *s) {
@@ -1047,6 +1122,7 @@ static int ime_poll(char *out, int cap) {
 // ---------- screens ----------
 enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI, S_CALC, S_CLEAN, S_HEALTH, S_VIDEOS, S_MANGA, S_BOOK, S_READER, S_FAVS };
 static int screen = S_PICK, cover_return = S_LIBRARY;
+static int screen_now(void) { return screen; }
 static char found[16][512];
 static int nfound, pick_sel;
 static char message[256];
@@ -1076,7 +1152,13 @@ static void apply_theme(void) {
   BG = BGS[b].bg; SURF = BGS[b].surf; SURF2 = BGS[b].surf2; TEXT = BGS[b].text; DIM = BGS[b].dim; FAINT = BGS[b].faint;
   vita2d_set_clear_color(BG);
   // the accent: the one chosen in Settings, else the vault's own theme (as the PC and the phones show it)
-  if (cfg.theme > 0 && cfg.theme <= (int)(sizeof THEMES / sizeof *THEMES)) { ACC = THEMES[cfg.theme - 1].a; ACC2 = THEMES[cfg.theme - 1].b; return; }
+  if (cfg.theme == NTHEMES + 1) {
+    // the custom colour, and a second one a little round the wheel for the gradients
+    ACC = hsv(cfg.acc_h, cfg.acc_s / 100.f, cfg.acc_v / 100.f);
+    ACC2 = hsv(cfg.acc_h + 40, cfg.acc_s / 100.f * 0.9f, fminf(1, cfg.acc_v / 100.f + 0.05f));
+    return;
+  }
+  if (cfg.theme > 0 && cfg.theme <= NTHEMES) { ACC = THEMES[cfg.theme - 1].a; ACC2 = THEMES[cfg.theme - 1].b; return; }
   for (size_t k = 0; k < sizeof THEMES / sizeof *THEMES; k++)
     if (!strcmp(THEMES[k].name, vault.theme)) { ACC = THEMES[k].a; ACC2 = THEMES[k].b; return; }
   ACC = THEMES[0].a; ACC2 = THEMES[0].b;
@@ -1625,6 +1707,7 @@ static void draw_library(void) {
   // (flung fast: nothing new asked for, the cards in passing aren't decoded for nothing, they show
   //  their loading rings; what's in view is asked for as it slows)
   int flinging = fabsf(scroll_v) > 30 || fast;
+  float fr_x = -1, fr_y = 0, fr_w = 0, fr_h = 0;
   for (int k = first; k < nshown && k < lgrid.n; k++) {
     int i = shown[k];
     Rect rc = lgrid.r[k];
@@ -1635,15 +1718,15 @@ static void draw_library(void) {
     LvItem *it = &vault.items[i];
     vita2d_texture *t = thumb_of(i);
     int on = k == sel && !in.touching;
-    float grow = on ? 4 : 0;
-    if (on) rrect(x - grow - 3, y - grow - 3, cw + 2 * grow + 6, ch + 2 * grow + 6, 12, ACC);
+    float grow = on ? 3 : 0;
+    if (on) { fr_x = x - grow; fr_y = y - grow; fr_w = cw + 2 * grow; fr_h = ch + 2 * grow; }
     if (t) draw_cover(t, x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, RGBA(255, 255, 255, 255));
     else {
-      rrect(x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, 8, SURF);
-      if (tstate[i] == 3) text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No picture");
+      if (tstate[i] == 3) { rrect(x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, 8, SURF); text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No picture"); }
       else {
-        // (still coming: a loading ring; the grid never waits for it, the picture appears when ready)
-        spinner(x + cw / 2, y + ch / 2, 10);
+        // (still coming: a shimmering card with a small loading ring; the grid never waits for it)
+        skeleton(x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, 8);
+        spinner(x + cw / 2, y + ch / 2, 8);
         if (!flinging && nw < 64) { want_size(i, cw, ch); wanted[nw++] = i; }
       }
     }
@@ -1683,6 +1766,7 @@ static void draw_library(void) {
       else { sfx(SFX_SELECT); open_viewer(k, 0); in = saved_in; return; }
     }
   }
+  if (fr_x >= 0) focus_ring(fr_x, fr_y, fr_w, fr_h);
   // (and the next screenful the way it's going, ready before it's needed: below going down, above
   //  going up)
   if (!flinging) {
@@ -2410,14 +2494,110 @@ static int conv_any_key(void) {
   for (int s = 0; s < CV_N; s++) if (conv_keys[s][0]) return 1;
   return 0;
 }
+// ----- the live theme preview: a small Library, in the colours chosen -----
+static void theme_preview(float x, float y) {
+  const float w = 236, h = 150;
+  rrect(x - 3, y - 3, w + 6, h + 6, 18, with_alpha(ACC, 110));
+  rrect(x, y, w, h, 16, BG);
+  rrect(x + 10, y + 10, 70, 16, 8, SURF2);   // the header's search pill
+  circle(x + w - 18, y + 18, 6, ACC);        // its online light (in the accent, here)
+  static const char *const M[] = {"All", "Pics", "Vids"};
+  for (int k = 0; k < 3; k++) {
+    float mx = x + 10 + k * 42;
+    rrect(mx, y + 32, 38, 14, 7, k == 0 ? ACC : SURF);
+    text_center(mx + 19, y + 43, k == 0 ? BG : DIM, 10, M[k]);
+  }
+  // six cards: the Library's own first thumbnails when they're loaded, else the theme's colours
+  for (int k = 0; k < 6; k++) {
+    float cx = x + 10 + (k % 3) * 73, cy = y + 52 + (k / 3) * 38, cw = 69, ch = 34;
+    vita2d_texture *t = k < nshown && shown ? thumb_of(shown[k]) : NULL;
+    if (t) draw_cover(t, cx, cy, cw, ch, RGBA(255, 255, 255, 255)); // (an atlas cell: draw_cover knows)
+    else rrect(cx, cy, cw, ch, 6, with_alpha(k & 1 ? ACC2 : ACC, 60 + 20 * (k % 3)));
+    if (k == 1) ring9(cx - 3, cy - 3, cw + 6, ch + 6 < 34 ? 34 : ch + 6, ACC);
+  }
+  rrect(x + w / 2 - 50, y + h - 22, 100, 16, 8, SURF2);   // the tab bar
+  circle(x + w / 2 - 30, y + h - 14, 4, ACC);
+  for (int k = 1; k < 4; k++) circle(x + w / 2 - 30 + k * 20, y + h - 14, 4, FAINT);
+  text(x + 10, y + h + 18, FAINT, 12, "Preview");
+}
+
+// ----- your own accent: a colour wheel (hue round, saturation out) and a brightness slider -----
+static int wheel_open;
+static vita2d_texture *wheel_tex;
+static void draw_wheel(void) {
+  const int D = 220;
+  if (!wheel_tex && (wheel_tex = vita2d_create_empty_texture(D, D))) {
+    uint32_t *px = vita2d_texture_get_datap(wheel_tex);
+    unsigned st = vita2d_texture_get_stride(wheel_tex) / 4;
+    for (int y = 0; y < D; y++)
+      for (int x = 0; x < D; x++) {
+        float dx = x + .5f - D / 2.f, dy = y + .5f - D / 2.f, r = sqrtf(dx * dx + dy * dy) / (D / 2.f);
+        float a = fminf(1, fmaxf(0, (1 - r) * D / 2.f)); // (a soft edge)
+        unsigned c = hsv(atan2f(dy, dx) * 57.2958f, fminf(1, r), 1);
+        px[y * st + x] = with_alpha(c, (int)(a * 255));
+      }
+    vita2d_texture_set_filters(wheel_tex, SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
+  }
+  vita2d_draw_rectangle(0, 0, W, H, with_alpha(BG, 255));
+  text(30, 44, TEXT, 26, "Your colour");
+  text(30 + text_w(26, "Your colour") + 16, 44, FAINT, 13, "Touch the wheel  \u00b7  \u2190\u2192 hue  \u00b7  \u2191\u2193 colourfulness  \u00b7  L R brightness  \u00b7  \u25cb done");
+  const float cx = 250, cy = 290, R = D / 2.f;
+  if (wheel_tex) vita2d_draw_texture_tint(wheel_tex, cx - R, cy - R, hsv(0, 0, cfg.acc_v / 100.f));
+  // the brightness slider
+  const float sx = 420, sy = 180, sw = 30, sh = 220;
+  for (int k = 0; k < 22; k++) rrect(sx, sy + k * 10, sw, 11, k == 0 || k == 21 ? 6 : 0, hsv(cfg.acc_h, cfg.acc_s / 100.f, 1 - k / 21.f * 0.75f));
+  float ky = sy + (1 - (cfg.acc_v - 25) / 75.f) * sh;
+  rrect(sx - 6, ky - 4, sw + 12, 8, 4, TEXT);
+  // the knob on the wheel
+  float a = cfg.acc_h / 57.2958f, rr = cfg.acc_s / 100.f * R;
+  circle(cx + cosf(a) * rr, cy + sinf(a) * rr, 11, TEXT);
+  circle(cx + cosf(a) * rr, cy + sinf(a) * rr, 8, ACC);
+  // the result, on the things it colours
+  float px = 520, py = 160;
+  rrect(px, py, 380, 260, 20, SURF);
+  text(px + 24, py + 40, TEXT, 20, "How it looks");
+  rrect(px + 24, py + 64, 150, 40, 20, ACC);
+  text_center(px + 99, py + 90, BG, 16, "\u2665 Favorite");
+  rrect(px + 190, py + 64, 150, 40, 20, SURF2);
+  text_center(px + 265, py + 90, ACC, 16, "\u2193 Offline");
+  grad(px + 24, py + 124, 332, 60, ACC, 200, 0, 1);
+  grad(px + 24, py + 124, 332, 60, ACC2, 0, 200, 1);
+  rrect(px + 24, py + 204, 332, 8, 4, SURF2);
+  rrect(px + 24, py + 204, 200, 8, 4, ACC);
+  textf(px + 24, py + 244, FAINT, 13, "Hue %d\u00b0  \u00b7  colour %d%%  \u00b7  brightness %d%%", cfg.acc_h, cfg.acc_s, cfg.acc_v);
+  // touch: on the wheel, the hue and colourfulness; on the slider, the brightness
+  int ch = 0;
+  if (in.touching) {
+    float tx = in.tx, ty = in.ty, dx = tx - cx, dy = ty - cy, dist = sqrtf(dx * dx + dy * dy);
+    if (in.down_x < sx - 20 && dist < R + 30) {
+      cfg.acc_h = ((int)(atan2f(dy, dx) * 57.2958f) + 360) % 360;
+      cfg.acc_s = (int)fminf(100, dist / R * 100);
+      ch = 1;
+    } else if (in.down_x >= sx - 20 && in.down_x < sx + sw + 30 && in.down_y > sy - 30 && in.down_y < sy + sh + 30) {
+      cfg.acc_v = 25 + (int)(75 * (1 - fminf(1, fmaxf(0, (ty - sy) / sh))));
+      ch = 1;
+    }
+  }
+  unsigned held = in.now;
+  if (held & SCE_CTRL_RIGHT) { cfg.acc_h = (cfg.acc_h + 2) % 360; ch = 1; }
+  if (held & SCE_CTRL_LEFT) { cfg.acc_h = (cfg.acc_h + 358) % 360; ch = 1; }
+  if (held & SCE_CTRL_UP) { cfg.acc_s = cfg.acc_s < 100 ? cfg.acc_s + 1 : 100; ch = 1; }
+  if (held & SCE_CTRL_DOWN) { cfg.acc_s = cfg.acc_s > 0 ? cfg.acc_s - 1 : 0; ch = 1; }
+  if (held & SCE_CTRL_RTRIGGER) { cfg.acc_v = cfg.acc_v < 100 ? cfg.acc_v + 1 : 100; ch = 1; }
+  if (held & SCE_CTRL_LTRIGGER) { cfg.acc_v = cfg.acc_v > 25 ? cfg.acc_v - 1 : 25; ch = 1; }
+  if (ch) apply_theme();
+  if (in.pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_CROSS)) { sfx(SFX_CLOSE); wheel_open = 0; cfg_save(); }
+}
+
 static void draw_settings(void) {
   if (!conv_loaded) conv_keys_load();
   char vconv[80];
   if (!cfg.conv) snprintf(vconv, sizeof vconv, "Off");
   else snprintf(vconv, sizeof vconv, "%s: %s", lv_conv_name(conv_sel), conv_keys[conv_sel][0] ? "key set" : "no key");
   char vtheme[48];
-  snprintf(vtheme, sizeof vtheme, "%s", cfg.theme > 0 ? THEMES[cfg.theme - 1].name : "The vault's own");
+  snprintf(vtheme, sizeof vtheme, "%s", cfg.theme == NTHEMES + 1 ? "Custom (\u2715 colour)" : cfg.theme > 0 ? THEMES[cfg.theme - 1].name : "The vault's own");
   if (cfg.theme > 0) vtheme[0] = (char)toupper((unsigned char)vtheme[0]);
+  if (wheel_open) { draw_wheel(); return; }
   char v3[64];
   snprintf(v3, sizeof v3, "%d%%", cfg.volume);
   char v4[16];
@@ -2440,38 +2620,78 @@ static void draw_settings(void) {
     {"Your stats", "", "What's here and how it's been looked at"},
     {"Clean up", "", "One at a time: swipe away what you don't want any more"},
     {"Health check", "", "What's wrong in the vault, and what can be put right"},
-    {"Theme", vtheme, "The accent colour (\u2190\u2192): the vault's own, or one for the Vita"},
+    {"Theme", vtheme, "The accent colour (\u2190\u2192): the vault's own, ten more, or your own"},
     {"Background", BGS[cfg.bgstyle].name, "\u2190\u2192: dark, black (OLED), midnight or plum"},
     {"Sound pack", SND_NAMES[cfg.sndpack], "The interface sounds (\u2190\u2192, a sound plays to hear them)"},
     {"Video conversion", vconv, cfg.conv ? "Big booru videos made 480p by a service for offline (your key; it sees the address) \u00b7 \u2190\u2192 Off or which \u00b7 \u2715 key \u00b7 \u25a1 remove" : "Off: \u2190\u2192 to turn it on (big booru videos made 480p by a service, for offline)"},
     {"Open another vault", "", "The vaults on the memory card"},
     {"Clear the thumbnail cache", "", "They're made again as you scroll"},
   };
-  int n = ST_N, rh = 58, top = 62, room = H - BAR - top + 8;
-  // (the chosen row kept in sight)
-  float want = set_sel * rh;
-  if (want + rh - set_scroll > room) set_scroll = want + rh - room;
+  // In sections, each with a header: the rows in the order shown (set_sel stays a row's ST_ id)
+  static const signed char ORDER[] = {
+    -1, ST_THEME, ST_BGS, ST_SNDPACK, ST_SOUNDS, ST_GLOW, ST_DBL,
+    -2, ST_VOL,
+    -3, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK,
+    -4, ST_DRIVE, ST_WIFI, ST_CONV,
+    -5, ST_SEARCH, ST_STATS, ST_CLEAN, ST_HEALTH, ST_VAULT, ST_CACHE,
+  };
+  static int set_init;
+  if (!set_init) { set_init = 1; set_sel = ST_THEME; } // (the first row shown)
+  static const char *const SECT[] = {"Appearance", "Playback", "Privacy", "Sync and sources", "Library"};
+  static const char *const SECT_ICON[] = {"sliders", "play", "info", "wifi", "photos"};
+  enum { NORD = sizeof ORDER / sizeof *ORDER };
+  const int rh = 58, hh = 40, top = 62, room = H - BAR - top + 8;
+  float ypos[NORD], total = 0;
+  int at = 0;
+  for (int k = 0; k < NORD; k++) { ypos[k] = total; total += ORDER[k] < 0 ? hh : rh; if (ORDER[k] == set_sel) at = k; }
+  // (the chosen row kept in sight, its section's header too when it's the first)
+  float want = ypos[at] - (at > 0 && ORDER[at - 1] < 0 ? hh : 0);
+  if (ypos[at] + rh - set_scroll > room) set_scroll = ypos[at] + rh - room;
   if (want < set_scroll) set_scroll = want;
-  for (int k = 0; k < n; k++) {
-    int y = top + k * rh - (int)set_scroll;
+  float fy = -1;
+  // (the preview has a column of its own at the right while Theme or Background is chosen: the rows
+  //  narrow smoothly to make room, so it never covers their values)
+  static float rw_now = 0;
+  int pv = set_sel == ST_THEME || set_sel == ST_BGS;
+  float rw_want = pv ? W - 60 - 262 : W - 60;
+  if (rw_now < 1) rw_now = rw_want;
+  rw_now += (rw_want - rw_now) * 0.3f;
+  if (fabsf(rw_want - rw_now) < 0.5f) rw_now = rw_want;
+  const int RW = (int)rw_now;
+  for (int k = 0; k < NORD; k++) {
+    int y = top + (int)ypos[k] - (int)set_scroll;
     if (y + rh < top - 10 || y > H - BAR) continue;
-    rrect(30, y, W - 60, 54, 14, k == set_sel ? SURF2 : SURF);
-    if (k == set_sel) rrect(30, y, 5, 54, 3, ACC);
-    text(54, y + 24, TEXT, 18, rows[k].name);
-    int vw = rows[k].value[0] ? text_w(18, rows[k].value) + 24 : 0;
-    text_fit(54, y + 45, FAINT, 14, rows[k].hint, W - 108 - vw); // (cut short of the value)
-    if (rows[k].value[0]) text(W - 54 - text_w(18, rows[k].value), y + 34, ACC, 18, rows[k].value);
-    if (hit(30, y, W - 60, 54) && in.tap_y > top && in.tap_y < H - BAR) { set_sel = k; in.pressed |= SCE_CTRL_CROSS; }
+    if (ORDER[k] < 0) {
+      int sct = -ORDER[k] - 1;
+      icon(SECT_ICON[sct], 44, y + hh - 16, ACC);
+      text(62, y + hh - 9, DIM, 15, SECT[sct]);
+      vita2d_draw_rectangle(62 + text_w(15, SECT[sct]) + 12, y + hh - 15, 30 + RW - (74 + text_w(15, SECT[sct])), 1, with_alpha(FAINT, 90));
+      continue;
+    }
+    int r = ORDER[k];
+    rrect(30, y, RW, 54, 14, r == set_sel ? SURF2 : SURF);
+    if (r == set_sel) fy = y;
+    int vw = rows[r].value[0] ? text_w(18, rows[r].value) + 24 : 0;
+    text_fit(54, y + 24, TEXT, 18, rows[r].name, RW - 48 - (vw ? 60 : 0));
+    text_fit(54, y + 45, FAINT, 14, rows[r].hint, RW - 48 - vw); // (cut short of the value)
+    if (rows[r].value[0]) text(30 + RW - 24 - text_w(18, rows[r].value), y + 34, ACC, 18, rows[r].value);
+    if (hit(30, y, RW, 54) && in.tap_y > top && in.tap_y < H - BAR) { set_sel = r; in.pressed |= SCE_CTRL_CROSS; }
   }
+  if (fy >= 0) focus_ring(30, fy, RW, 54);
   vita2d_draw_rectangle(0, 0, W, top - 4, BG);
   text(30, 44, TEXT, 26, "Settings");
   textf(30 + text_w(26, "Settings") + 16, 44, FAINT, 13, "%s  ·  %d items%s", vault.root, vault.n, vault.untraceable ? "  ·  Untraceable" : "");
   if (in.touching && in.down_y > top) set_scroll -= in.drag_dy;
   if (set_scroll < 0) set_scroll = 0;
-  if (set_scroll > n * rh - room) set_scroll = n * rh - room > 0 ? n * rh - room : 0;
+  if (set_scroll > total - room) set_scroll = total - room > 0 ? total - room : 0;
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
-  if (in.pressed & SCE_CTRL_DOWN) set_sel = (set_sel + 1) % n;
-  if (in.pressed & SCE_CTRL_UP) set_sel = (set_sel + n - 1) % n;
+  if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) {
+    int step = (in.pressed & SCE_CTRL_DOWN) ? 1 : -1, k = at;
+    do k = (k + step + NORD) % NORD; while (ORDER[k] < 0);
+    set_sel = ORDER[k];
+  }
+  // the theme (or background) chosen: a little Library, in its colours, to see it before leaving
+  if (pv && RW < W - 60 - 200) theme_preview(W - 30 - 236, top + 16);
   int d = (in.pressed & SCE_CTRL_RIGHT) ? 1 : (in.pressed & SCE_CTRL_LEFT) ? -1 : 0;
   int cross = (in.pressed & SCE_CTRL_CROSS) != 0, square = (in.pressed & SCE_CTRL_SQUARE) != 0;
   if (cross) d = d ? d : 1;
@@ -2510,7 +2730,9 @@ static void draw_settings(void) {
       case ST_STATS: if (cross) { sfx(SFX_OPEN); screen = S_STATS; return; } break;
       case ST_WIFI: if (cross) { sfx(SFX_OPEN); wf_return = S_SETTINGS; wf_last[0] = 0; screen = S_WIFI; return; } break;
       case ST_VAULT: if (cross) { views_save_async(); resume_save(); find_vaults(); screen = S_PICK; return; } break;
-      case ST_THEME: cfg.theme = (cfg.theme + d + 11) % 11; apply_theme(); cfg_save(); sfx(SFX_TOGGLE); break;
+      case ST_THEME:
+        if (cross && cfg.theme == NTHEMES + 1) { sfx(SFX_OPEN); wheel_open = 1; break; }
+        cfg.theme = (cfg.theme + d + NTHEMES + 2) % (NTHEMES + 2); apply_theme(); cfg_save(); sfx(SFX_TOGGLE); break;
       case ST_BGS: cfg.bgstyle = (cfg.bgstyle + d + 4) % 4; apply_theme(); cfg_save(); sfx(SFX_TOGGLE); break;
       case ST_SNDPACK: cfg.sndpack = (cfg.sndpack + d + 4) % 4; sfx_pack(SND_PACKS[cfg.sndpack]); cfg_save(); sfx(SFX_SAVED); break;
       case ST_CONV:
@@ -2617,6 +2839,7 @@ int main(void) {
   // (a bigger per-frame vertex pool than vita2d's 1 MB: room to spare on the busiest screen)
   vita2d_init_advanced(4 * 1024 * 1024);
   make_disc();
+  make_ring();
   splash_tex = vita2d_load_PNG_file("app0:splash.png");
   sfx_init();
   sfx_volume(70);

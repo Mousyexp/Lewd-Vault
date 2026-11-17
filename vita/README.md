@@ -36,10 +36,16 @@ Untraceable vault's cached thumbnails are encrypted with its key, like everythin
 | Browser's full view | swipe; pinch; tap Save; pull up for details, tap a tag to search it | ←/→ next; □ save; △ details; ✕ zoom or play/pause; ○ back |
 | Anywhere | | SELECT covers the screen with a plain clock (again to come back); ○ in the Library, Browser and Settings goes round those three |
 
-Settings: search the Library, video volume, interface sounds, **Theme** (the accent: the vault's own,
-or any of ten for the Vita), **Background** (dark, black for OLED screens, midnight, plum), **Sound
-pack** (the Vita's own, or Soft, Retro (8-bit) and Bubbly, made by `tools/make-sound-packs.py`), what a double tap does, the glow behind
-pictures, Google Drive, another vault, clearing the thumbnail cache.
+Settings, in sections (Appearance, Playback, Privacy, Sync and sources, Library): search the Library, video
+volume, interface sounds, **Theme** (the accent: the vault's own, any of ten for the Vita, or **Custom**:
+✕ opens a colour wheel, touch it or ←→ hue, ↑↓ colourfulness, L/R brightness), **Background** (dark,
+black for OLED screens, midnight, plum), **Sound pack** (the Vita's own, or Soft, Retro (8-bit) and
+Bubbly, made by `tools/make-sound-packs.py`), what a double tap does, the glow behind pictures, Google
+Drive, another vault, clearing the thumbnail cache. While Theme or Background is chosen, a small
+Library at the right shows it in those colours.
+
+On every screen the chosen card or row has the same ring, gliding from one to the next; a card
+still loading shows its shape with a light passing over it and a small loading ring.
 
 **Modes** (the switch beside the title, or L / R): **All** (everything but comics' pages), **Pictures** (pictures and GIFs, not
 comics' pages), **Videos**, and **Comics**: a shelf of books, one card each (its first page, its pages

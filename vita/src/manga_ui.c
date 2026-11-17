@@ -621,18 +621,18 @@ static void draw_manga(void) {
     if (y + MG_CH + 52 < TOP) continue;
     last = i;
     int on = i == mg.sel && !in.touching;
-    if (on) rrect(x - 4, y - 4, MG_CW + 8, MG_CH + 8, 14, ACC);
     vita2d_texture *t = mg_cover(i);
     if (t) vita2d_draw_texture_scale(t, x, y, MG_CW / (float)vita2d_texture_get_width(t), MG_CH / (float)vita2d_texture_get_height(t));
     else {
-      rrect(x, y, MG_CW, MG_CH, 10, SURF);
-      if (mg.cstate && mg.cstate[i] == 3) text_center(x + MG_CW / 2, y + MG_CH / 2, FAINT, 13, "No cover");
+      if (mg.cstate && mg.cstate[i] == 3) { rrect(x, y, MG_CW, MG_CH, 10, SURF); text_center(x + MG_CW / 2, y + MG_CH / 2, FAINT, 13, "No cover"); }
       else {
-        spinner(x + MG_CW / 2, y + MG_CH / 2, 12);
+        skeleton(x, y, MG_CW, MG_CH, 10);
+        spinner(x + MG_CW / 2, y + MG_CH / 2, 10);
         // (asked for once the list isn't moving fast: covers flown past aren't fetched for nothing)
         if (mg.cstate && mg.cstate[i] == 0 && mg.books[i].cover[0] && !(in.touching && abs(in.drag_dy) > 25)) { mg.cstate[i] = 1; mg_push(MJ_COVER, i, 0, mg.books[i].cover); }
       }
     }
+    if (on) focus_ring(x, y, MG_CW, MG_CH);
     if (i < MG_MAX && md_official[i]) {
       vita2d_draw_rectangle(x, y, MG_CW, MG_CH, RGBA(10, 8, 12, 150));
       rrect(x + 6, y + MG_CH - 26, MG_CW - 12, 20, 10, RGBA(0, 0, 0, 190));
