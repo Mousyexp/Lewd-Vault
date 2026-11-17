@@ -2054,6 +2054,147 @@ static void show_item(int k) {
   }
   ask_big(shown[vk]);
 }
+static void fmt_time(uint64_t ms, char *o, size_t n);
+// ----- the video controls, the same in both full views (the Library's and the Browser's) -----
+// A play/pause button in the middle with ten seconds back and on either side; the bar at the foot
+// with what has downloaded as a lighter part, the time gone, and a pill with the time left. A skip
+// (by a button, a double tap at a side, or ↑↓/←→) flashes a ripple at that side even when the
+// controls are hidden.
+static unsigned vflash_at;
+static int vflash_dir;
+static void vflash(int dir) { vflash_at = frame_no ? frame_no : 1; vflash_dir = dir; }
+#define VC_BTN_Y (H / 2)
+static void vc_tri(float cx, float cy, float s, unsigned c) { // (a play triangle, pointing right)
+  for (int k = 0; k < (int)(s * 1.6f); k++) vita2d_draw_rectangle(cx - s * 0.55f + k, cy - s * 0.8f + k / 2.0f, 1, s * 1.6f - k, c);
+}
+static void vc_skip_icon(float cx, float cy, int dir, unsigned c) {
+  // a round arrow and "10"
+  for (int k = 0; k < 28; k++) {
+    float ang = (dir > 0 ? -2.6f : -0.54f) + k * 0.115f * (dir > 0 ? 1 : -1) * -1;
+    vita2d_draw_rectangle(cx + cosf(ang) * 15 - 1, cy + sinf(ang) * 15 - 1, 2.5f, 2.5f, c);
+  }
+  float ax = dir > 0 ? cx + 13 : cx - 13, ay = cy - 9;
+  vita2d_draw_line(ax, ay, ax + (dir > 0 ? -7 : 7), ay - 4, c);
+  vita2d_draw_line(ax, ay, ax + (dir > 0 ? -5 : 5), ay + 6, c);
+  text_center(cx, cy + 6, c, 13, "10");
+}
+// the ripple of a skip, at its side
+static void vctl_flash_draw(void) {
+  if (!vflash_at) return;
+  unsigned age = frame_no - vflash_at;
+  if (age > 36) { vflash_at = 0; return; }
+  float p = age / 36.0f, a = 1 - p;
+  float cx = vflash_dir > 0 ? W - 150 : 150;
+  circle(cx, H / 2, 70 + 60 * p, with_alpha(TEXT, (int)(60 * a)));
+  circle(cx, H / 2, 48, RGBA(0, 0, 0, (int)(190 * a)));
+  text_center(cx, H / 2 + 7, with_alpha(TEXT, (int)(255 * a)), 20, vflash_dir > 0 ? "+10 s" : "−10 s");
+}
+// The controls drawn at alpha a (0-240); have: the share downloaded (0-1), or a negative number for
+// all of it
+static void vctl_draw(const LvVideo *v, int a, float have) {
+  if (!v) return;
+  uint64_t d = lv_video_duration(v), q = lv_video_pos(v);
+  float f = d ? fminf(1, q / (float)d) : 0;
+  grad(0, H - 84, W, 84, RGBA(0, 0, 0, 255), 0, 90 * a / 240, 0);
+  // the middle: back, play/pause, on
+  circle(W / 2, VC_BTN_Y, 38, RGBA(0, 0, 0, 120 * a / 240));
+  circle(W / 2, VC_BTN_Y, 38, with_alpha(TEXT, 30 * a / 240));
+  circle(W / 2, VC_BTN_Y, 36, RGBA(0, 0, 0, 130 * a / 240));
+  if (lv_video_paused(v)) vc_tri(W / 2 + 4, VC_BTN_Y, 20, with_alpha(TEXT, a));
+  else { rrect(W / 2 - 13, VC_BTN_Y - 16, 9, 32, 3, with_alpha(TEXT, a)); rrect(W / 2 + 4, VC_BTN_Y - 16, 9, 32, 3, with_alpha(TEXT, a)); }
+  for (int s = -1; s <= 1; s += 2) {
+    float cx = W / 2 + s * 120;
+    circle(cx, VC_BTN_Y, 28, RGBA(0, 0, 0, 110 * a / 240));
+    vc_skip_icon(cx, VC_BTN_Y, s, with_alpha(TEXT, a));
+  }
+  // the bar: the whole, what's here, what's been played, the knob
+  const float bx = 40, bw = W - 80 - 92, by = H - 30;
+  rrect(bx, by, bw, 6, 3, with_alpha(TEXT, a / 5));
+  if (have >= 0) rrect(bx, by, bw * fminf(1, have), 6, 3, with_alpha(TEXT, a / 2));
+  else rrect(bx, by, bw, 6, 3, with_alpha(TEXT, a / 3));
+  rrect(bx, by, bw * f, 6, 3, with_alpha(ACC, a));
+  circle(bx + bw * f, by + 3, 8, with_alpha(TEXT, a));
+  char t1[16], t2[20];
+  fmt_time(q, t1, sizeof t1);
+  text(bx, by - 10, with_alpha(TEXT, a), 14, t1);
+  // the time left, in a pill
+  fmt_time(d > q ? d - q : 0, t2 + 1, sizeof t2 - 1);
+  t2[0] = '-';
+  int pw = text_w(14, t2) + 20;
+  rrect(W - 40 - pw, by - 9, pw, 24, 12, with_alpha(SURF2, a));
+  text(W - 40 - pw + 10, by + 8, with_alpha(TEXT, a), 14, t2);
+}
+// A tap while the controls show: 1 if it was theirs (the play button, a skip, the bar)
+static int vctl_tap(LvVideo *v, int x, int y, int64_t *seek_to) {
+  if (!v) return 0;
+  uint64_t d = lv_video_duration(v);
+  if (hypotf(x - W / 2, y - VC_BTN_Y) < 44) { lv_video_pause(v, !lv_video_paused(v)); sfx(SFX_TOGGLE); return 1; }
+  for (int s = -1; s <= 1; s += 2)
+    if (hypotf(x - (W / 2 + s * 120), y - VC_BTN_Y) < 34) { *seek_to = (int64_t)lv_video_pos(v) + s * 10000; vflash(s); return 2; }
+  const float bx = 40, bw = W - 80 - 92;
+  if (y > H - 60 && x < bx + bw + 20 && d) { *seek_to = (int64_t)(d * fminf(1, fmaxf(0, (x - bx) / bw))); return 2; }
+  return 0;
+}
+// A double tap on a video: at the left or right third, ten seconds back or on (1 / -1), else 0
+static int vctl_dbl_side(int x) { return x < W / 3 ? -1 : x > W * 2 / 3 ? 1 : 0; }
+
+// A picture drawn in a rectangle: contained (cover 0) to covering it, cropped (cover 1)
+static void draw_in_rect(vita2d_texture *t, float tw, float th, float x, float y, float w, float h, float cover, unsigned tint) {
+  float sc = fminf(w / tw, h / th), sv = fmaxf(w / tw, h / th), s = sc + (sv - sc) * cover;
+  float pw = fminf(tw, w / s), ph = fminf(th, h / s);
+  vita2d_draw_texture_tint_part_scale(t, x + (w - pw * s) / 2, y + (h - ph * s) / 2, (tw - pw) / 2, (th - ph) / 2, pw, ph, s, s, tint);
+}
+// Swipe down to close: the picture follows the finger, smaller, the black behind it thinning; let go
+// far enough and it flies back into its card in the grid (the "hero"), else springs back.
+typedef struct { float drag; int closing; unsigned at; float x, y, w, h; } HeroClose;
+static int hero_drag(HeroClose *hc, int may) {
+  // (call while touching; 1 while this gesture is a swipe down)
+  if (!may) return 0;
+  float dy = in.ty - in.down_y, dx = in.tx - in.down_x;
+  if (hc->drag > 0 || (dy > 26 && dy > fabsf(dx) * 1.3f)) { hc->drag = fmaxf(0, dy); return 1; }
+  return 0;
+}
+static int hero_release(HeroClose *hc) {
+  // (call when not touching: 1 when it should start flying home)
+  if (hc->drag > 110 && !hc->closing) { hc->closing = 1; hc->at = frame_no; return 1; }
+  hc->drag *= 0.6f;
+  if (hc->drag < 1) hc->drag = 0;
+  return 0;
+}
+// where the picture is drawn this frame, from where it would be (x, y, w, h) and the card (cx..ch)
+static float hero_place(HeroClose *hc, float *x, float *y, float *w, float *h, Rect card, int has_card) {
+  if (hc->closing) {
+    float p = fminf(1, (frame_no - hc->at) / 12.0f), e = 1 - (1 - p) * (1 - p) * (1 - p);
+    float fx = hc->x, fy = hc->y, fw = hc->w, fh = hc->h;
+    float tx = has_card ? card.x : W / 2 - 40, ty = has_card ? card.y : H / 2 - 40, tw = has_card ? card.w : 80, th = has_card ? card.h : 80;
+    *x = fx + (tx - fx) * e; *y = fy + (ty - fy) * e; *w = fw + (tw - fw) * e; *h = fh + (th - fh) * e;
+    return e; // (0 to 1: how far home; also how much it covers its card)
+  }
+  if (hc->drag > 0) {
+    float k = 1 - fminf(0.45f, hc->drag / (float)H * 0.7f);
+    float cx = *x + *w / 2, cy = *y + *h / 2 + hc->drag;
+    *w *= k; *h *= k; *x = cx - *w / 2; *y = cy - *h / 2;
+  }
+  hc->x = *x; hc->y = *y; hc->w = *w; hc->h = *h;
+  return 0;
+}
+static int hero_done(const HeroClose *hc) { return hc->closing && frame_no - hc->at >= 12; }
+// how dark the screen behind is: thinning as it's dragged, gone as it flies home
+static int hero_backdrop(const HeroClose *hc) {
+  if (hc->closing) return (int)(255 * (1 - fminf(1, (frame_no - hc->at) / 12.0f)));
+  return (int)(255 * (1 - fminf(0.85f, hc->drag / 300.0f)));
+}
+
+static HeroClose vhero; // (the Library's full view, swiped down to close)
+// Where a card is in the Library's grid once the full view closes (it scrolls there if it's out of sight)
+static int lib_card_target(int k, Rect *o) {
+  if (k < 0 || k >= lgrid.n) return 0;
+  Rect r = lgrid.r[k];
+  float sc = scroll;
+  if (r.y < sc || r.y + r.h > sc + H - TOP - BAR) sc = r.y - 40;
+  o->x = r.x; o->y = TOP + 6 + r.y - sc; o->w = r.w; o->h = r.h;
+  return 1;
+}
 static void open_viewer(int k, int show) {
   LOG("open_viewer %d show=%d\n", k, show);
   if (k >= 0 && k < nshown && is_locked(shown[k]) && !show) {
@@ -2064,6 +2205,7 @@ static void open_viewer(int k, int show) {
     return;
   }
   slideshow = show;
+  memset(&vhero, 0, sizeof vhero);
   details = 0;
   details_y = 0;
   swipe_x = 0;
@@ -2111,7 +2253,9 @@ static void draw_viewer(void) {
     }
     pthread_mutex_unlock(&cmx);
   }
-  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 255));
+  int backdrop = hero_backdrop(&vhero);
+  if (backdrop < 255) vita2d_draw_rectangle(0, 0, W, H, BG);
+  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, backdrop));
   xfade_wanted = slideshow && so.fade;
   // the thumbnails wanted here: this one (its glow) and the filmstrip's
   {
@@ -2124,7 +2268,7 @@ static void draw_viewer(void) {
   }
   // --- the glow: the picture's own colours, dim, filling the screen around it ---
   vita2d_texture *th_now = thumb_of(shown[vk]);
-  if (cfg.glow && th_now && zoom < 1.01f) draw_cover(th_now, 0, 0, W, H, RGBA(255, 255, 255, 60));
+  if (cfg.glow && th_now && zoom < 1.01f && backdrop == 255) draw_cover(th_now, 0, 0, W, H, RGBA(255, 255, 255, 60));
   // --- what's shown: the video's frame, else the picture (the thumbnail while it loads; in a
   //     fading slideshow, the one before until this one is ready) ---
   vita2d_texture *t = NULL;
@@ -2156,6 +2300,8 @@ static void draw_viewer(void) {
       vita2d_draw_texture_tint_scale(fade_tex, (W - fw * fs) / 2, (avail_h - fh * fs) / 2, fs, fs, RGBA(255, 255, 255, (int)(255 * (1 - fade))));
     }
   }
+  if (t && is_frame && (lv_video_width(vid) < 1 || lv_video_height(vid) < 1)) t = th_now, is_frame = 0; // (no size yet)
+  if (t && (vita2d_texture_get_width(t) < 1 || vita2d_texture_get_height(t) < 1)) t = NULL;
   if (t) {
     float tw = is_frame ? lv_video_width(vid) : vita2d_texture_get_width(t);
     float th = is_frame ? lv_video_height(vid) : vita2d_texture_get_height(t);
@@ -2170,11 +2316,26 @@ static void draw_viewer(void) {
     pan_x = fminf(mx, fmaxf(-mx, pan_x));
     pan_y = fminf(my, fmaxf(-my, pan_y));
     float x = (W - dw) / 2 + pan_x + swipe_x + mdx, y = (avail_h - dh) / 2 + pan_y + mdy;
-    if (fade < 1) vita2d_draw_texture_tint_scale(t, x, y, s, s, RGBA(255, 255, 255, (int)(255 * fade)));
-    else vita2d_draw_texture_scale(t, x, y, s, s);
+    if (vhero.drag > 0 || vhero.closing) {
+      // (swiped down: smaller, following the finger; let go, into its card)
+      Rect card;
+      int has = lib_card_target(vk, &card);
+      float hx = x, hy = y, hw = dw, hh = dh;
+      float e = hero_place(&vhero, &hx, &hy, &hw, &hh, card, has);
+      draw_in_rect(t, tw, th, hx, hy, hw, hh, e, RGBA(255, 255, 255, 255));
+    } else {
+      hero_place(&vhero, &x, &y, &dw, &dh, (Rect){0}, 0);
+      if (fade < 1) vita2d_draw_texture_tint_scale(t, x, y, s, s, RGBA(255, 255, 255, (int)(255 * fade)));
+      else vita2d_draw_texture_scale(t, x, y, s, s);
+    }
   } else {
     if (big_failed) text_center(W / 2, H / 2, DIM, 18, "This file can't be shown on the Vita");
     else spinner(W / 2, H / 2, 24);
+  }
+  if (vhero.closing || (!t && vhero.drag > 0)) {
+    // (flying home: nothing else drawn or done; closed once it's there)
+    if (hero_done(&vhero) || !t) { memset(&vhero, 0, sizeof vhero); close_viewer(); }
+    return;
   }
   if (!it->path) text_center(W / 2, (int)avail_h - 30, ACC2, 16, "This file isn't on the memory card (only its thumbnail)");
   // (the full picture, or the video, still on its way: a small spinner in the corner)
@@ -2202,24 +2363,32 @@ static void draw_viewer(void) {
       pinch_d0 = 0;
       if (zoom > 1.01f) { pan_x += in.drag_dx; pan_y += in.drag_dy; }
       else if (tall_fit && fabsf((float)(in.ty - in.down_y)) >= fabsf((float)(in.tx - in.down_x))) { pan_y += in.drag_dy; tall_v = 0; }
+      else if (hero_drag(&vhero, !slideshow && !tall_fit && fabsf(swipe_x) < 4 && details_y < 0.05f)) {}
       else if (fabsf((float)(in.tx - in.down_x)) > fabsf((float)(in.ty - in.down_y))) swipe_x += in.drag_dx;
       else if (in.ty - in.down_y < -60) { details = 1; }
     }
   } else {
     pinch_d0 = 0;
+    if (hero_release(&vhero)) { sfx(SFX_BACK); return; }
     if (in.flicked && tall_fit && zoom < 1.01f && fabsf(in.fvy) > fabsf(in.fvx)) tall_v = in.fvy * 1.4f;
     if (swipe_x > 120) { swipe_x = 0; sfx(SFX_TICK); show_item(vk - 1); return; }
     if (swipe_x < -120) { swipe_x = 0; sfx(SFX_TICK); show_item(vk + 1); return; }
     swipe_x *= 0.7f;
     if (zoom < 1.01f) zoom = 1;
   }
-  if (in.dbl && cfg.dbltap && details_y < 0.5f) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); heart_at = frame_no ? frame_no : 1; }
+  int64_t vseek = INT64_MIN;
+  if (in.dbl && vid && !vid_clip && details_y < 0.5f && vctl_dbl_side(in.tap_x)) {
+    // (a double tap at a side of a video: ten seconds back or on)
+    int s = vctl_dbl_side(in.tap_x);
+    vseek = (int64_t)lv_video_pos(vid) + s * 10000;
+    vflash(s);
+  }
+  else if (in.dbl && cfg.dbltap && details_y < 0.5f) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); heart_at = frame_no ? frame_no : 1; }
   else if (in.dbl) { zoom = zoom > 1.5f ? 1 : 2.5f; pan_x = (W / 2.0f - in.tap_x) * (zoom - 1); pan_y = (H / 2.0f - in.tap_y) * (zoom - 1); }
   else if (in.tap && details_y < 0.5f) {
-    if (vid && !vid_clip && in.tap_y > H - 70) {
-      uint64_t d = lv_video_duration(vid);
-      if (d) lv_video_seek(vid, (int64_t)(d * fminf(1, fmaxf(0, (in.tap_x - 40) / (float)(W - 80)))));
-    } else if (frame_no < chrome_until && in.tap_x < 70 && in.tap_y < 60) { close_viewer(); return; }
+    int chrome_on = frame_no < chrome_until || (vid && !vid_clip && lv_video_paused(vid));
+    if (vid && !vid_clip && chrome_on && vctl_tap(vid, in.tap_x, in.tap_y, &vseek)) chrome_until = frame_no + 180;
+    else if (frame_no < chrome_until && in.tap_x < 70 && in.tap_y < 60) { close_viewer(); return; }
     else if (frame_no < chrome_until && in.tap_x > W - 70 && in.tap_y < 60) { details = 1; }
     else if (frame_no < chrome_until && in.tap_x > W - 140 && in.tap_x < W - 70 && in.tap_y < 60) { char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); }
     else if (frame_no < chrome_until && in.tap_y > H - 90 && !(vid && !vid_clip) && !slideshow && nshown > 1) {} // (the filmstrip's)
@@ -2248,8 +2417,8 @@ static void draw_viewer(void) {
   }
   if (vid && !vid_clip && !details) {
     // ←→ ten seconds; ↑ faster (2×, 4×, back); ↓ the A-B loop (A here, B here, off)
-    if (in.pressed & SCE_CTRL_RIGHT) { lv_video_seek(vid, (int64_t)lv_video_pos(vid) + 10000); chrome_until = frame_no + 120; }
-    if (in.pressed & SCE_CTRL_LEFT) { lv_video_seek(vid, (int64_t)lv_video_pos(vid) - 10000); chrome_until = frame_no + 120; }
+    if (in.pressed & SCE_CTRL_RIGHT) { vseek = (int64_t)lv_video_pos(vid) + 10000; vflash(1); chrome_until = frame_no + 120; }
+    if (in.pressed & SCE_CTRL_LEFT) { vseek = (int64_t)lv_video_pos(vid) - 10000; vflash(-1); chrome_until = frame_no + 120; }
     if (in.pressed & SCE_CTRL_UP) {
       int sp = lv_video_speed(vid) == 100 ? 200 : lv_video_speed(vid) == 200 ? 400 : 100;
       lv_video_set_speed(vid, sp);
@@ -2309,8 +2478,9 @@ static void draw_viewer(void) {
     heart(W / 2, H / 2, sz, with_alpha(ACC, (int)(230 * a)));
   } else heart_at = 0;
 
+  if (vseek != INT64_MIN && vid && !vid_clip) { lv_video_seek(vid, vseek < 0 ? 0 : vseek); chrome_until = frame_no + 150; }
   // --- the controls on top, fading away ---
-  int chrome = frame_no < chrome_until || details || (vid && !vid_clip && lv_video_paused(vid));
+  int chrome = (frame_no < chrome_until || details || (vid && !vid_clip && lv_video_paused(vid))) && vhero.drag <= 0;
   if (chrome) {
     int a = frame_no + 30 > chrome_until && !details ? (int)((chrome_until - frame_no) * 8) : 240;
     if (a > 240 || a < 0) a = 240;
@@ -2329,31 +2499,20 @@ static void draw_viewer(void) {
     circle(W - 38, 30, 11, RGBA(0, 0, 0, a));
     text_center(W - 38, 36, with_alpha(TEXT, a), 15, "i");
     if (vid && !vid_clip) {
-      grad(0, H - 70, W, 70, RGBA(0, 0, 0, 255), 0, 70 * a / 400, 0);
-      uint64_t d = lv_video_duration(vid), p = lv_video_pos(vid);
-      float f = d ? fminf(1, p / (float)d) : 0;
-      rrect(40, H - 34, W - 80, 6, 3, with_alpha(TEXT, a / 3));
-      rrect(40, H - 34, (W - 80) * f, 6, 3, with_alpha(ACC, a));
-      circle(40 + (W - 80) * f, H - 31, 8, with_alpha(TEXT, a));
-      char a1[16], a2[16];
-      fmt_time(p, a1, sizeof a1);
-      fmt_time(d, a2, sizeof a2);
-      text(40, H - 44, with_alpha(TEXT, a), 14, a1);
-      text(W - 40 - text_w(14, a2), H - 44, with_alpha(TEXT, a), 14, a2);
+      vctl_draw(vid, a, -1);
+      uint64_t d = lv_video_duration(vid);
       // the loop's ends, the speed, and what the buttons do
-      if (d && ab_a >= 0) rrect(40 + (W - 80) * fminf(1, ab_a / (float)d) - 2, H - 40, 4, 18, 2, with_alpha(ACC2, a));
-      if (d && ab_b >= 0) rrect(40 + (W - 80) * fminf(1, ab_b / (float)d) - 2, H - 40, 4, 18, 2, with_alpha(ACC2, a));
+      const float bw = W - 80 - 92;
+      if (d && ab_a >= 0) rrect(40 + bw * fminf(1, ab_a / (float)d) - 2, H - 36, 4, 18, 2, with_alpha(ACC2, a));
+      if (d && ab_b >= 0) rrect(40 + bw * fminf(1, ab_b / (float)d) - 2, H - 36, 4, 18, 2, with_alpha(ACC2, a));
       char hint[96];
       snprintf(hint, sizeof hint, "%s\u2190\u2192 10 s  \u00b7  \u2191 speed  \u00b7  \u2193 A-B loop  \u00b7  L R next",
                lv_video_speed(vid) == 200 ? "2\u00d7  \u00b7  " : lv_video_speed(vid) == 400 ? "4\u00d7  \u00b7  " : "");
-      text_center(W / 2, H - 44, with_alpha(DIM, a), 13, hint);
-      if (lv_video_paused(vid)) {
-        circle(W / 2, H / 2, 40, RGBA(0, 0, 0, 140));
-        for (int k = 0; k < 30; k++) vita2d_draw_rectangle(W / 2 - 10 + k, H / 2 - 15 + k / 2, 1, 30 - k, with_alpha(TEXT, a));
-      }
+      text_center(W / 2, H - 52, with_alpha(DIM, a), 13, hint);
     }
   }
 
+  if (vid && !vid_clip) vctl_flash_draw();
   // --- the filmstrip: the ones either side, to jump to (with the controls; not over a video's bar) ---
   if (chrome && !(vid && !vid_clip) && details_y < 0.05f && nshown > 1 && !slideshow) {
     int a = frame_no + 30 > chrome_until ? (int)((chrome_until - frame_no) * 8) : 240;

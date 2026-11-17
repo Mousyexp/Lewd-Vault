@@ -112,9 +112,9 @@ static void vsrc_remove(int k) {
   vsrc_build();
 }
 static int nvsources(void) { if (!vsrc_built) vsrc_load(); return NVSRC; }
-static const char *vsource_name(int k) { return VSRC[k].name; }
-static const char *vsource_icon(int k) { return VSRC[k].icon; }
-static const char *vsource_about(int k) { return VSRC[k].about; }
+static const char *vsource_name(int k) { return k >= 0 && k < NVSRC && VSRC[k].name ? VSRC[k].name : ""; }
+static const char *vsource_icon(int k) { return k >= 0 && k < NVSRC ? VSRC[k].icon : NULL; }
+static const char *vsource_about(int k) { return k >= 0 && k < NVSRC && VSRC[k].about ? VSRC[k].about : ""; }
 static const char *vsource_tags(int k) { return k >= 0 && k < NVSRC && VSRC[k].tags ? VSRC[k].tags : ""; }
 static int vsource_blocked(int k) { return VSRC[k].blocked; }
 static int vsource_site(int k) {

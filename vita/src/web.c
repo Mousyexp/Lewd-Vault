@@ -1467,9 +1467,10 @@ static void draw_sites_sheet(void) {
   if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
     sites_tab = (sites_tab + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : 2)) % 3;
     sheet_sel = 0; sites_scroll = 0; sfx(SFX_TAB);
-    n = (sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : nvis) + 1;
-    rows = (n + cols - 1) / cols;
   }
+  // (the tab may have changed, by L/R or a tap: its own count, its list loaded)
+  n = (sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : nvis) + 1;
+  rows = (n + cols - 1) / cols;
   if (sheet_sel >= n) sheet_sel = n - 1;
   // the order: the sources that answered (or weren't checked) first, the ones that didn't last
   int ord[64];
@@ -2371,6 +2372,62 @@ static void wv_seek(int64_t ms) {
   }
   lv_video_seek(wv_vid, ms);
 }
+static HeroClose whero; // (the Browser's full view, swiped down to close)
+static int web_card_target(int k, Rect *o, float *sc_out) {
+  if (wv_back != S_WEB || k < 0 || k >= wgrid.n) return 0;
+  Rect r = wgrid.r[k];
+  float sc = wscroll;
+  if (r.y < sc || r.y + r.h > sc + H - TOP - BAR) sc = r.y - 40 > 0 ? r.y - 40 : 0;
+  o->x = r.x; o->y = TOP + 6 + r.y - sc; o->w = r.w; o->h = r.h;
+  if (sc_out) *sc_out = sc;
+  return 1;
+}
+// A post's name for people: its tags, the underscores as spaces, the first letter a capital
+static void post_title(const LvPost *p, char *o, size_t n) {
+  snprintf(o, n, "%s", p->tags ? p->tags : "");
+  for (char *c = o; *c; c++) if (*c == '_') *c = ' ';
+  if (o[0] >= 'a' && o[0] <= 'z') o[0] -= 32;
+}
+// An episode (a long video, or one from an episode site): its card, at the top left while it loads
+// or is paused: the title, its length and where it's from, and ♥ Favorite / ↓ Offline as big pills
+static void wv_offline(void);
+static int wv_episode_card(const LvPost *p) {
+  const float x = 30, y = 74, w = 430, h = 150;
+  rrect(x, y, w, h, 18, RGBA(0, 0, 0, 170));
+  rrect(x, y, 5, h, 3, ACC);
+  char t[400];
+  post_title(p, t, sizeof t);
+  // (two lines at most)
+  int cut = (int)strlen(t);
+  while (cut > 0 && text_w(19, t) > (w - 40) * 2 - 30) { cut = cut * 9 / 10; t[cut] = 0; }
+  char l1[400], *l2 = NULL;
+  snprintf(l1, sizeof l1, "%s", t);
+  if (text_w(19, l1) > w - 40) {
+    int k = (int)strlen(l1);
+    while (k > 0 && (l1[k] != ' ' || (l1[k] = 0, text_w(19, l1) > w - 40))) { if (l1[k] == 0) l1[k] = ' '; k--; }
+    if (k > 0) l2 = t + k + 1;
+  }
+  text_fit((int)x + 20, (int)y + 32, TEXT, 19, l1, (int)w - 40);
+  if (l2) text_fit((int)x + 20, (int)y + 56, TEXT, 19, l2, (int)w - 40);
+  char meta[120], len[24] = "";
+  if (p->duration > 0) { int d = p->duration; snprintf(len, sizeof len, d >= 3600 ? "%d:%02d:%02d" : "%d:%02d", d >= 3600 ? d / 3600 : d / 60, d >= 3600 ? d / 60 % 60 : d % 60, d % 60); }
+  snprintf(meta, sizeof meta, "%s%s%s", len, len[0] ? "  \u00b7  " : "", LV_SITES[wv_site()].name);
+  text((int)x + 20, (int)y + (l2 ? 80 : 58), DIM, 14, meta);
+  // the pills
+  int fav = fav_find(0, p->page) >= 0, saved = is_saved(p);
+  const char *f1 = fav ? "\u2665 Favorite" : "\u2661 Favorite";
+  const char *f2 = saved ? "\u2713 Offline" : saving ? "Saving\u2026" : fav_offline_next == wv + 1 ? "Offline when here" : "\u2193 Offline";
+  float py = y + h - 54, pw1 = text_w(17, f1) + 40, pw2 = text_w(17, f2) + 40;
+  rrect(x + 20, py, pw1, 40, 20, fav ? ACC : SURF2);
+  text_center((int)(x + 20 + pw1 / 2), (int)py + 27, fav ? RGBA(20, 12, 16, 255) : TEXT, 17, f1);
+  rrect(x + 30 + pw1, py, pw2, 40, 20, saved ? SURF2 : with_alpha(TEXT, 230));
+  text_center((int)(x + 30 + pw1 + pw2 / 2), (int)py + 27, saved ? DIM : RGBA(20, 12, 16, 255), 17, f2);
+  if (in.tap && in.tap_y >= py && in.tap_y < py + 40) {
+    if (in.tap_x >= x + 20 && in.tap_x < x + 20 + pw1) { fav_toggle_video(&posts[wv], wv_site()); return 1; }
+    if (in.tap_x >= x + 30 + pw1 && in.tap_x < x + 30 + pw1 + pw2) { wv_offline(); return 1; }
+  }
+  return in.tap && in.tap_x >= x && in.tap_x < x + w && in.tap_y >= y && in.tap_y < y + h; // (a tap on the card: its own)
+}
 static void draw_webview(void) {
   if (!nposts) { screen = wv_back; return; }
   if (sw_on && wv < nposts) { draw_save_wizard(); return; }
@@ -2388,13 +2445,17 @@ static void draw_webview(void) {
     }
   }
   LvPost *p = &posts[wv];
-  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 255));
+  int backdrop = hero_backdrop(&whero);
+  if (backdrop < 255) vita2d_draw_rectangle(0, 0, W, H, BG);
+  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, backdrop));
   vita2d_texture *t = NULL;
   int is_frame = 0;
   if (wv_vid) { t = lv_video_frame(wv_vid); is_frame = t != NULL; }
   if (!t && wv_tex_post == wv) t = wv_tex;
   if (!t) t = preview_of(wv);
   float avail_h = H - wdetails_y * 300;
+  if (t && is_frame && (lv_video_width(wv_vid) < 1 || lv_video_height(wv_vid) < 1)) t = preview_of(wv), is_frame = 0; // (no size yet)
+  if (t && (vita2d_texture_get_width(t) < 1 || vita2d_texture_get_height(t) < 1)) t = NULL;
   if (t) {
     float tw = is_frame ? lv_video_width(wv_vid) : vita2d_texture_get_width(t);
     float th = is_frame ? lv_video_height(wv_vid) : vita2d_texture_get_height(t);
@@ -2403,7 +2464,26 @@ static void draw_webview(void) {
     float mx = fmaxf(0, (dw - W) / 2), my = fmaxf(0, (dh - avail_h) / 2);
     wpan_x = fminf(mx, fmaxf(-mx, wpan_x));
     wpan_y = fminf(my, fmaxf(-my, wpan_y));
-    vita2d_draw_texture_scale(t, (W - dw) / 2 + wpan_x + wswipe, (avail_h - dh) / 2 + wpan_y, s, s);
+    float x = (W - dw) / 2 + wpan_x + wswipe, y = (avail_h - dh) / 2 + wpan_y;
+    if (whero.drag > 0 || whero.closing) {
+      Rect card;
+      int has = web_card_target(wv, &card, NULL);
+      float e = hero_place(&whero, &x, &y, &dw, &dh, card, has);
+      draw_in_rect(t, tw, th, x, y, dw, dh, e, RGBA(255, 255, 255, 255));
+    } else {
+      hero_place(&whero, &x, &y, &dw, &dh, (Rect){0}, 0);
+      vita2d_draw_texture_scale(t, x, y, s, s);
+    }
+  }
+  if (whero.closing || (!t && whero.drag > 0)) {
+    if (hero_done(&whero) || !t) {
+      float sc;
+      Rect card;
+      if (web_card_target(wv, &card, &sc)) wscroll = sc;
+      memset(&whero, 0, sizeof whero);
+      wv_drop(); wsel = wv; screen = wv_back;
+    }
+    return;
   }
   if (wv_loading) {
     spinner(W / 2, H / 2 - 30, 22);
@@ -2438,23 +2518,32 @@ static void draw_webview(void) {
     } else {
       pd0 = 0;
       if (wzoom > 1.01f) { wpan_x += in.drag_dx; wpan_y += in.drag_dy; }
+      else if (hero_drag(&whero, fabsf(wswipe) < 4 && wdetails_y < 0.05f)) {}
       else if (fabsf((float)(in.tx - in.down_x)) > fabsf((float)(in.ty - in.down_y))) wswipe += in.drag_dx;
       else if (in.ty - in.down_y < -60) wdetails = 1;
     }
   } else {
     pd0 = 0;
+    if (hero_release(&whero)) { sfx(SFX_BACK); return; }
     if (wswipe > 120) { wswipe = 0; sfx(SFX_TICK); wv_show(wv - 1); return; }
     if (wswipe < -120) { wswipe = 0; sfx(SFX_TICK); wv_show(wv + 1); return; }
     wswipe *= 0.7f;
     if (wzoom < 1.01f) wzoom = 1;
   }
-  if (in.dbl) { wzoom = wzoom > 1.5f ? 1 : 2.5f; wpan_x = (W / 2.0f - in.tap_x) * (wzoom - 1); wpan_y = (H / 2.0f - in.tap_y) * (wzoom - 1); }
+  int64_t vseek = INT64_MIN;
+  int vchrome = frame_no < wchrome_until || (wv_vid && lv_video_paused(wv_vid));
+  // (an episode loading or paused: its card, whose taps are its own)
+  int card_tap = wdetails_y < 0.05f && whero.drag <= 0 && wv_is_long() && (!wv_vid || lv_video_paused(wv_vid)) && !sw_on && wv_episode_card(p);
+  if (card_tap) {}
+  else if (in.dbl && wv_vid && wdetails_y < 0.5f && vctl_dbl_side(in.tap_x)) {
+    int sd = vctl_dbl_side(in.tap_x);
+    vseek = (int64_t)lv_video_pos(wv_vid) + sd * 10000;
+    vflash(sd);
+  }
+  else if (in.dbl) { wzoom = wzoom > 1.5f ? 1 : 2.5f; wpan_x = (W / 2.0f - in.tap_x) * (wzoom - 1); wpan_y = (H / 2.0f - in.tap_y) * (wzoom - 1); }
   else if (in.tap && wdetails_y < 0.5f) {
     // (a tap on the video's bar: there)
-    if (wv_vid && frame_no < wchrome_until && in.tap_y > H - 60 && lv_video_duration(wv_vid) > 0) {
-      wv_seek((int64_t)(lv_video_duration(wv_vid) * fminf(1, fmaxf(0, (in.tap_x - 40) / (float)(W - 80)))));
-      wchrome_until = frame_no + 180;
-    }
+    if (wv_vid && vchrome && in.tap_y > 70 && vctl_tap(wv_vid, in.tap_x, in.tap_y, &vseek)) wchrome_until = frame_no + 180;
     else if (frame_no < wchrome_until && in.tap_x < 70 && in.tap_y < 60) { sfx(SFX_BACK); wv_drop(); screen = wv_back; return; }
     else if (frame_no < wchrome_until && in.tap_x > W - 70 && in.tap_y < 60) wdetails = 1;
     else if (frame_no < wchrome_until && in.tap_y < 60 && in.tap_x < W - 64 && in.tap_x > W - 420) {
@@ -2482,12 +2571,13 @@ static void draw_webview(void) {
   // (a video: the left stick scrubs, further for a harder push; ↑ / ↓ ten seconds back or on)
   else if (wv_vid && lv_video_duration(wv_vid) > 0) {
     if (fabsf(in.lx) > 0.4f && frame_no % 6 == 0) { wv_seek((int64_t)lv_video_pos(wv_vid) + (int64_t)(in.lx * 8000)); wchrome_until = frame_no + 120; }
-    if (in.pressed & SCE_CTRL_UP) { wv_seek((int64_t)lv_video_pos(wv_vid) + 10000); wchrome_until = frame_no + 120; }
-    if (in.pressed & SCE_CTRL_DOWN) { wv_seek((int64_t)lv_video_pos(wv_vid) - 10000); wchrome_until = frame_no + 120; }
+    if (in.pressed & SCE_CTRL_UP) { vseek = (int64_t)lv_video_pos(wv_vid) + 10000; vflash(1); wchrome_until = frame_no + 120; }
+    if (in.pressed & SCE_CTRL_DOWN) { vseek = (int64_t)lv_video_pos(wv_vid) - 10000; vflash(-1); wchrome_until = frame_no + 120; }
   }
+  if (vseek != INT64_MIN && wv_vid) { wv_seek(vseek < 0 ? 0 : vseek); wchrome_until = frame_no + 150; }
 
   // --- the controls on top ---
-  if (frame_no < wchrome_until || wdetails) {
+  if ((frame_no < wchrome_until || wdetails) && whero.drag <= 0) {
     int a = frame_no + 30 > wchrome_until && !wdetails ? (int)((wchrome_until - frame_no) * 8) : 240;
     if (a > 240 || a < 0) a = 240;
     grad(0, 0, W, 64, RGBA(0, 0, 0, 255), 64 * a / 400, 0, 0);
@@ -2529,21 +2619,14 @@ static void draw_webview(void) {
     else if (auto_paused && (have > at + 0.05f || wv_stream->failed)) { lv_video_pause(wv_vid, 0); auto_paused = 0; }
     if (auto_paused) { spinner(W / 2, H / 2, 20); text_center(W / 2, H / 2 + 46, DIM, 15, "Buffering\u2026"); }
   }
-  if (frame_no < wchrome_until || wdetails) {
+  if ((frame_no < wchrome_until || wdetails || (wv_vid && lv_video_paused(wv_vid) && !auto_paused)) && wv_vid && whero.drag <= 0) {
     int a = frame_no + 30 > wchrome_until && !wdetails ? (int)((wchrome_until - frame_no) * 8) : 240;
-    if (a > 240 || a < 0) a = 240;
-    // (still downloading as it plays: how far along, under the bar)
-    if (wv_vid && wv_stream && !wv_stream->done && wv_stream->total > 0) {
-      float f = (float)wv_stream->have / (float)wv_stream->total;
-      rrect(40, H - 14, (W - 80) * (f > 1 ? 1 : f), 3, 1, with_alpha(TEXT, a / 2));
-    }
-    if (wv_vid) {
-      uint64_t d = lv_video_duration(wv_vid), q = lv_video_pos(wv_vid);
-      float f = d ? fminf(1, q / (float)d) : 0;
-      rrect(40, H - 34, W - 80, 6, 3, with_alpha(TEXT, a / 3));
-      rrect(40, H - 34, (W - 80) * f, 6, 3, with_alpha(ACC, a));
-    }
+    if (a > 240 || a < 0 || lv_video_paused(wv_vid)) a = 240;
+    // (still downloading as it plays: how far along, the bar's lighter part)
+    float have = wv_stream && !wv_stream->done && wv_stream->total > 0 ? (float)wv_stream->have / (float)wv_stream->total : -1;
+    if (!auto_paused) vctl_draw(wv_vid, a, have);
   }
+  if (wv_vid) vctl_flash_draw();
 
   // --- the details, pulled up ---
   wdetails_y += ((wdetails ? 1 : 0) - wdetails_y) * 0.25f;

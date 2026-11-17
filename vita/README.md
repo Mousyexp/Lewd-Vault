@@ -44,6 +44,13 @@ Bubbly, made by `tools/make-sound-packs.py`), what a double tap does, the glow b
 Drive, another vault, clearing the thumbnail cache. While Theme or Background is chosen, a small
 Library at the right shows it in those colours.
 
+Videos, in both full views: a play/pause button in the middle with ten seconds back and on either side,
+the bar at the foot (what has downloaded so far as a lighter part, the time left in a pill); a double
+tap at the left or right third skips ten seconds back or on, with a ripple there. Swipe a picture or
+video down to close it: it follows the finger, smaller, and flies back into its card. An episode
+(a long video) shows its card while it loads or is paused: its name, length and site, and ♥ Favorite
+/ ↓ Offline as big buttons.
+
 On every screen the chosen card or row has the same ring, gliding from one to the next; a card
 still loading shows its shape with a light passing over it and a small loading ring.
 

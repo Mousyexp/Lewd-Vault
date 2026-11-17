@@ -274,7 +274,10 @@ static int av_open(LvVideo *v) {
 
 static vita2d_texture *av_frame(LvVideo *v) {
   SceAvPlayerFrameInfo f;
-  if (v->ready && sceAvPlayerIsActive(v->h_av) && sceAvPlayerGetVideoData(v->h_av, &f) && f.pData) {
+  // (a frame with no size, or an absurd one, is skipped: drawn, its scale would be infinite and the
+  //  GPU would get NaN corners: garbage over the whole screen)
+  if (v->ready && sceAvPlayerIsActive(v->h_av) && sceAvPlayerGetVideoData(v->h_av, &f) && f.pData &&
+      f.details.video.width >= 16 && f.details.video.height >= 16 && f.details.video.width <= 4096 && f.details.video.height <= 4096) {
     v->w = (int)f.details.video.width;
     v->h = (int)f.details.video.height;
     sceGxmTextureInitLinear(&v->tex.gxm_tex, f.pData, SCE_GXM_TEXTURE_FORMAT_YVU420P2_CSC1, v->w, v->h, 0);
