@@ -967,6 +967,12 @@ static volatile int saver_busy, saver_failed;
 static pthread_mutex_t smx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t scv = PTHREAD_COND_INITIALIZER;
 static int saver_started;
+static void *net_warm(void *arg) {
+  (void)arg;
+  pin_to_core(2);
+  lv_net_init();
+  return NULL;
+}
 static void *saver_main(void *arg) {
   pin_to_core(2); // (off the drawing thread's core)
   (void)arg;
@@ -1110,6 +1116,7 @@ static void start_load(int unlock) {
   if (pthread_create(&t, &at, load_main, (void *)(intptr_t)unlock) != 0) { load_main((void *)(intptr_t)unlock); return; }
   pthread_detach(t);
 }
+static void web_start(void); // (web.c: its threads, started under the loading screen)
 static void show_opened(void); // (show.c: Continue watching read, the session's stages made again)
 static void finish_open(void) {
   const char *why = load_why;
@@ -1144,6 +1151,7 @@ static void finish_open(void) {
   query[0] = 0;
   refilter();
   show_opened();
+  web_start();
   scroll = scroll_v = 0;
   sel = 0;
   la_update_stats();
@@ -2335,6 +2343,15 @@ int main(void) {
   atlas_init();
   saver_start();
   closer_start();
+  // the network made ready in the background (libcurl and OpenSSL take a moment to start): the
+  // Browser, Drive and the rest find it done
+  {
+    pthread_t nt;
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setstacksize(&at, 128 * 1024);
+    if (pthread_create(&nt, &at, net_warm, NULL) == 0) pthread_detach(nt);
+  }
 
   find_vaults();
   pin_load();

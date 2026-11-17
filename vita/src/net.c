@@ -36,8 +36,18 @@ int inet_pton(int af, const char *src, void *dst) {
 static int up;
 static char proxy[256], cafile[256] = "app0:cacert.pem";
 
+#include <pthread.h>
+static pthread_mutex_t init_mx = PTHREAD_MUTEX_INITIALIZER;
+static int net_init_locked(void);
+// (once, whoever asks first: a warm-up thread at start, or the first screen that needs it)
 int lv_net_init(void) {
   if (up) return 0;
+  pthread_mutex_lock(&init_mx);
+  int r = up ? 0 : net_init_locked();
+  pthread_mutex_unlock(&init_mx);
+  return r;
+}
+static int net_init_locked(void) {
   sceSysmoduleLoadModule(SCE_SYSMODULE_NET);
   static char mem[1024 * 1024];
   SceNetInitParam p = {mem, sizeof mem, 0};

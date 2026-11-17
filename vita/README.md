@@ -78,13 +78,15 @@ their JSON APIs (the same four kinds of site as the desktop's Discover: `src/boo
 loads. The grid is the Library's; the site button is the tab bar (L/R step through it), Filter picks
 the ratings (General, Sensitive, Questionable, Explicit), the search and which category saves go into,
 and the sort is Latest, Hot (where the site has it), Top or Random. More results load as you scroll.
-The site button opens the sites window (`tools/make-site-icons.mjs` draws its icons). It has two
-tabs (L / R): **Pictures**, the sites, ending in **+** to add any booru by its address (the Vita works
+The site button opens the sites window (`tools/make-site-icons.mjs` draws its icons). It has three
+tabs (L / R): **Manga** (MangaDex and E-Hentai: covers, a book's chapters, and a reader that turns
+pages with ←/→, a tap at either side or a swipe, L / R for the chapters, ✕ to zoom; `src/manga.c`,
+`src/manga_ui.c`), **Pictures**, the sites, ending in **+** to add any booru by its address (the Vita works
 out which of the four kinds it is; □ removes one you added), and **Videos**, the video sources, which
 open the **video browser**: a banner with what's trending, then rows (Trending, New, Top this month,
 Top of all time, Something random) of cards, as the TV apps have them; a video plays in the
 Browser's own full view. hanime.tv and MissAV are listed but locked: both only answer after a
-Cloudflare browser check, which an app can't pass. Sakugabooru brings anime animation clips. Gelbooru and Rule34 are there too, with your account's API key (Filter → API key: the user ID and the
+Cloudflare browser check, which an app can't pass. Sakugabooru brings anime animation clips; Xbooru Comics and Danbooru Comics are those sites' comic pages. Gelbooru and Rule34 are there too, with your account's API key (Filter → API key: the user ID and the
 key from the site's My Account → Options). As on the desktop, posts tagged as sexual content involving
 minors are never shown or searched for.
 
@@ -197,7 +199,10 @@ The tab bar is a pill floating over the bottom, with icons in the manner of iOS'
 (`tools/make-ui-icons.mjs`, drawn at exactly their size); buttons, chips and rows are at least 36 px
 high and every touch target has a few pixels of slack.
 
-Nothing slow happens on the drawing thread: `index.csv` and `views.csv` are written by a writer
+The drawing thread has the first CPU core to itself (every worker is pinned to the other two), the
+clocks are at their highest (444 / 222 / 222 / 166 MHz), and the network starts on a thread of its
+own at launch. Anything that takes a while shows a loading circle. Nothing slow happens on the
+drawing thread: `index.csv` and `views.csv` are written by a writer
 thread (the drawing thread only makes the text), videos are opened and closed on a thread of their
 own, textures are freed three frames after they're let go instead of waiting for the GPU, and at
 most six thumbnails a frame become textures. Every picture is decoded to exactly the pixels it's
@@ -215,6 +220,19 @@ as small JPEGs; circles and round corners are one textured quad each instead of 
 per-frame work grows with the size of the vault; `web.c` is compiled inside `main.c` (one unit, so
 the compiler inlines across them); textures are only freed after the frame that may still draw them.
 
+## When it crashes
+
+The Vita writes a dump to `ux0:data/psp2core-*.psp2dmp`. The address it crashed at (its PC, shown by
+the system's crash dialog or a dump parser such as vita-parse-core) turns into a line of the source
+with the build's ELF, from the same build as the VPK:
+
+```
+arm-vita-eabi-addr2line -f -e vita/build/LewdVault <PC address>
+```
+
+A debug build (`-DLV_DEBUG`) also writes `ux0:data/LWDV00001/log.txt`, with each screen's frame
+times (`perf ...`) and any step over 4 ms (`pt ...`).
+
 ## Files
 
 | File | What it is |
@@ -227,6 +245,7 @@ the compiler inlines across them); textures are only freed after the frame that 
 | `src/privacy.c`, `src/clean.c` | The calculator disguise and touch lock; clean up and the health check |
 | `src/livearea.c` | The LiveArea's frames (which vault they open) and its numbers |
 | `src/vbrowse.c` | The video browser |
+| `src/manga.c`, `src/manga_ui.c` | Manga: MangaDex and E-Hentai, the covers, chapters and the reader |
 | `tools/make-ui-icons.mjs` | The tab bar's and buttons' icons (`ui/`) |
 | `src/drive.c`, `src/drive_ui.c` | Google Drive: the sign-in, the sync, its screen |
 | `src/third_party/qrcodegen.*` | Project Nayuki's QR code generator (MIT, its notice in the file) |
@@ -237,6 +256,7 @@ the compiler inlines across them); textures are only freed after the frame that 
 | `src/web.c` | The Browser's screens and threads (compiled inside `main.c`) |
 | `src/booru.c`, `src/json.c` | The sites' searches and answers; a small JSON reader |
 | `src/net.c` | libcurl over the Vita's network |
+| `tests/manga_test.c`, `tests/manga/` | The manga readers against saved answers (all-ages ones) |
 | `tests/drive_mock.py` | A stand-in for Google's sign-in and Drive, for trying the sync in Vita3K |
 | `tests/` | The core against the golden vaults and the site readers against saved answers (`tests/booru/`, from the sites' all-ages halves), on a PC |
 | `tools/make-livearea.py`, `tools/make-livearea.mjs` | The bubble, cover art and splash; the LiveArea page (Chromium via Playwright) |
