@@ -101,6 +101,7 @@ static void comics_scan(void) {
 static int is_comic(int i) { return comic_flag && i < comic_n && comic_flag[i]; }
 static int mode_pass(int i) {
   switch (cfg.lmode) {
+    case 0: return !is_comic(i); // (All: everything but comics' pages, which have their own mode)
     case 1: return vault.hot[i].kind != LV_VIDEO && !is_comic(i);
     case 2: return vault.hot[i].kind == LV_VIDEO;
     case 3: return is_comic(i);

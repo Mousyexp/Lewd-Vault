@@ -1669,7 +1669,7 @@ static void draw_library(void) {
   if (!nshown) {
     if (cfg.lmode == 3 && !query[0]) {
       text_center(W / 2, TOP + 150, DIM, 20, "No comics yet");
-      text_center(W / 2, TOP + 180, FAINT, 16, "Save a chapter from the Manga tab, or give a collection the category Comics");
+      text_center(W / 2, TOP + 180, FAINT, 16, "Save a chapter from the Comics tab, or give a collection the category Comics");
     } else
     text_center(W / 2, TOP + 150, DIM, 20, query[0] ? "Nothing matches that search" : "Nothing here");
     if (query[0]) text_center(W / 2, TOP + 180, FAINT, 16, "Tap Library below to see everything again");

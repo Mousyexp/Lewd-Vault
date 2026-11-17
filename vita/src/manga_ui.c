@@ -12,7 +12,7 @@
 
 static const char *MSRC_NAME[MS_N] = {"MangaDex", "E-Hentai"};
 static const char *MSRC_ICON[MS_N] = {"mangadex", "ehentai"};
-static const char *MSRC_ABOUT[MS_N] = {"Manga and hentai manga", "Doujinshi, manga, CG"};
+static const char *MSRC_ABOUT[MS_N] = {"Comics and hentai comics", "Doujinshi, comics, CG"};
 static const char *MD_ORDER[3] = {"Popular", "Latest", "New"};
 
 static struct {

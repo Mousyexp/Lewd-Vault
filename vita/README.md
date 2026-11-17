@@ -39,7 +39,7 @@ Untraceable vault's cached thumbnails are encrypted with its key, like everythin
 Settings: search the Library, video volume, interface sounds, what a double tap does, the glow behind
 pictures, Google Drive, another vault, clearing the thumbnail cache.
 
-**Modes** (the switch beside the title, or L / R): **All**, **Pictures** (pictures and GIFs, not
+**Modes** (the switch beside the title, or L / R): **All** (everything but comics' pages), **Pictures** (pictures and GIFs, not
 comics' pages), **Videos**, and **Comics**: a shelf of books, one card each (its first page, its pages
 counted). A book is a collection whose pages are marked as a comic: the category Comics, Manga,
 Doujinshi, Webtoon or Manhwa, or one of those words as a tag, so comics made on the PC or synced
@@ -89,7 +89,7 @@ loads. The grid is the Library's; the site button is the tab bar (L/R step throu
 the ratings (General, Sensitive, Questionable, Explicit), the search and which category saves go into,
 and the sort is Latest, Hot (where the site has it), Top or Random. More results load as you scroll.
 The site button opens the sites window (`tools/make-site-icons.mjs` draws its icons). It has three
-tabs (L / R): **Manga** (MangaDex and E-Hentai: covers, a book's chapters, and a reader that turns
+tabs (L / R), each in pages of eighteen tiles (the arrows and dots at the top, or a swipe sideways): **Comics** (MangaDex and E-Hentai: covers, a book's chapters, and a reader that turns
 pages with ←/→, a tap at either side or a swipe, L / R for the chapters, ✕ to zoom; `src/manga.c`,
 `src/manga_ui.c`; △ or **Save chapter** puts the chapter, or the whole E-Hentai gallery, into the
 vault as a comic: its pages as they are, the category Comics, the book's tags and `comic`, one

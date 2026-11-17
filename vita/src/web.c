@@ -1108,7 +1108,7 @@ static void draw_find_sheet(void) {
   rrect(wx, wy, ww, wh, 26, SURF);
   text(wx + 24, wy + 40, TEXT, 22, "Find sources");
   // the tabs
-  static const char *tabs[] = {"Pictures", "Videos", "Manga"};
+  static const char *tabs[] = {"Pictures", "Videos", "Comics"};
   static const char *tab_icons[] = {"image", "film", "book"};
   int segw = 390, tw3 = segw / 3, segx = wx + ww - segw - 20, segy = wy + 14;
   rrect(segx, segy, segw, 40, 20, SURF2);
@@ -1137,9 +1137,9 @@ static void draw_find_sheet(void) {
   int top = wy + 90, rh = 66, vis = (wh - 150) / rh;
   if (find_tab == 2) {
     static const char *lines[] = {
-      "The Manga tab reads MangaDex and E-Hentai: their own APIs and pages, which no list describes",
+      "The Comics tab reads MangaDex and E-Hentai: their own APIs and pages, which no list describes",
       "for other sites (each reader site is a program of its own, not a kind like the boorus).",
-      "So there's nothing to add here yet: open Manga in the switcher for both.",
+      "So there's nothing to add here yet: open Comics in the switcher for both.",
       "Comics already on the PC or in Google Drive show in the Library's Comics mode as they are."};
     for (int k = 0; k < 4; k++) text_fit(wx + 30, top + 40 + k * 30, k == 2 ? TEXT : DIM, 16, lines[k], ww - 60);
   } else {
@@ -1347,11 +1347,12 @@ static void draw_sites_sheet(void) {
   int vis[LV_MAX_SITES], nvis = sites_visible(vis);
   int n = (sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : nvis) + 1; // (+ the add tile)
   int rows = (n + cols - 1) / cols, vis_rows = rows < 3 ? rows : 3;
+  int pages = (rows + 2) / 3; // (pages of three rows: eighteen tiles a page)
   int ww = cols * tw + (cols - 1) * gap + 36, wh = vis_rows * th + (vis_rows - 1) * gap + 100;
   int wx = (W - ww) / 2, wy = 18;
   rrect(wx, wy, ww, wh, 26, SURF);
   // the tabs: a segmented control
-  static const char *tabs[] = {"Pictures", "Videos", "Manga"};
+  static const char *tabs[] = {"Pictures", "Videos", "Comics"};
   static const char *tab_icons[] = {"image", "film", "book"};
   int segw = 450, tw3 = segw / 3, segx = W / 2 - segw / 2, segy = wy + 14;
   rrect(segx, segy, segw, 40, 20, SURF2);
@@ -1392,10 +1393,9 @@ static void draw_sites_sheet(void) {
     text(bx + 38, by + 26, TEXT, 15, cl);
     if (hit(bx, by - 4, bw, 48) || (in.pressed & SCE_CTRL_TRIANGLE)) { check_sources(sites_tab); in.tap = 0; in.pressed &= ~SCE_CTRL_TRIANGLE; }
   }
-  // (the chosen tile's row kept in sight)
+  // (the chosen tile's page shown)
   int srow = sheet_sel / cols;
-  if (srow - (int)sites_scroll > 2) sites_scroll = srow - 2;
-  if (srow < sites_scroll) sites_scroll = srow;
+  sites_scroll = (float)(srow / 3 * 3);
   int top = wy + 68;
   for (int k = 0; k < n; k++) {
     int r = k / cols - (int)sites_scroll;
@@ -1407,7 +1407,7 @@ static void draw_sites_sheet(void) {
     int kk = k;
     k = ord[k]; // (the k-th tile shows this source)
     int site = !sites_tab && k < nvis ? vis[k] : -1;
-    if (add) { name = sites_tab == 2 ? "More manga" : sites_tab ? "Add a source" : "Add a site"; about = "Found for you, one press"; ic = "add"; cur = 0; slot = 31; }
+    if (add) { name = sites_tab == 2 ? "More comics" : sites_tab ? "Add a source" : "Add a site"; about = "Found for you, one press"; ic = "add"; cur = 0; slot = 31; }
     else if (sites_tab == 2) { name = msource_name(k); about = msource_about(k); ic = msource_icon(k); cur = screen == S_MANGA && k == mg_src_now(); slot = 48 + k; }
     else if (sites_tab) { name = vsource_name(k); about = vsource_about(k); ic = vsource_icon(k); cur = k == vb_cur; blocked = vsource_blocked(k); slot = 32 + k; }
     else { name = LV_SITES[site].name; about = LV_SITES[site].about; ic = LV_SITES[site].icon; cur = site == cfg.site; slot = site; }
@@ -1430,11 +1430,29 @@ static void draw_sites_sheet(void) {
     k = kk;
     if (hit(x, y, tw, th)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
-  if (rows > vis_rows) {
-    // (a scroll bar: there's more below)
-    float f = sites_scroll / (float)(rows - vis_rows);
-    rrect(wx + ww - 10, top + f * (vis_rows * (th + gap) - 60), 4, 60, 2, with_alpha(TEXT, 80));
-    if (in.touching && in.down_y > top) { static float acc; acc += in.drag_dy; if (acc < -60 && sites_scroll < rows - vis_rows) { sites_scroll++; acc = 0; } if (acc > 60 && sites_scroll > 0) { sites_scroll--; acc = 0; } }
+  if (pages > 1) {
+    // the pages: a dot each, arrows either side; a swipe sideways across the tiles turns the page
+    // (in the window's top row, at the left, where "L / R" is otherwise)
+    int page = (int)sites_scroll / 3, dy = wy + 34, lx = wx + 14, dw = pages * 18;
+    rrect(wx + 8, wy + 12, dw + 100, 44, 22, SURF);
+    int turn = 0;
+    rrect(lx, dy - 18, 36, 36, 18, page > 0 ? SURF2 : with_alpha(SURF2, 80));
+    icon("chev_l", lx + 18, dy, page > 0 ? TEXT : FAINT);
+    for (int p = 0; p < pages; p++) {
+      circle(lx + 46 + p * 18 + 9, dy, p == page ? 6 : 4, p == page ? ACC : with_alpha(TEXT, 70));
+      if (hit(lx + 46 + p * 18, dy - 16, 18, 32)) { sheet_sel = p * 18 < n ? p * 18 : sheet_sel; in.tap = 0; sfx(SFX_TICK); }
+    }
+    int rx = lx + 46 + dw + 6;
+    rrect(rx, dy - 18, 36, 36, 18, page < pages - 1 ? SURF2 : with_alpha(SURF2, 80));
+    icon("chev_r", rx + 18, dy, page < pages - 1 ? TEXT : FAINT);
+    if (hit(lx, dy - 20, 36, 40)) { turn = -1; in.tap = 0; }
+    if (hit(rx, dy - 20, 36, 40)) { turn = 1; in.tap = 0; }
+    if (in.flicked && in.down_y > top && fabsf(in.fvx) > 12 && fabsf(in.fvx) > 2 * fabsf(in.fvy)) turn = in.fvx < 0 ? 1 : -1;
+    if (turn && page + turn >= 0 && page + turn < pages) {
+      int np = page + turn, k = np * 18 + sheet_sel % 18;
+      sheet_sel = k < n ? k : n - 1;
+      sfx(SFX_TICK);
+    }
   }
   int col = sheet_sel % cols, row = sheet_sel / cols;
   if (in.pressed & SCE_CTRL_RIGHT) sheet_sel = sheet_sel + 1 < n ? sheet_sel + 1 : 0;
