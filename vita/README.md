@@ -325,6 +325,31 @@ as small JPEGs; circles and round corners are one textured quad each instead of 
 per-frame work grows with the size of the vault; `web.c` is compiled inside `main.c` (one unit, so
 the compiler inlines across them); textures are only freed after the frame that may still draw them.
 
+## On a real Vita
+
+- **Drawing:** vita2d starts each frame's vertices at the start of one pool while the GPU may still be
+  drawing the frame before (two can be queued), which garbled shapes. Each frame now starts in its own
+  third of the 4 MB pool, in turn. Textures are freed three frames after their last use (or after
+  `vita2d_wait_rendering_done()`). The frame waits for vblank with `sceDisplayWaitVblankStartCB()`.
+  Every drawing call refuses a coordinate that isn't a number or is absurdly far off.
+- **Network:** the Net module, `sceNetInit` (its 1 MB buffer static), then `sceNetCtlInit`; curl and
+  OpenSSL start on a background thread, and no SceSsl/SceHttp module is loaded. Each request first
+  checks `sceNetCtlInetGetState`: with no Wi-Fi it fails at once ("Offline"). TLS is libcurl with
+  OpenSSL and the bundled Mozilla CA list (`cacert.pem`), with verification always on. A certificate
+  that looks expired or not yet valid gets a message to set the Vita's date and time. Connect times
+  out at 15 s and a stalled transfer after 20 s. A connection that breaks before anything arrives is
+  tried once more on a new connection (never the same socket). Downloads go to `.part` files, which
+  are removed on failure.
+- **Sleep:** the power callback, or the wall clock jumping more than 5 s between frames, starts every
+  connection afresh, stops the videos and restarts Wi-Fi transfer.
+- **Power:** `sceKernelPowerTick` keeps the Vita awake while a video plays, a slideshow runs or anything
+  downloads. While an offline copy, a chapter or a conversion is being saved, the PS button is held
+  (`sceShellUtilLock`) and comes back the moment it's done.
+- **Memory:** a 128 MB heap, kept under 95%. Textures go in video memory while 8 MB of it stays free
+  (counted in its 256 KiB granules), else in main memory while 16 MB stays free.
+- **VPK:** TITLEID `LWDV00001`, VERSION `01.00`, an UNSAFE self; `icon0` 128×128, `pic0` 960×544,
+  `bg` 840×500, `startup` 280×158 and the LiveArea's other pictures, all 8-bit indexed PNGs.
+
 ## When it crashes
 
 The Vita writes a dump to `ux0:data/psp2core-*.psp2dmp`. The address it crashed at (its PC, shown by

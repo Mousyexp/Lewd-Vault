@@ -14,6 +14,8 @@
 //            with the PC through the vault's _app/kv/resume.json
 #include <psp2/apputil.h>
 #include <psp2/common_dialog.h>
+#include <psp2/shellutil.h>
+#include <psp2/display.h>
 #include <psp2/ctrl.h>
 #include <psp2/ime_dialog.h>
 #include <psp2/io/fcntl.h>
@@ -98,7 +100,8 @@ static int mem_free(int *user, int *cdram) {
   return 0;
 }
 vita2d_texture *tex_new(unsigned w, unsigned h) {
-  long need = (long)((w + 7) & ~7u) * h * 4 + 4096;
+  // (video memory comes in 256 KiB granules: a small texture still takes a whole one)
+  long need = ((long)((w + 7) & ~7u) * h * 4 + 4096 + 0x3FFFF) & ~0x3FFFFL;
   int user = 0, cdram = 0, known = mem_free(&user, &cdram) == 0;
   vita2d_texture *t = NULL;
   if (!known || cdram - need >= (long)RESERVE_CDRAM) t = vita2d_create_empty_texture(w, h);
@@ -3436,7 +3439,7 @@ int main(void) {
   sfx_volume(70);
   lv_video_release_texture = free_later;
   vita2d_set_clear_color(BG);
-  vita2d_set_vblank_wait(1);
+  vita2d_set_vblank_wait(0); // (main's loop waits with sceDisplayWaitVblankStartCB)
   font = vita2d_load_font_file("app0:font.ttf");
   pgf = vita2d_load_default_pgf();
   rnd_state ^= (unsigned)time(NULL);
@@ -3512,6 +3515,13 @@ int main(void) {
     }
     videos_close_now();
     PT("videos closed");
+    // (a backup for the sleep callback: the wall clock jumped, but frames don't take seconds)
+    {
+      static time_t last_wall;
+      time_t now_wall = time(NULL);
+      if (last_wall && now_wall - last_wall > 5) woke = 1;
+      last_wall = now_wall;
+    }
     if (woke) {
       woke = 0;
       lv_net_reset();
@@ -3525,6 +3535,18 @@ int main(void) {
     if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow) || drive.state == DRV_SYNCING || drive.state == DRV_CODE || wf_run ||
         dl_post >= 0 || msave_on || conv_on) // (and while a video downloads or a chapter is saved: sleep would cut the Wi-Fi)
       sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
+    // (an offline copy being saved, a chapter, a conversion: the PS button is held until it's done,
+    //  since leaving suspends the app and cuts the download; it works again as soon as it finishes)
+    {
+      static int locked, events;
+      int want = saving || msave_on || conv_on;
+      if (want != locked) {
+        if (!events) { sceShellUtilInitEvents(0); events = 1; }
+        if (want) sceShellUtilLock(SCE_SHELL_UTIL_LOCK_TYPE_PS_BTN);
+        else sceShellUtilUnlock(SCE_SHELL_UTIL_LOCK_TYPE_PS_BTN);
+        locked = want;
+      }
+    }
     PT("frame start");
     if (loaded_vault) take_results();
     PT("take_results");
@@ -3664,6 +3686,7 @@ int main(void) {
 #endif
     vita2d_end_drawing();
     vita2d_common_dialog_update();
+    sceDisplayWaitVblankStartCB(); // (the frame's wait, letting callbacks run: vita2d's own is off)
     vita2d_swap_buffers();
 
     // the vault opens on its own thread (start_load); its end is picked up here

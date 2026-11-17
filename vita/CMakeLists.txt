@@ -37,7 +37,7 @@ target_link_libraries(${PROJECT_NAME}
   SceAvPlayer_stub SceAudio_stub SceGxm_stub SceDisplay_stub SceSysmodule_stub SceCtrl_stub
   SceTouch_stub ScePower_stub SceAppUtil_stub SceCommonDialog_stub SceIme_stub ScePgf_stub
   SceLibKernel_stub SceKernelThreadMgr_stub SceRtc_stub SceAppMgr_stub SceLiveArea_stub
-  SceNet_stub SceNetCtl_stub SceKernelModulemgr_stub SceIofilemgr_stub SceSysmem_stub SceProcessmgr_stub
+  SceShellSvc_stub SceNet_stub SceNetCtl_stub SceKernelModulemgr_stub SceIofilemgr_stub SceSysmem_stub SceProcessmgr_stub
 )
 
 vita_create_self(eboot.bin ${PROJECT_NAME} UNSAFE)

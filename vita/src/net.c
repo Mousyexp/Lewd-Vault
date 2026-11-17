@@ -1,3 +1,4 @@
+#include <time.h>
 #include "net.h"
 #include <curl/curl.h>
 #include <psp2/net/net.h>
@@ -235,6 +236,8 @@ static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const
   why[0] = 0;
   if (err) *err = why;
   if (!up || !h) { snprintf(why, sizeof why, "No network"); return -1; }
+  // (no Wi-Fi: said at once, rather than each request waiting out its connect timeout)
+  if (!lv_net_online()) { snprintf(why, sizeof why, "Offline: turn on Wi-Fi in the Vita's settings"); return -1; }
   // (woken up since the last request: a fresh handle, no connections from before)
   if (h->gen != net_gen) {
     curl_easy_cleanup(h->c);
@@ -307,6 +310,20 @@ static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const
     }
   }
   CURLcode r = curl_easy_perform(c);
+  // (a connection that broke before anything came, an old kept-alive one the server had closed or
+  //  one that died in a sleep: once more on a new connection, never the same socket. Only requests
+  //  that send nothing, and only when nothing was written yet.)
+  int fresh_ok = !rq || (!rq->body && !rq->body_path && (!rq->method || !strcmp(rq->method, "GET")));
+  if (fresh_ok && s->n == 0 && !(s->cancel && *s->cancel) &&
+      (r == CURLE_RECV_ERROR || r == CURLE_SEND_ERROR || r == CURLE_GOT_NOTHING || r == CURLE_SSL_CONNECT_ERROR || r == CURLE_PARTIAL_FILE || r == CURLE_COULDNT_CONNECT)) {
+    if (s->f) rewind(s->f);
+    curl_easy_setopt(c, CURLOPT_FRESH_CONNECT, 1L);
+    curl_easy_setopt(c, CURLOPT_FORBID_REUSE, 1L);
+    why[0] = 0;
+    r = curl_easy_perform(c);
+    curl_easy_setopt(c, CURLOPT_FRESH_CONNECT, 0L);
+    curl_easy_setopt(c, CURLOPT_FORBID_REUSE, 0L);
+  }
   if (piece.f) fclose(piece.f);
   curl_slist_free_all(hl);
   if (r == CURLE_BAD_CONTENT_ENCODING && !no_compress) {
@@ -323,6 +340,11 @@ static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const
     if (s->too_big) snprintf(why, sizeof why, "Too big for the Vita");
     else if (s->cancel && *s->cancel) snprintf(why, sizeof why, "Cancelled");
     else if (!why[0]) snprintf(why, sizeof why, "%s", curl_easy_strerror(r));
+    // (a certificate "not yet valid" or "expired" everywhere is usually the Vita's own clock: it's
+    //  said so, and the check stays on)
+    if ((r == CURLE_PEER_FAILED_VERIFICATION || r == CURLE_SSL_CACERT_BADFILE || r == CURLE_SSL_CERTPROBLEM) &&
+        (strcasestr(why, "not yet valid") || strcasestr(why, "expired") || time(NULL) < 1735689600 /* 2025-01-01 */))
+      snprintf(why, sizeof why, "The Vita's date or time looks wrong: set it in the Vita's Settings (secure sites check it)");
     return -1;
   }
   if (status >= 400) snprintf(why, sizeof why, "The site answered %ld", status);
