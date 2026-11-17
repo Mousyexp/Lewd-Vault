@@ -69,6 +69,11 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sounds/slideshow.wav sounds/slideshow.wav
   FILE sounds/more.wav sounds/more.wav
   FILE sounds/start.wav sounds/start.wav
+  FILE ui/chev_l.png ui/chev_l.png
+  FILE ui/chev_r.png ui/chev_r.png
+  FILE ui/refresh.png ui/refresh.png
+  FILE ui/tag.png ui/tag.png
+  FILE ui/wifi.png ui/wifi.png
   FILE ui/back.png ui/back.png
   FILE ui/book.png ui/book.png
   FILE ui/compass.png ui/compass.png

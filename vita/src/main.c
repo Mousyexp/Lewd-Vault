@@ -75,8 +75,13 @@ int _newlib_heap_size_user = 200 * 1024 * 1024;
 #define W 960
 #define H 544
 #define DATA "ux0:data/LWDV00001"
-#define TOP 92 // (the header: the title and its buttons, then the chips)
-#define BAR 80 // (the floating tab bar's room: it and its margin)
+// The header (one row of large buttons) and the floating tab bar tuck away while the Library or the
+// Browser is scrolled down, and come back on the way up: chrome_hide goes 0 (shown) to 1 (tucked).
+static float chrome_hide, chrome_target;
+#define TOP_FULL 56
+#define TOP ((int)(TOP_FULL * (1 - chrome_hide) + 0.5f)) // (where the content starts)
+#define HDR_Y (TOP - TOP_FULL)                            // (the header's own top: 0, or above the screen)
+#define BAR ((int)(80 - 36 * chrome_hide))                // (the tab bar's room)
 #define COLS 6
 #define CARD_W 148
 #define CARD_H 197
@@ -1281,11 +1286,12 @@ static char wf_last[160];  //  and the last file, or why it stopped)
 // ----- the library -----
 static void open_viewer(int k, int slideshow);
 // ---------- the app's icons (vita/ui/*.png, tools/make-ui-icons.mjs): white glyphs, tinted when drawn ----------
-static struct { const char *name; vita2d_texture *t; int tried; } ui_icons[24];
+static struct { const char *name; vita2d_texture *t; int tried; } ui_icons[48];
 static vita2d_texture *ui_icon(const char *name) {
   int k = 0;
-  for (; k < 24 && ui_icons[k].name; k++) if (!strcmp(ui_icons[k].name, name)) break;
-  if (k == 24) return NULL;
+  // (the same literal is the same pointer: no string compare for the icons drawn every frame)
+  for (; k < 48 && ui_icons[k].name; k++) if (ui_icons[k].name == name || !strcmp(ui_icons[k].name, name)) break;
+  if (k == 48) return NULL;
   if (!ui_icons[k].name) ui_icons[k].name = name;
   if (!ui_icons[k].tried) {
     ui_icons[k].tried = 1;
@@ -1319,7 +1325,14 @@ static int tab_of_screen(void) {
   return -1;
 }
 static void draw_bar(void) {
-  int px = (W - PILL_W) / 2, py = H - PILL_H - 10, tw = PILL_W / 4;
+  // (tucked: a smaller pill, icons only)
+  float t = chrome_hide;
+  int pw = (int)(PILL_W - 300 * t), ph = (int)(PILL_H - 20 * t);
+  int px = (W - pw) / 2, py = H - ph - (int)(10 - 4 * t), tw = pw / 4;
+#undef PILL_W
+#undef PILL_H
+#define PILL_W pw
+#define PILL_H ph
   // a soft shadow, the glassy body, a light rim along its top
   rrect(px - 4, py + 2, PILL_W + 8, PILL_H + 8, (PILL_H + 8) / 2, RGBA(0, 0, 0, 50));
   rrect(px - 1, py + 3, PILL_W + 2, PILL_H + 2, (PILL_H + 2) / 2, RGBA(0, 0, 0, 70));
@@ -1338,11 +1351,11 @@ static void draw_bar(void) {
     int cx = px + k * tw + tw / 2;
     int on = k == sel_tab;
     unsigned c = on ? ACC : with_alpha(TEXT, 200);
-    icon(icons[k][on], cx, py + 23, c);
-    text_center(cx, py + PILL_H - 9, c, 12, labels[k]);
+    icon(icons[k][on], cx, t > 0.5f ? py + PILL_H / 2 : py + 23, c);
+    if (t < 0.5f) text_center(cx, py + PILL_H - 9, with_alpha(c, (int)(255 * (1 - 2 * t))), 12, labels[k]);
     // (the button that leads here: ○ goes round Library, Browser, Slideshow, Settings)
     int next = sel_tab >= 0 && k == (sel_tab + 1) % 4 && screen != S_DRIVE && screen != S_WIFI && screen != S_STATS && screen != S_HEALTH;
-    if (next) { circle(cx + 26, py + 14, 8, with_alpha(TEXT, 36)); text_center(cx + 26, py + 19, DIM, 11, "○"); }
+    if (next && t < 0.5f) { circle(cx + 26, py + 14, 8, with_alpha(TEXT, 36)); text_center(cx + 26, py + 19, DIM, 11, "○"); }
     // (the whole quarter of the pill, and a little round it, is the tab's)
     if (in.tap && in.tap_x >= px + k * tw - (k == 0 ? 20 : 0) && in.tap_x < px + (k + 1) * tw + (k == 3 ? 20 : 0) && in.tap_y >= py - 10) {
       sfx(SFX_TAB);
@@ -1354,7 +1367,10 @@ static void draw_bar(void) {
     }
   }
 }
-
+#undef PILL_W
+#undef PILL_H
+#define PILL_W 600
+#define PILL_H 62
 
 // ---------- gradients: one stretched, tinted ramp each (not a rectangle per line) ----------
 // ramps[0] alpha 0->255 down, [1] 255->0 down, [2] 0->255 across, [3] 255->0 across (white)
@@ -1407,15 +1423,36 @@ static int chip(int x, int y, const char *label, int on) {
 // A header button: a capsule 36 high with an icon (or none) and a label; its width. x is its right edge.
 static int head_button(int right, const char *ic, const char *label, unsigned bg, int *hit_out) {
   int w = text_w(16, label) + (ic ? 50 : 32);
-  int x = right - w;
-  rrect(x, 8, w, 36, 18, bg);
-  if (ic) icon(ic, x + 22, 26, TEXT);
-  text(x + (ic ? 38 : 16), 32, TEXT, 16, label);
-  *hit_out = hit(x, 4, w, 44);
+  int x = right - w, y = HDR_Y;
+  rrect(x, y + 8, w, 40, 20, bg);
+  if (ic) icon(ic, x + 22, y + 28, TEXT);
+  text(x + (ic ? 38 : 16), y + 34, TEXT, 16, label);
+  *hit_out = hit(x, y + 4, w, 48);
   return w;
 }
+// (following the scroll: down a little way tucks the header and the bar away, up brings them back)
+static void chrome_follow(float dscroll, float pos) {
+  if (pos < 40) chrome_target = 0;
+  else if (dscroll > 2.5f) chrome_target = 1;
+  else if (dscroll < -2.5f) chrome_target = 0;
+}
+// The connection's light: green online, red not; a tap says which (and what to do)
+static int net_state_cached = -1;
+static unsigned net_state_at;
+static int online_now(void) {
+  if (net_state_cached < 0 || frame_no - net_state_at > 90) { net_state_cached = lv_net_online(); net_state_at = frame_no; }
+  return net_state_cached;
+}
+static int online_button(int right) {
+  int on = online_now(), x = right - 44, y = HDR_Y;
+  rrect(x, y + 8, 44, 40, 20, SURF2);
+  icon("wifi", x + 22, y + 26, on ? RGBA(90, 214, 120, 255) : RGBA(240, 84, 84, 255));
+  circle(x + 22, y + 39, 3, on ? RGBA(90, 214, 120, 255) : RGBA(240, 84, 84, 255));
+  if (hit(x, y + 4, 44, 48)) { sfx(SFX_TICK); say(on ? "Online" : "Offline: turn on Wi-Fi in the Vita's settings (the Library still works)"); net_state_cached = -1; }
+  return 44;
+}
 
-static float chips_scroll;
+static int cats_x; // (where the categories' list opens)
 #include "lib.c"
 #include "show.c"
 #include "drive_ui.c"
@@ -1461,6 +1498,12 @@ static void draw_library(void) {
   }
   if (scroll < 0) { scroll = in.touching ? scroll : scroll * 0.7f; if (!in.touching) scroll_v = 0; }
   if (scroll > max_scroll) { scroll = in.touching ? scroll : max_scroll + (scroll - max_scroll) * 0.7f; if (!in.touching) scroll_v = 0; }
+  {
+    static float last;
+    if (!sheet_up && !fast) chrome_follow(scroll - last, scroll);
+    if (sheet_up) chrome_target = 0;
+    last = scroll;
+  }
 
   // --- the grid ---
   int first = grid_first(&lgrid, scroll - 8);
@@ -1541,65 +1584,58 @@ static void draw_library(void) {
     rrect(W - 6, by, 4, bh, 2, with_alpha(TEXT, 70));
   }
 
-  // --- the top: title, then the category chips ---
-  vita2d_draw_rectangle(0, 0, W, TOP, with_alpha(BG, 250));
-  int sx = W - 16;
+  // --- the top: one row of large buttons (tucked away while scrolling down) ---
+  int hy = HDR_Y;
+  vita2d_draw_rectangle(0, hy, W, TOP_FULL, with_alpha(BG, 250));
+  int sx = W - 12;
   int title_end;
   if (book_inside) { // (in a book: back to the shelf, and its name)
-    rrect(12, 8, 44, 36, 18, SURF2);
-    icon("back", 34, 26, TEXT);
-    if (hit(12, 4, 44, 44)) { sfx(SFX_BACK); close_book(); in = saved_in; in.pressed = 0; in.tap = 0; draw_bar(); return; }
-    title_end = 66;
+    rrect(10, hy + 8, 48, 40, 20, SURF2);
+    icon("back", 34, hy + 28, TEXT);
+    if (hit(10, hy + 4, 48, 48)) { sfx(SFX_BACK); close_book(); in = saved_in; in.pressed = 0; in.tap = 0; draw_bar(); return; }
+    title_end = 70;
   } else {
-    text(18, 36, TEXT, 26, "Library");
-    title_end = 18 + text_w(26, "Library") + 14;
-    title_end += draw_modes(title_end, 6) + 12;
+    title_end = 10 + draw_modes(10, hy + 8) + 10;
+    // the category: one button, its list opening under it
+    char cl[80];
+    snprintf(cl, sizeof cl, "%s", cat < 0 ? "All categories" : vault.cats[cat]);
+    int cw = text_w(16, cl) + 44;
+    if (cw > 210) cw = 210;
+    rrect(title_end, hy + 8, cw, 40, 20, cat < 0 ? SURF2 : with_alpha(ACC, 110));
+    text_fit(title_end + 16, hy + 34, TEXT, 16, cl, cw - 40);
+    icon("chev_r", title_end + cw - 18, hy + 28, DIM);
+    if (hit(title_end, hy + 4, cw, 48)) { sfx(SFX_OPEN); lsheet = LS_CATS; lsheet_sel = cat + 1; cats_x = title_end; }
+    title_end += cw + 10;
   }
   char kl[64];
   int nf = (cfg.kind != 0) + (lf.nsfw_max != 0) + (lf.stars_min != 0) + (lf.album != 0) + (lf.coll[0] != 0 && !book_inside);
   if (nf) snprintf(kl, sizeof kl, "Filters \u00b7 %d", nf); else snprintf(kl, sizeof kl, "Filters");
   int hb;
+  sx -= online_button(sx) + 8;
   if (!book_inside) {
-    sx -= head_button(sx, "sort", SORTS[cfg.sort], SURF2, &hb) + 10;
+    sx -= head_button(sx, "sort", SORTS[cfg.sort], SURF2, &hb) + 8;
     if (hb || (!selecting && (in.pressed & SCE_CTRL_TRIANGLE))) { sfx(SFX_TOGGLE); cfg.sort = (cfg.sort + 1) % NSORTS; refilter(); cfg_save(); sel = 0; scroll = 0; }
   }
-  sx -= head_button(sx, "sliders", kl, nf ? with_alpha(ACC, 110) : SURF2, &hb) + 10;
+  sx -= head_button(sx, "sliders", kl, nf ? with_alpha(ACC, 110) : SURF2, &hb) + 8;
   if (hb || (!selecting && (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); lsheet = LS_FILTERS; lsheet_sel = 0; }
-  if (query[0]) {
+  if (query[0] && sx - title_end > 90) {
     char q[160];
-    snprintf(q, sizeof q, "\u201c%.14s%s\u201d", query, strlen(query) > 14 ? "\u2026" : "");
-    sx -= head_button(sx, "xmark", q, with_alpha(ACC, 80), &hb) + 10;
+    snprintf(q, sizeof q, "\u201c%.12s%s\u201d", query, strlen(query) > 12 ? "\u2026" : "");
+    sx -= head_button(sx, "xmark", q, with_alpha(ACC, 80), &hb) + 8;
     if (hb) { query[0] = 0; refilter(); }
   }
   {
     char info[200];
     if (book_inside) snprintf(info, sizeof info, "%s \u00b7 %d pages", lf.coll, nshown);
-    else snprintf(info, sizeof info, "%d %s", nshown, book_shelf ? (nshown == 1 ? "book" : "books") : nshown == 1 ? "item" : "items");
-    int room = sx - title_end - 6;
-    if (book_inside) text_fit(title_end, 33, TEXT, 20, info, room);
-    else if (room > text_w(15, info)) text(title_end, 32, FAINT, 15, info);
+    else snprintf(info, sizeof info, "%d", nshown);
+    int room = sx - title_end - 4;
+    if (book_inside) text_fit(title_end, hy + 35, TEXT, 20, info, room);
+    else if (room > text_w(14, info)) text(title_end, hy + 33, FAINT, 14, info);
   }
-  // the modes: L / R (in a book: back to the shelf first); the categories: tap
+  // the modes: L / R (in a book: back to the shelf first)
   if (in.pressed & (SCE_CTRL_RTRIGGER | SCE_CTRL_LTRIGGER)) {
     if (book_inside) close_book();
     set_mode((cfg.lmode + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : 3)) % 4);
-  }
-  if (in.touching && in.ty < TOP && in.ty > 48) chips_scroll -= in.drag_dx;
-  if (chips_scroll < 0) chips_scroll = 0;
-  float cxp = 12 - chips_scroll;
-  for (int k = -1; k < vault.ncats; k++) {
-    const char *nm = k < 0 ? "All" : vault.cats[k];
-    int w = text_w(17, nm) + 36;
-    if (cxp + w > 0 && cxp < W) {
-      chip((int)cxp, 50, nm, k == cat);
-      if (hit((int)cxp, 50, w, 38)) { sfx(SFX_TAB); cat = k; refilter(); sel = 0; scroll = 0; }
-    }
-    // keep the chosen chip in view
-    if (k == cat && (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) && 0) {
-      if (cxp < 0) chips_scroll += cxp - 12;
-      if (cxp + w > W) chips_scroll += cxp + w - W + 12;
-    }
-    cxp += w + 8;
   }
 
   if (selecting) {
@@ -1627,6 +1663,7 @@ static void draw_library(void) {
   else if (lsheet == LS_TAGS) draw_tags_sheet();
   else if (lsheet == LS_QUICK) draw_quick_sheet();
   else if (lsheet == LS_BATCH) draw_batch_sheet();
+  else if (lsheet == LS_CATS) draw_cats_sheet();
 }
 
 // ----- the full view -----
@@ -2474,6 +2511,10 @@ int main(void) {
     PT("web_take_results");
     if (loaded_vault) wf_take();
     msave_take();
+    // (the header and the tab bar: tucked only while the Library or the Browser scrolls down)
+    if (screen != S_LIBRARY && screen != S_WEB) chrome_target = 0;
+    chrome_hide += (chrome_target - chrome_hide) * 0.25f;
+    if (fabsf(chrome_target - chrome_hide) < 0.004f) chrome_hide = chrome_target;
     if (frame_no % 30 == 0) la_poll_events();
     if (wf_run && screen != S_WIFI && screen != S_COVER) wf_stop(); // (the server only while its screen is open)
 

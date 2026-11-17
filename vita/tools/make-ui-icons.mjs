@@ -48,6 +48,11 @@ const ICONS = {
   more: `<circle cx="5.5" cy="12" r="1.8" ${F}/><circle cx="12" cy="12" r="1.8" ${F}/><circle cx="18.5" cy="12" r="1.8" ${F}/>`,
   film: `<rect x="3" y="4" width="18" height="16" rx="2.8" ${S}/><path d="M7.5 4 V20 M16.5 4 V20 M3 9.3 H7.5 M3 14.7 H7.5 M16.5 9.3 H21 M16.5 14.7 H21" ${S}/>`,
   book: `<path d="M12 6.5 C9.8 4.9 6.8 4.4 3 4.6 V18.6 C6.8 18.4 9.8 18.9 12 20.5 C14.2 18.9 17.2 18.4 21 18.6 V4.6 C17.2 4.4 14.2 4.9 12 6.5 Z M12 6.5 V20.5" ${S}/>`,
+  wifi: `<path d="M2.6 9.2 C8 4.2 16 4.2 21.4 9.2 M5.6 12.6 C9.4 9.2 14.6 9.2 18.4 12.6 M8.7 16 C10.6 14.4 13.4 14.4 15.3 16" ${S} stroke-width="2.3"/>`,
+  tag: `<path d="M3.5 4.8 V11 L12.8 20.3 L20.3 12.8 L11 3.5 H4.8 Z" ${S}/><circle cx="8" cy="8" r="1.5" ${F}/>`,
+  chev_l: `<path d="M14.5 5 L7.5 12 L14.5 19" ${S} stroke-width="2.6"/>`,
+  chev_r: `<path d="M9.5 5 L16.5 12 L9.5 19" ${S} stroke-width="2.6"/>`,
+  refresh: `<path d="M19.5 12 A7.5 7.5 0 1 1 16.8 6.2 M17.5 2.8 V6.8 H13.5" ${S}/>`,
   image: `<rect x="3" y="4.5" width="18" height="15" rx="2.8" ${S}/><path d="M5.5 17 l4.5 -4.6 l3.2 3.2 l2.2 -2.2 l3.2 3.4" ${S}/><circle cx="8.6" cy="9.2" r="1.4" ${F}/>`,
 };
 const TAB = ['photos', 'photos_fill', 'compass', 'compass_fill', 'play', 'play_fill', 'gear', 'gear_fill'];

@@ -1526,6 +1526,11 @@ static void draw_web(void) {
     if (wscroll < 0 && !in.touching) { wscroll *= 0.7f; wscroll_v = 0; }
     if (wscroll > max_scroll && !in.touching) { wscroll = max_scroll + (wscroll - max_scroll) * 0.7f; wscroll_v = 0; }
   }
+  {
+    static float last;
+    if (!sheet_open) chrome_follow(wscroll - last, wscroll); else chrome_target = 0;
+    last = wscroll;
+  }
 
   int first = grid_first(&wgrid, wscroll - 8);
   static int wlast_top_row = -1;
@@ -1575,42 +1580,46 @@ static void draw_web(void) {
     rrect(W - 6, by, 4, bh, 2, with_alpha(TEXT, 70));
   }
 
-  // --- the top: the site (the tab button), the search, the filter and the sort ---
-  vita2d_draw_rectangle(0, 0, W, TOP, with_alpha(BG, 250));
-  text(18, 36, TEXT, 26, "Browser");
+  // --- the top: one row: the site (the tab button), the search, the filter, the sort, the light ---
+  int hy = HDR_Y;
+  vita2d_draw_rectangle(0, hy, W, TOP_FULL, with_alpha(BG, 250));
   char site[80];
-  snprintf(site, sizeof site, "%s  ▾", LV_SITES[cfg.site].name);
-  int sx = 18 + text_w(26, "Browser") + 14;
-  int ws = text_w(17, site) + 36;
-  rrect(sx, 8, ws, 36, 18, ACC);
-  text(sx + 18, 32, RGBA(20, 12, 16, 255), 17, site);
-  if (!sheet_open && hit(sx, 4, ws, 44)) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = site_tile_of(cfg.site); sites_tab = 0; sites_scroll = 0; }
-  // filter and sort on the right
+  snprintf(site, sizeof site, "%s", LV_SITES[cfg.site].name);
+  int ws = text_w(17, site) + 84;
+  if (ws > 250) ws = 250;
+  rrect(10, hy + 8, ws, 40, 20, ACC);
+  vita2d_texture *sic = site_icon_named(cfg.site, LV_SITES[cfg.site].icon);
+  if (sic) vita2d_draw_texture_scale(sic, 16, hy + 12, 32 / 112.0f, 32 / 112.0f);
+  text_fit(sic ? 54 : 26, hy + 34, RGBA(20, 12, 16, 255), 17, site, ws - (sic ? 74 : 50));
+  icon("chev_r", 10 + ws - 18, hy + 28, RGBA(20, 12, 16, 255));
+  if (!sheet_open && hit(10, hy + 4, ws, 48)) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = site_tile_of(cfg.site); sites_tab = 0; sites_scroll = 0; }
+  // filter, sort and the light on the right
   char filt[40];
   int nr = 0;
   for (int k = 0; k < 4; k++) nr += (cfg.ratings >> k) & 1;
   if (nr == 4) snprintf(filt, sizeof filt, "Filter");
   else { snprintf(filt, sizeof filt, "Filter:"); for (int k = 0; k < 4; k++) if (cfg.ratings & (1 << k)) { char c[3] = {' ', RATING_NAMES[k][0], 0}; strcat(filt, c); } }
-  int rx = W - 16, hb;
-  rx -= head_button(rx, "sort", LV_SORT_NAMES[cfg.wsort], SURF2, &hb) + 10;
+  int rx = W - 12, hb;
+  rx -= online_button(rx) + 8;
+  rx -= head_button(rx, "sort", LV_SORT_NAMES[cfg.wsort], SURF2, &hb) + 8;
   if (!sheet_open && (hb || (in.pressed & SCE_CTRL_TRIANGLE))) {
     sfx(SFX_TOGGLE);
     do cfg.wsort = (cfg.wsort + 1) % LV_NSORTS; while (cfg.wsort == LV_SORT_HOT && !LV_SITES[cfg.site].hot);
     web_search();
   }
-  rx -= head_button(rx, "sliders", filt, nr == 4 ? SURF2 : with_alpha(ACC, 110), &hb) + 10;
+  rx -= head_button(rx, "sliders", filt, nr == 4 ? SURF2 : with_alpha(ACC, 110), &hb) + 8;
   if (!sheet_open && (hb || (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); sheet = SH_FILTER; sheet_sel = 0; in.pressed &= ~SCE_CTRL_SQUARE; }
-  // the search field, the width of the screen, under the title
-  int wq = W - 32 - (cfg.wquery[0] ? 48 : 0);
-  rrect(16, 50, wq, 36, 18, SURF2);
-  icon("search", 38, 68, cfg.wquery[0] ? TEXT : FAINT);
-  text_fit(56, 74, cfg.wquery[0] ? TEXT : FAINT, 16, cfg.wquery[0] ? cfg.wquery : "Search tags, or pick from recent and bookmarks", wq - 60);
-  if (!sheet_open && hit(16, 50, wq, 36) && !ime_open) open_search_sheet();
+  // the search field: the room between
+  int qx = 10 + ws + 8, wq = rx - qx - (cfg.wquery[0] ? 48 : 0);
+  rrect(qx, hy + 8, wq, 40, 20, SURF2);
+  icon("search", qx + 22, hy + 28, cfg.wquery[0] ? TEXT : FAINT);
+  text_fit(qx + 40, hy + 34, cfg.wquery[0] ? TEXT : FAINT, 16, cfg.wquery[0] ? cfg.wquery : "Search tags", wq - 50);
+  if (!sheet_open && hit(qx, hy + 4, wq, 48) && !ime_open) open_search_sheet();
   if (cfg.wquery[0]) {
-    int cx = 16 + wq + 8;
-    rrect(cx, 50, 40, 36, 18, SURF2);
-    icon("xmark", cx + 20, 68, DIM);
-    if (!sheet_open && hit(cx, 50, 40, 36)) { cfg.wquery[0] = 0; web_search(); }
+    int cx = qx + wq + 6;
+    rrect(cx, hy + 8, 40, 40, 20, SURF2);
+    icon("xmark", cx + 20, hy + 28, DIM);
+    if (!sheet_open && hit(cx, hy + 4, 40, 48)) { cfg.wquery[0] = 0; web_search(); }
   }
 
   if (!sheet_open) {

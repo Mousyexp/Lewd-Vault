@@ -303,11 +303,58 @@ static void saved_apply(int k) {
 }
 
 // ---------- the sheets ----------
-enum { LS_NONE, LS_FILTERS, LS_TAGS, LS_QUICK, LS_BATCH };
+enum { LS_NONE, LS_FILTERS, LS_TAGS, LS_QUICK, LS_BATCH, LS_CATS };
 static int lsheet, lsheet_sel, quick_item = -1, delete_armed;
 static unsigned delete_armed_at;
 static unsigned char *picked; // per item: chosen (selecting many)
 static int npicked, selecting;
+// The categories: a list opening under their button, big chips that wrap (✕ or a tap picks, ○ closes)
+static void draw_cats_sheet(void) {
+  int n = vault.ncats + 1;
+  int x0 = cats_x > W - 520 ? W - 520 : cats_x, y0 = TOP_FULL + 2, pw = 510;
+  // (the chips laid out first, for the panel's height)
+  int xs[65], ys[65], ws[65], x = 12, y = 12, rows = 1;
+  for (int k = 0; k < n && k < 65; k++) {
+    const char *nm = k == 0 ? "All categories" : vault.cats[k - 1];
+    int w = text_w(17, nm) + 40;
+    if (w > pw - 24) w = pw - 24;
+    if (x + w > pw - 12) { x = 12; y += 52; rows++; }
+    xs[k] = x; ys[k] = y; ws[k] = w;
+    x += w + 8;
+  }
+  int ph = y + 56;
+  if (ph > H - y0 - 20) ph = H - y0 - 20;
+  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 120));
+  rrect(x0, y0, pw, ph, 22, SURF);
+  if (lsheet_sel >= n) lsheet_sel = n - 1;
+  for (int k = 0; k < n && k < 65; k++) {
+    if (ys[k] + 48 > ph) break;
+    const char *nm = k == 0 ? "All categories" : vault.cats[k - 1];
+    int on = k == cat + 1, cur = k == lsheet_sel;
+    int cx = x0 + xs[k], cy = y0 + ys[k];
+    if (cur) rrect(cx - 3, cy - 3, ws[k] + 6, 50, 25, with_alpha(TEXT, 60));
+    rrect(cx, cy, ws[k], 44, 22, on ? ACC : SURF2);
+    text_fit(cx + 20, cy + 29, on ? RGBA(20, 12, 16, 255) : TEXT, 17, nm, ws[k] - 32);
+    if (hit(cx, cy, ws[k], 44)) { lsheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
+  }
+  if (in.pressed & SCE_CTRL_RIGHT) { lsheet_sel = (lsheet_sel + 1) % n; sfx(SFX_TICK); }
+  if (in.pressed & SCE_CTRL_LEFT) { lsheet_sel = (lsheet_sel + n - 1) % n; sfx(SFX_TICK); }
+  if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) {
+    // (the nearest chip in the row below or above)
+    int k0 = lsheet_sel < 65 ? lsheet_sel : 0, best = k0, bd = 1 << 30;
+    int dir = (in.pressed & SCE_CTRL_DOWN) ? 1 : -1;
+    for (int k = 0; k < n && k < 65; k++) {
+      if ((ys[k] - ys[k0]) * dir <= 0) continue;
+      int d = abs(ys[k] - ys[k0]) * 4 + abs(xs[k] + ws[k] / 2 - xs[k0] - ws[k0] / 2);
+      if (d < bd) { bd = d; best = k; }
+    }
+    lsheet_sel = best; sfx(SFX_TICK);
+  }
+  if (in.pressed & SCE_CTRL_CROSS) { sfx(SFX_TAB); cat = lsheet_sel - 1; refilter(); sel = 0; scroll = 0; lsheet = LS_NONE; }
+  else if ((in.pressed & SCE_CTRL_CIRCLE) || (in.tap && !(in.tap_x >= x0 && in.tap_x < x0 + pw && in.tap_y >= y0 && in.tap_y < y0 + ph))) { sfx(SFX_CLOSE); lsheet = LS_NONE; }
+  in.pressed = 0; in.tap = 0;
+}
+
 
 static void lib_after_change(void) { refilter(); if (sel >= nshown) sel = nshown ? nshown - 1 : 0; }
 
