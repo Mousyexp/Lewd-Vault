@@ -9,7 +9,8 @@
 typedef struct { const char *name, *site, *tags, *icon, *about; int blocked; } VSource;
 static const VSource VSRC_BUILTIN[] = {
   {"Rule34Video", "Rule34Video", "hentai", "rule34video", "Hentai animations", 0},
-  {"R34V Anime", "Rule34Video", "anime", "r34anime", "Anime-style animations", 0},
+  {"Genshin Impact", "Rule34Video", "genshin-impact", "r34anime", "Genshin animations (Rule34Video)", 0},
+  {"Blue Archive", "Rule34Video", "blue-archive", "r34anime", "Blue Archive animations (Rule34Video)", 0},
   {"Sakugabooru", "Sakugabooru", "", "sakugabooru", "Anime animation clips", 0},
   {"Rule34", "Rule34", "video -furry -3d -real", "rule34", "Hentai videos (API key)", 0},
   {"Xbooru", "Xbooru", "video", "xbooru", "Hentai clips", 0},
@@ -97,6 +98,7 @@ static int nvsources(void) { if (!vsrc_built) vsrc_load(); return NVSRC; }
 static const char *vsource_name(int k) { return VSRC[k].name; }
 static const char *vsource_icon(int k) { return VSRC[k].icon; }
 static const char *vsource_about(int k) { return VSRC[k].about; }
+static const char *vsource_tags(int k) { return k >= 0 && k < NVSRC && VSRC[k].tags ? VSRC[k].tags : ""; }
 static int vsource_blocked(int k) { return VSRC[k].blocked; }
 static int vsource_site(int k) {
   if (k < 0 || k >= NVSRC) return -1;

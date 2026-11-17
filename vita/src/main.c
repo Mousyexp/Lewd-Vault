@@ -49,6 +49,7 @@
 #include "drive.h"
 #include "net.h"
 #include "discover.h"
+#include "manga.h"
 #include <psp2/kernel/clib.h>
 #ifdef LV_DEBUG
 // (debug builds: PT("label") logs the time since the last mark when it's over 4 ms)

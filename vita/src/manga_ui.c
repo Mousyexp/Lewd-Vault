@@ -45,6 +45,8 @@ static struct {
   int tall_top; // (a tall page just turned to: it starts at its top)
 } mg = {.adult = 1, .book = -1, .page = 0, .zoom = 1, .tall_top = 1};
 static int manga_back = S_WEB;
+// (per book of the list: 1 when its English chapters turned out to be only on the publisher's site)
+static unsigned char md_official[MG_MAX];
 static int nmsources(void) { return MS_N; }
 static const char *msource_name(int k) { return MSRC_NAME[k]; }
 static const char *msource_icon(int k) { return MSRC_ICON[k]; }
@@ -429,6 +431,7 @@ static void mg_search(void) {
   mg_drop_textures();
   free(mg.books); mg.books = NULL;
   free(mg.cstate); mg.cstate = NULL;
+  memset(md_official, 0, sizeof md_official);
   mg.nbooks = 0; mg.total = 0; mg.more = 1; mg.loading = 0; mg.err[0] = 0; mg.sel = 0; mg.scroll = 0;
   mg_list_more();
 }
@@ -527,7 +530,11 @@ static void mg_take(void) {
         break;
       case MJ_CHAPTERS:
         mg.ch_loading = 0;
-        if (d->a == mg.book) { free(mg.ch); mg.ch = d->ch; mg.nch = d->n < 0 ? 0 : d->n; if (d->n < 0) snprintf(mg.err, sizeof mg.err, "%s", d->err); }
+        if (d->a == mg.book) {
+          free(mg.ch); mg.ch = d->ch; mg.nch = d->n < 0 ? 0 : d->n;
+          if (d->n < 0) snprintf(mg.err, sizeof mg.err, "%s", d->err);
+          else if (d->n == 0 && d->a >= 0 && d->a < MG_MAX) md_official[d->a] = 1;
+        }
         else free(d->ch);
         break;
       case MJ_PAGES:
@@ -604,6 +611,11 @@ static void draw_manga(void) {
         if (mg.cstate && mg.cstate[i] == 0 && mg.books[i].cover[0]) { mg.cstate[i] = 1; mg_push(MJ_COVER, i, 0, mg.books[i].cover); }
       }
     }
+    if (i < MG_MAX && md_official[i]) {
+      vita2d_draw_rectangle(x, y, MG_CW, MG_CH, RGBA(10, 8, 12, 150));
+      rrect(x + 6, y + MG_CH - 26, MG_CW - 12, 20, 10, RGBA(0, 0, 0, 190));
+      text_center(x + MG_CW / 2, y + MG_CH - 11, DIM, 11, "Official release only");
+    }
     if (mg.books[i].pages) {
       char p[16];
       snprintf(p, sizeof p, "%dp", mg.books[i].pages);
@@ -670,7 +682,32 @@ static void draw_book(void) {
     text_center(366, listy + 70, RGBA(20, 12, 16, 255), 18, "▶  Read");
     if (hit(276, listy + 40, 180, 46) || (in.pressed & SCE_CTRL_CROSS)) { sfx(SFX_SELECT); mg_read(0); return; }
   } else if (mg.ch_loading) spinner(560, 260, 20);
-  else if (!mg.nch) text(276, listy + 30, DIM, 16, mg.err[0] ? mg.err : "No chapters in English to read here");
+  else if (!mg.nch && mg.err[0]) text(276, listy + 30, ACC2, 16, mg.err);
+  else if (!mg.nch) {
+    // its English chapters are the publisher's: said plainly, with the way on
+    rrect(276, listy + 6, W - 306, 210, 18, SURF);
+    icon("book", 310, listy + 44, ACC);
+    text(334, listy + 51, TEXT, 20, "Published officially");
+    text_fit(300, listy + 86, DIM, 15, "Its English chapters are licensed: they're read on the publisher's", W - 350);
+    text_fit(300, listy + 108, DIM, 15, "own site or app, so MangaDex has no pages of them to give the Vita.", W - 350);
+    // the next title in the list that isn't known to be the same
+    int next = -1;
+    for (int k = mg.book + 1; k < mg.nbooks && next < 0; k++) if (k >= MG_MAX || !md_official[k]) next = k;
+    int bx = 300, by = listy + 140;
+    if (next >= 0) {
+      int bw = text_w(17, "Next title") + 64;
+      rrect(bx, by, bw, 48, 24, ACC);
+      text(bx + 22, by + 31, RGBA(20, 12, 16, 255), 17, "Next title");
+      icon("chev_r", bx + bw - 24, by + 24, RGBA(20, 12, 16, 255));
+      if (hit(bx, by, bw, 48) || (in.pressed & SCE_CTRL_CROSS)) { sfx(SFX_SELECT); mg.sel = next; mg_open_book(next); return; }
+      bx += bw + 12;
+    }
+    int lw = text_w(17, "Latest uploads") + 44;
+    rrect(bx, by, lw, 48, 24, SURF2);
+    text(bx + 22, by + 31, TEXT, 17, "Latest uploads");
+    if (hit(bx, by, lw, 48) || (in.pressed & SCE_CTRL_TRIANGLE)) { sfx(SFX_TAB); mg.order = 1; mg_search(); screen = S_MANGA; return; }
+    text(300, by + 76, FAINT, 13, next >= 0 ? "\u2715 next title   \u25b3 the latest uploads (scanlations, readable)   \u25cb back" : "\u25b3 the latest uploads (scanlations, readable)   \u25cb back");
+  }
   else {
     const int rh = 48;
     float view = H - listy - 20;

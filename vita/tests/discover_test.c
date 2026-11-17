@@ -55,6 +55,34 @@ int main(void) {
   char *gg = slurp("tests/discover/grabber_gelbooru.txt", &len);
   lv_disc_lines(gg, len, BK_GELBOORU, c, &n, 200);
   CHECK(!find(c, n, "rule34"));
+  // Pybooru's list: Konachan and yande.re are Moebooru; Lolibooru is never offered
+  {
+    LvCand p[20]; int pn = 0;
+    char *py = slurp("tests/discover/pybooru_resources.py", &len);
+    lv_disc_pybooru(py, len, p, &pn, 20);
+    CHECK(find(p, pn, "konachan.com") && find(p, pn, "konachan.com")->kind == BK_MOEBOORU);
+    CHECK(find(p, pn, "danbooru.donmai.us") && find(p, pn, "danbooru.donmai.us")->kind == BK_DANBOORU);
+    CHECK(!find(p, pn, "lolibooru"));
+    free(py);
+  }
+  // a markdown table in place of the HTML one
+  {
+    LvCand m[10]; int mn = 0;
+    const char *md2 = "## Moebooru and MyImouto\n| Site | URL |\n|---|---|\n| Konachan | https://konachan.net/ |\n| Lolibooru | https://lolibooru.moe/ |\n\n## Next\n";
+    lv_disc_gallerydl(md2, strlen(md2), m, &mn, 10);
+    CHECK(mn == 1 && !strcmp(m[0].base, "https://konachan.net") && m[0].kind == BK_MOEBOORU);
+  }
+  // the mirror, and the saved copy round trip
+  {
+    char u[300];
+    lv_disc_mirror("https://raw.githubusercontent.com/mikf/gallery-dl/master/docs/supportedsites.md", u, sizeof u);
+    CHECK(!strcmp(u, "https://cdn.jsdelivr.net/gh/mikf/gallery-dl@master/docs/supportedsites.md"));
+    char buf[8000];
+    lv_disc_save(c, n, buf, sizeof buf);
+    LvCand r[200]; int rn = 0;
+    lv_disc_load(buf, r, &rn, 200);
+    CHECK(rn == n && !strcmp(r[0].base, c[0].base) && r[0].kind == c[0].kind);
+  }
   CHECK(lv_disc_never("Lolibooru", "https://lolibooru.moe"));
   CHECK(lv_disc_never("x", "https://furry.booru.org"));
   CHECK(!lv_disc_never("Future booru", "https://futurebooru.example"));

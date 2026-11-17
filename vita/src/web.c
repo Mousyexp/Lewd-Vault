@@ -797,6 +797,8 @@ static void vb_open(int k);
 static int vsrc_has_site(const char *site);
 static int vsrc_add(const char *site, const char *tags);
 static int vsrc_is_added(int k);
+static const char *vsource_tags(int k);
+static int vsource_site(int k);
 static void vsrc_remove(int k);
 // (the manga sources: manga_ui.c)
 static const char *msource_name(int k);
@@ -914,6 +916,8 @@ static FRow frows[FROWS];
 static int nfrows;
 static volatile int find_state; // 0 not yet, 1 reading the lists, 2 asking the sites, 3 done
 static volatile int find_lists;  // (the lists read)
+static volatile int find_cached; // (none read: the last look's, from the card)
+#define FIND_LISTS 6
 static int find_tab, find_sel;
 static float find_scroll;
 static pthread_mutex_t fdmx = PTHREAD_MUTEX_INITIALIZER;
@@ -927,21 +931,43 @@ static void *find_main(void *arg) {
   static LvCand c[160];
   int n = 0;
   const char *err;
-  // the lists
-  for (int k = 0; k < 5 && h; k++) {
-    char url[300];
+  // the lists (each from GitHub, else jsDelivr's copy of it)
+  for (int k = 0; k < FIND_LISTS && h; k++) {
+    char url[300], mirror[300];
     if (k == 0) snprintf(url, sizeof url, "%s", LV_INDEX_GALLERYDL);
     else if (k == 1) snprintf(url, sizeof url, "%s", LV_INDEX_BOORUJS);
-    else snprintf(url, sizeof url, "%s%s/sites.txt", LV_INDEX_GRABBER, LV_GRABBER_DIRS[k - 2]);
-    uint8_t *b = NULL;
-    size_t bn = 0;
-    if (lv_http_get(h, url, &b, &bn, 4u << 20, NULL, NULL, &err) == 200 && b) {
-      if (k == 0) lv_disc_gallerydl((char *)b, bn, c, &n, 160);
-      else if (k == 1) lv_disc_boorujs((char *)b, bn, c, &n, 160);
-      else lv_disc_lines((char *)b, bn, LV_GRABBER_KINDS[k - 2], c, &n, 160);
-      find_lists++;
+    else if (k == 2) snprintf(url, sizeof url, "%s", LV_INDEX_PYBOORU);
+    else snprintf(url, sizeof url, "%s%s/sites.txt", LV_INDEX_GRABBER, LV_GRABBER_DIRS[k - 3]);
+    lv_disc_mirror(url, mirror, sizeof mirror);
+    for (int attempt = 0; attempt < 2; attempt++) {
+      uint8_t *b = NULL;
+      size_t bn = 0;
+      int got = lv_http_get(h, attempt ? mirror : url, &b, &bn, 4u << 20, NULL, NULL, &err) == 200 && b && bn > 10;
+      if (got) {
+        int before = n;
+        if (k == 0) lv_disc_gallerydl((char *)b, bn, c, &n, 160);
+        else if (k == 1) lv_disc_boorujs((char *)b, bn, c, &n, 160);
+        else if (k == 2) lv_disc_pybooru((char *)b, bn, c, &n, 160);
+        else lv_disc_lines((char *)b, bn, LV_GRABBER_KINDS[k - 3], c, &n, 160);
+        // (the big lists answering with nothing readable count as not read: the mirror is tried)
+        if (n > before || k >= 2) find_lists++;
+        else got = 0;
+      }
+      free(b);
+      if (got || !mirror[0]) break;
     }
-    free(b);
+  }
+  // what was found, kept for next time; nothing read: what was found last time
+  {
+    static char buf[24000];
+    if (n >= 3) {
+      size_t len = lv_disc_save(c, n, buf, sizeof buf);
+      FILE *f = fopen(DATA "/finder_cache.txt", "w");
+      if (f) { fwrite(buf, 1, len, f); fclose(f); }
+    } else {
+      FILE *f = fopen(DATA "/finder_cache.txt", "r");
+      if (f) { size_t len = fread(buf, 1, sizeof buf - 1, f); buf[len] = 0; fclose(f); if (lv_disc_load(buf, c, &n, 160) > 0) find_cached = 1; }
+    }
   }
   // the rows: the sites found that aren't here; then the ones here, for their videos
   pthread_mutex_lock(&fdmx);
@@ -1010,7 +1036,7 @@ static void find_open(int tab) {
   find_tab = tab; find_sel = 0; find_scroll = 0;
   sheet = SH_FIND;
   if (find_state == 1 || find_state == 2) return; // (still going)
-  find_state = 1; find_lists = 0;
+  find_state = 1; find_lists = 0; find_cached = 0;
   nvsources(); // (the video sources read here, on this thread: the finder's thread only looks at them)
   pthread_mutex_lock(&fdmx); nfrows = 0; pthread_mutex_unlock(&fdmx);
   lv_net_init();
@@ -1084,8 +1110,9 @@ static void draw_find_sheet(void) {
   for (int k = 0; k < nfrows; k++) asking += frows[k].state <= 1;
   // the line under the title: where it's at
   char st[160];
-  if (find_state == 1) snprintf(st, sizeof st, "Reading the lists of boorus (gallery-dl, booru, Grabber)… %d of 5", find_lists);
+  if (find_state == 1) snprintf(st, sizeof st, "Reading the lists of boorus (gallery-dl, booru, Pybooru, Grabber)\u2026 %d of %d", find_lists, FIND_LISTS);
   else if (find_state == 2) snprintf(st, sizeof st, "Asking each site, as the Browser would… %d of %d", total - asking, total);
+  else if (!find_lists && find_cached) snprintf(st, sizeof st, "The lists couldn't be read: what the last look found, asked again now");
   else if (!find_lists) snprintf(st, sizeof st, "The lists couldn't be read: is the Vita online?");
   else snprintf(st, sizeof st, "From %d lists: %d sites of the kinds the Browser reads (anime and hentai only)", find_lists, total);
   text_fit(wx + 24, wy + 72, FAINT, 14, st, ww - 48);
@@ -1172,6 +1199,126 @@ static void draw_letter_icon(int x, int y, int sz, const char *name) {
   char l[2] = {(char)toupper((unsigned char)name[0]), 0};
   text_center(x + sz / 2, y + sz / 2 + sz / 5, TEXT, sz / 2, l);
 }
+// ---------- Check sources: each source of a tab asked once; the ones that don't answer go grey, last ----------
+// (kept by name, for the next launch too: ux0:data/LWDV00001/source_status.txt, "<tab>\t<name>\t<0/1>")
+typedef struct { char name[48]; int tab, st; } SrcStat; // st: 1 asking, 2 answers, 3 doesn't
+static SrcStat srcstat[64];
+static int nsrcstat, srcstat_loaded;
+static pthread_mutex_t ssmx = PTHREAD_MUTEX_INITIALIZER;
+static volatile int check_left; // (still to ask)
+static SrcStat *srcstat_of(int tab, const char *name, int make) {
+  for (int k = 0; k < nsrcstat; k++) if (srcstat[k].tab == tab && !strcmp(srcstat[k].name, name)) return &srcstat[k];
+  if (!make || nsrcstat >= 64) return NULL;
+  SrcStat *s = &srcstat[nsrcstat++];
+  memset(s, 0, sizeof *s);
+  snprintf(s->name, sizeof s->name, "%s", name);
+  s->tab = tab;
+  return s;
+}
+static void srcstat_load(void) {
+  srcstat_loaded = 1;
+  FILE *f = fopen(DATA "/source_status.txt", "r");
+  char ln[120];
+  while (f && fgets(ln, sizeof ln, f)) {
+    ln[strcspn(ln, "\r\n")] = 0;
+    char *a = strchr(ln, '\t'), *b = a ? strchr(a + 1, '\t') : NULL;
+    if (!a || !b) continue;
+    *a = 0; *b = 0;
+    SrcStat *s = srcstat_of(atoi(ln), a + 1, 1);
+    if (s) s->st = atoi(b + 1) ? 2 : 3;
+  }
+  if (f) fclose(f);
+}
+static void srcstat_save(void) {
+  FILE *f = fopen(DATA "/source_status.txt", "w");
+  pthread_mutex_lock(&ssmx);
+  for (int k = 0; f && k < nsrcstat; k++) if (srcstat[k].st >= 2) fprintf(f, "%d\t%s\t%d\n", srcstat[k].tab, srcstat[k].name, srcstat[k].st == 2);
+  pthread_mutex_unlock(&ssmx);
+  if (f) fclose(f);
+}
+static int src_failing(int tab, const char *name) {
+  if (!srcstat_loaded) srcstat_load();
+  SrcStat *s = srcstat_of(tab, name, 0);
+  return s && s->st == 3;
+}
+static int src_asking(int tab, const char *name) { SrcStat *s = srcstat_of(tab, name, 0); return s && s->st == 1; }
+typedef struct { int tab, kind, msrc; char name[48], url[1200]; LvSite site; } CheckJob;
+static CheckJob *check_jobs;
+static int ncheck_jobs;
+static void *check_main(void *arg) {
+  (void)arg;
+  pin_to_core(2);
+  LvHttp *h = lv_http_new();
+  for (int k = 0; k < ncheck_jobs; k++) {
+    CheckJob *j = &check_jobs[k];
+    uint8_t *b = NULL;
+    size_t n = 0;
+    const char *err = NULL;
+    int ok = 0;
+    int st = h ? lv_http_get(h, j->url, &b, &n, 6u << 20, NULL, NULL, &err) : -1;
+    if (st == 200 && b) {
+      if (j->tab == 2 && j->msrc == MS_MANGADEX) { LvBook *bk = calloc(40, sizeof *bk); int tot = 0; ok = bk && lv_md_parse_list((char *)b, n, bk, 40, &tot) > 0; free(bk); }
+      else if (j->tab == 2) { long long g[25]; char t[25][16]; ok = lv_eh_parse_list((char *)b, g, t, 25) > 0; }
+      else { int np = 0; LvPost *p = lv_booru_parse(&j->site, (char *)b, n, LV_R_ALL, &np); ok = np > 0; lv_posts_free(p, np); }
+    }
+    free(b);
+    pthread_mutex_lock(&ssmx);
+    SrcStat *s = srcstat_of(j->tab, j->name, 1);
+    if (s) s->st = ok ? 2 : 3;
+    pthread_mutex_unlock(&ssmx);
+    check_left--;
+  }
+  lv_http_free(h);
+  free(check_jobs); check_jobs = NULL; ncheck_jobs = 0;
+  srcstat_save();
+  check_left = 0;
+  return NULL;
+}
+static void check_sources(int tab) {
+  if (check_left > 0) return;
+  if (!srcstat_loaded) srcstat_load();
+  int vis[LV_MAX_SITES], nvis = sites_visible(vis);
+  int n = tab == 2 ? nmsources() : tab ? nvsources() : nvis;
+  CheckJob *jobs = calloc(n + 1, sizeof *jobs);
+  if (!jobs) return;
+  int m = 0;
+  for (int k = 0; k < n; k++) {
+    CheckJob *j = &jobs[m];
+    j->tab = tab;
+    if (tab == 2) {
+      j->msrc = k;
+      snprintf(j->name, sizeof j->name, "%s", msource_name(k));
+      if (k == MS_MANGADEX) lv_md_list_url("", 1, 0, 0, j->url, sizeof j->url); else lv_eh_list_url("", 0, j->url, sizeof j->url);
+    } else {
+      int site = tab ? vsource_site(k) : vis[k];
+      snprintf(j->name, sizeof j->name, "%s", tab ? vsource_name(k) : LV_SITES[site].name);
+      if (site < 0) { // (the locked ones: they don't answer an app)
+        SrcStat *s = srcstat_of(tab, j->name, 1);
+        if (s) s->st = 3;
+        continue;
+      }
+      j->site = LV_SITES[site];
+      if (j->site.needs_key && !wkeys[site][0]) { // (it would answer, with a key: not a failing source)
+        SrcStat *s = srcstat_of(tab, j->name, 1);
+        if (s) s->st = 4;
+        continue;
+      }
+      lv_booru_url_ex(&j->site, tab ? vsource_tags(k) : "", LV_R_ALL, LV_SORT_LATEST, 0, wkeys[site][0] ? wkeys[site] : NULL, 1, j->url, sizeof j->url);
+    }
+    SrcStat *s = srcstat_of(tab, j->name, 1);
+    if (s) s->st = 1;
+    m++;
+  }
+  check_jobs = jobs; ncheck_jobs = m; check_left = m;
+  lv_net_init();
+  pthread_t t;
+  pthread_attr_t at;
+  pthread_attr_init(&at);
+  pthread_attr_setstacksize(&at, 256 * 1024);
+  if (pthread_create(&t, &at, check_main, NULL) == 0) { pthread_detach(t); sfx(SFX_OPEN); say("Checking each source\u2026"); }
+  else { free(jobs); check_jobs = NULL; ncheck_jobs = 0; check_left = 0; say("It couldn't start"); }
+}
+
 static void draw_sites_sheet(void) {
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 170));
   const int cols = 6, tw = 142, th = 136, gap = 10;
@@ -1202,6 +1349,27 @@ static void draw_sites_sheet(void) {
     rows = (n + cols - 1) / cols;
   }
   if (sheet_sel >= n) sheet_sel = n - 1;
+  // the order: the sources that answered (or weren't checked) first, the ones that didn't last
+  int ord[64];
+  {
+    int m = 0;
+    for (int pass = 0; pass < 2; pass++)
+      for (int k = 0; k < n - 1 && k < 63; k++) {
+        const char *nm = sites_tab == 2 ? msource_name(k) : sites_tab ? vsource_name(k) : LV_SITES[vis[k]].name;
+        if (src_failing(sites_tab, nm) == pass) ord[m++] = k;
+      }
+    ord[m] = n - 1;
+  }
+  // Check sources, top right
+  {
+    char cl[48];
+    if (check_left > 0) snprintf(cl, sizeof cl, "Checking\u2026 %d", check_left); else snprintf(cl, sizeof cl, "Check sources");
+    int bw = text_w(15, cl) + 50, bx = wx + ww - bw - 18, by = wy + 14;
+    rrect(bx, by, bw, 40, 20, SURF2);
+    if (check_left > 0) spinner(bx + 22, by + 20, 8); else icon("refresh", bx + 22, by + 20, TEXT);
+    text(bx + 38, by + 26, TEXT, 15, cl);
+    if (hit(bx, by - 4, bw, 48) || (in.pressed & SCE_CTRL_TRIANGLE)) { check_sources(sites_tab); in.tap = 0; in.pressed &= ~SCE_CTRL_TRIANGLE; }
+  }
   // (the chosen tile's row kept in sight)
   int srow = sheet_sel / cols;
   if (srow - (int)sites_scroll > 2) sites_scroll = srow - 2;
@@ -1214,6 +1382,8 @@ static void draw_sites_sheet(void) {
     int on = k == sheet_sel;
     const char *name, *about, *ic;
     int cur, blocked = 0, add = k == n - 1, slot;
+    int kk = k;
+    k = ord[k]; // (the k-th tile shows this source)
     int site = !sites_tab && k < nvis ? vis[k] : -1;
     if (add) { name = sites_tab == 2 ? "More manga" : sites_tab ? "Add a source" : "Add a site"; about = "Found for you, one press"; ic = "add"; cur = 0; slot = 31; }
     else if (sites_tab == 2) { name = msource_name(k); about = msource_about(k); ic = msource_icon(k); cur = screen == S_MANGA && k == mg_src_now(); slot = 48 + k; }
@@ -1231,6 +1401,11 @@ static void draw_sites_sheet(void) {
     if (sites_tab == 1 && !add && vsrc_is_added(k)) { rrect(x + 8, y + 8, 50, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 33, y + 23, DIM, 12, "\u25a1 off"); }
     if (!sites_tab && !add && LV_SITES[site].needs_key && !wkeys[site][0]) { rrect(x + 8, y + 8, 36, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 26, y + 23, DIM, 12, "key"); }
     if (blocked) { rrect(x + 8, y + 8, 50, 20, 10, RGBA(0, 0, 0, 170)); text_center(x + 33, y + 23, DIM, 12, "locked"); }
+    // (a source that didn't answer when checked: grey; one being asked: a small spinner)
+    if (!add && src_failing(sites_tab, name)) { rrect(x, y, tw, th, 18, RGBA(20, 16, 22, 170)); rrect(x + tw - 76, y + 8, 68, 20, 10, RGBA(0, 0, 0, 190)); text_center(x + tw - 42, y + 23, ACC2, 12, "no answer"); }
+    else if (!add && src_asking(sites_tab, name)) spinner(x + tw - 18, y + 18, 7);
+    else if (!add && srcstat_of(sites_tab, name, 0) && srcstat_of(sites_tab, name, 0)->st == 2) { circle(x + tw - 16, y + 95, 5, RGBA(90, 214, 120, 255)); }
+    k = kk;
     if (hit(x, y, tw, th)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
   if (rows > vis_rows) {
@@ -1245,18 +1420,19 @@ static void draw_sites_sheet(void) {
   if (in.pressed & SCE_CTRL_DOWN) { row = (row + 1) % rows; sheet_sel = row * cols + col < n ? row * cols + col : col; }
   if (in.pressed & SCE_CTRL_UP) { row = (row + rows - 1) % rows; while (row * cols + col >= n) row--; sheet_sel = row * cols + col; }
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP | SCE_CTRL_LEFT | SCE_CTRL_RIGHT)) sfx(SFX_TICK);
+  int pick = sheet_sel >= 0 && sheet_sel < n ? ord[sheet_sel] : 0; // (the source the chosen tile shows)
   if ((in.pressed & SCE_CTRL_CROSS) && sheet_sel == n - 1) { sfx(SFX_OPEN); find_open(sites_tab); }
-  else if ((in.pressed & SCE_CTRL_SQUARE) && sites_tab == 1 && vsrc_is_added(sheet_sel)) { vsrc_remove(sheet_sel); sfx(SFX_DELETE); say("Video source removed"); }
+  else if ((in.pressed & SCE_CTRL_SQUARE) && sites_tab == 1 && vsrc_is_added(pick)) { vsrc_remove(pick); sfx(SFX_DELETE); say("Video source removed"); }
   else if (in.pressed & SCE_CTRL_CROSS) {
-    if (sites_tab == 2) { sfx(SFX_SELECT); sheet = SH_NONE; manga_open(sheet_sel); }
+    if (sites_tab == 2) { sfx(SFX_SELECT); sheet = SH_NONE; manga_open(pick); }
     else if (sites_tab) {
-      if (vsource_blocked(sheet_sel)) { sfx(SFX_ERROR); say("This site only answers after a browser check (Cloudflare), so the Vita can't reach it"); }
-      else { sfx(SFX_SELECT); sheet = SH_NONE; vb_open(sheet_sel); }
-    } else { int st = vis[sheet_sel]; sfx(SFX_SELECT); sheet = SH_NONE; if (st != cfg.site) { cfg.site = st; if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST; web_search(); } }
+      if (vsource_blocked(pick)) { sfx(SFX_ERROR); say("This site only answers after a browser check (Cloudflare), so the Vita can't reach it"); }
+      else { sfx(SFX_SELECT); sheet = SH_NONE; vb_open(pick); }
+    } else { int st = vis[pick]; sfx(SFX_SELECT); sheet = SH_NONE; if (st != cfg.site) { cfg.site = st; if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST; web_search(); } }
   }
   // □ on a site added by hand: removed
-  else if ((in.pressed & SCE_CTRL_SQUARE) && !sites_tab && sheet_sel < nvis && vis[sheet_sel] >= LV_NBUILTIN) {
-    for (int k = vis[sheet_sel]; k < LV_NSITES - 1; k++) LV_SITES[k] = LV_SITES[k + 1];
+  else if ((in.pressed & SCE_CTRL_SQUARE) && !sites_tab && pick < nvis && vis[pick] >= LV_NBUILTIN) {
+    for (int k = vis[pick]; k < LV_NSITES - 1; k++) LV_SITES[k] = LV_SITES[k + 1];
     LV_NSITES--;
     if (cfg.site >= LV_NSITES) cfg.site = 0;
     custom_sites_save();
