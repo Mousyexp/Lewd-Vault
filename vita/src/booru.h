@@ -4,7 +4,11 @@
 #pragma once
 #include <stddef.h>
 
-enum { BK_DANBOORU, BK_GELBOORU, BK_MOEBOORU, BK_E621, BK_KVS };
+enum { BK_DANBOORU, BK_GELBOORU, BK_MOEBOORU, BK_E621, BK_KVS, BK_ESHUU, BK_BOORUIO };
+// (BK_ESHUU, BK_BOORUIO: image sites that aren't boorus, each with its own JSON: e-shuushuu.net
+//  (searched by a tag's number: lv_esh_tag_url finds it from the word), booru.io (one page a search).
+//  Shown in the sites window as "Image site", apart from the boorus: lv_site_is_booru.)
+
 // (BK_KVS: video sites made with Kernel Video Sharing, like rule34video.com: their list pages are read
 //  as HTML; a post's file is its video page, whose player names the MP4: lv_kvs_video)
 typedef struct {
@@ -26,6 +30,11 @@ extern int LV_NSITES;
 extern const int LV_NBUILTIN;
 // A site added by hand: 0, or -1 when there's no room. name and base are copied.
 int lv_booru_add_site(const char *name, int kind, const char *base);
+int lv_site_is_booru(const LvSite *s);
+// e-shuushuu: the address that finds a tag's number from a word, and the number in its answer
+// (an exact title first, else the most used): 0 and "#<n>" in out, or -1.
+void lv_esh_tag_url(const LvSite *s, const char *word, char *out, size_t cap);
+int lv_esh_tag_id(const char *json, size_t len, const char *word, char *out, size_t cap);
 // What kind of site answers at base, from a page of its answer to each kind's search (the caller
 // fetches them: url_for(kind) gives the address to try). -1: none of them.
 void lv_booru_probe_url(int kind, const char *base, char *out, size_t cap);

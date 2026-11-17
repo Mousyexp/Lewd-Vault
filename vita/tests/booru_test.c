@@ -60,6 +60,47 @@ static void check_kind(const char *file, const LvSite *s, int want) {
 }
 
 int main(void) {
+  // the image sites: e-shuushuu (its API, a tag by its number) and booru.io
+  {
+    LvSite es = {"E-Shuushuu", BK_ESHUU, "https://e-shuushuu.net", NULL, 1, 0, NULL, NULL};
+    LvSite bi = {"booru.io", BK_BOORUIO, "https://booru.io", NULL, 0, 0, NULL, NULL};
+    CHECK(!lv_site_is_booru(&es) && !lv_site_is_booru(&bi), "image sites aren't boorus");
+    char u[600];
+    lv_booru_url_ex(&es, "#169 smile", LV_R_ALL, LV_SORT_TOP, 0, NULL, 2, u, sizeof u);
+    CHECK(!strcmp(u, "https://e-shuushuu.net/api/v1/images?page=2&per_page=40&sort_by=favorites&tags=169"), "eshuu url %s", u);
+    lv_booru_url_ex(&bi, "blonde_hair", LV_R_ALL, LV_SORT_LATEST, 0, NULL, 1, u, sizeof u);
+    CHECK(!strcmp(u, "https://booru.io/api/legacy/query/entity?query=blonde_hair"), "booruio url %s", u);
+    lv_booru_url_ex(&bi, "blonde_hair", LV_R_ALL, LV_SORT_LATEST, 0, NULL, 2, u, sizeof u);
+    CHECK(!u[0], "booru.io has one page");
+    size_t n;
+    char *t = slurp("tests/booru/eshuushuu_tags.json", &n);
+    char id[16] = "";
+    CHECK(lv_esh_tag_id(t, n, "blonde_hair", id, sizeof id) == 0 && !strcmp(id, "#169"), "eshuu tag id %s", id);
+    free(t);
+    t = slurp("tests/booru/eshuushuu.json", &n);
+    int c = 0;
+    LvPost *p = lv_booru_parse(&es, t, n, LV_R_ALL, &c);
+    CHECK(p && c >= 30, "eshuu posts %d", c);
+    for (int k = 0; p && k < c; k++) {
+      CHECK(strstr(p[k].preview, "cdn.e-shuushuu.net/thumbs/") && p[k].width > 0 && p[k].tags && p[k].id > 0, "eshuu post %d", k);
+      CHECK(!strchr(p[k].tags, '#') && !strstr(p[k].tags, "  "), "eshuu tags %d: %s", k, p[k].tags);
+    }
+    lv_posts_free(p, c);
+    free(t);
+    t = slurp("tests/booru/booruio.json", &n);
+    p = lv_booru_parse(&bi, t, n, LV_R_ALL, &c);
+    CHECK(p && c >= 40, "booruio posts %d", c);
+    for (int k = 0; p && k < c; k++) {
+      CHECK(strstr(p[k].preview, "/api/legacy/data/") && strstr(p[k].preview, "300x.jpg") && p[k].tags[0] && !strchr(p[k].tags, '#'), "booruio post %d: %s", k, p[k].preview);
+    }
+    lv_posts_free(p, c);
+    // (only general: the explicit ones left out by their tags)
+    p = lv_booru_parse(&bi, t, n, LV_R_GENERAL, &c);
+    int gen = c;
+    lv_posts_free(p, c);
+    CHECK(gen < 40, "booruio general only: %d", gen);
+    free(t);
+  }
   // a KVS video site (rule34video.com): its list page's cards, and a video page's MP4
   {
     LvSite kv = {"Rule34Video", BK_KVS, "https://rule34video.com", NULL, 1, 0, NULL, NULL, "hentai", 1};

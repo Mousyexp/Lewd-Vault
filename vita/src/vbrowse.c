@@ -179,13 +179,14 @@ static void *vb_main(void *arg) {
       // a row: its search
       if (site < 0) continue;
       char u[2048];
-      lv_booru_url_ex(&LV_SITES[site], tags, ratings, VROWS[job].sort, VROWS[job].span, key, 1, u, sizeof u);
+      LvSite sc = LV_SITES[site]; // (a copy: the list of sites can change on the drawing thread)
+      lv_booru_url_ex(&sc, tags, ratings, VROWS[job].sort, VROWS[job].span, key, 1, u, sizeof u);
       uint8_t *b = NULL;
       size_t n = 0;
       const char *err = NULL;
       int st = lv_http_get(h, u, &b, &n, 8u << 20, NULL, NULL, &err);
       int count = 0;
-      LvPost *got = st == 200 ? lv_booru_parse(&LV_SITES[site], (const char *)b, n, ratings, &count) : NULL;
+      LvPost *got = st == 200 ? lv_booru_parse(&sc, (const char *)b, n, ratings, &count) : NULL;
       // (videos only: some sites' video tags also have pictures)
       int kept = 0;
       for (int k = 0; got && k < count; k++) {

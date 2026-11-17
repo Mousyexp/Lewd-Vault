@@ -221,9 +221,13 @@ static void *list_main(void *arg) {
     while (worker_run && !list_want) pthread_cond_wait(&wcv, &wmx);
     int page = list_want, gen = wgen, ratings = job_q.ratings;
     list_want = 0;
-    const LvSite *s = &LV_SITES[job_q.site];
-    char url[2048];
-    lv_booru_url_ex(s, job_q.q, ratings, job_q.sort, job_q.span, job_q.key, page, url, sizeof url);
+    // (the site copied while held: the list of sites can change on the drawing thread)
+    LvSite site_copy = LV_SITES[job_q.site < LV_NSITES ? job_q.site : 0];
+    const LvSite *s = &site_copy;
+    char q[128], key[200];
+    snprintf(q, sizeof q, "%s", job_q.q);
+    snprintf(key, sizeof key, "%s", job_q.key);
+    int sort = job_q.sort, span = job_q.span;
     char hidden[512];
     snprintf(hidden, sizeof hidden, "%s", job_q.hidden);
     pthread_mutex_unlock(&wmx);
@@ -231,7 +235,20 @@ static void *list_main(void *arg) {
     uint8_t *b = NULL;
     size_t n = 0;
     const char *err = NULL;
-    int st = lv_http_get(h, url, &b, &n, 8 * 1024 * 1024, NULL, NULL, &err);
+    // e-shuushuu searches by a tag's number: the word looked up first
+    char w[128] = "";
+    if (s->kind == BK_ESHUU && sscanf(q, "%127s", w) == 1 && w[0] != '#' && w[0] != '-') {
+      char tu[600], idq[24] = "";
+      lv_esh_tag_url(s, w, tu, sizeof tu);
+      if (lv_http_get(h, tu, &b, &n, 1u << 20, NULL, NULL, &err) == 200 && b) lv_esh_tag_id((char *)b, n, w, idq, sizeof idq);
+      free(b); b = NULL; n = 0;
+      snprintf(q, sizeof q, "%s", idq[0] ? idq : "#0"); // (no such tag: #0, which finds nothing)
+    }
+    char url[2048];
+    lv_booru_url_ex(s, q, ratings, sort, span, key[0] ? key : NULL, page, url, sizeof url);
+    // (no address: the site has no more pages)
+    int st = url[0] ? lv_http_get(h, url, &b, &n, 8 * 1024 * 1024, NULL, NULL, &err) : 200;
+    if (!url[0]) { b = (uint8_t *)strdup(s->kind == BK_BOORUIO ? "{\"data\":[]}" : "[]"); n = b ? strlen((char *)b) : 0; }
     int count = 0;
     LvPost *got = st == 200 ? lv_booru_parse(s, (const char *)b, n, ratings, &count) : NULL;
     // (the hidden tags: those posts never reach the grid)
@@ -825,7 +842,9 @@ static int vb_cur = -1;
 // The sites offered (not the hidden ones), in order: tile k is site vis[k]
 static int sites_visible(int *vis) {
   int n = 0;
-  for (int k = 0; k < LV_NSITES; k++) if (!LV_SITES[k].hidden) vis[n++] = k;
+  // (the boorus first, then the image sites)
+  for (int pass = 0; pass < 2; pass++)
+    for (int k = 0; k < LV_NSITES; k++) if (!LV_SITES[k].hidden && lv_site_is_booru(&LV_SITES[k]) == !pass) vis[n++] = k;
   return n;
 }
 static int site_tile_of(int site) {
@@ -1421,6 +1440,8 @@ static void draw_sites_sheet(void) {
     if (about) text_fit(x + 10, y + 122, FAINT, 12, about, tw - 20);
     if (cur) { circle(x + tw - 16, y + 16, 10, ACC); text_center(x + tw - 16, y + 21, RGBA(20, 12, 16, 255), 13, "✓"); }
     if (sites_tab == 1 && !add && vsrc_is_added(k)) { rrect(x + 8, y + 8, 50, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 33, y + 23, DIM, 12, "\u25a1 off"); }
+    // (an image site, not a booru: said so on its tile)
+    if (!sites_tab && !add && site >= 0 && !lv_site_is_booru(&LV_SITES[site])) { int lw = text_w(11, "IMAGE SITE") + 12; rrect(x + 8, y + 8, lw, 18, 9, RGBA(70, 150, 220, 220)); text(x + 14, y + 21, TEXT, 11, "IMAGE SITE"); }
     if (!sites_tab && !add && LV_SITES[site].needs_key && !wkeys[site][0]) { rrect(x + 8, y + 8, 36, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 26, y + 23, DIM, 12, "key"); }
     if (blocked) { rrect(x + 8, y + 8, 50, 20, 10, RGBA(0, 0, 0, 170)); text_center(x + 33, y + 23, DIM, 12, "locked"); }
     // (a source that didn't answer when checked: grey; one being asked: a small spinner)
@@ -1856,7 +1877,11 @@ static void draw_web(void) {
     // the sites are tabs: L / R go through them
     if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
       sfx(SFX_TAB);
-      do cfg.site = (cfg.site + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : LV_NSITES - 1)) % LV_NSITES; while (LV_SITES[cfg.site].hidden);
+      { // (in the sites window's order: the boorus, then the image sites)
+        int vis[LV_MAX_SITES], nv = sites_visible(vis), at = 0;
+        for (int k = 0; k < nv; k++) if (vis[k] == cfg.site) at = k;
+        if (nv) cfg.site = vis[(at + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : nv - 1)) % nv];
+      }
       if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST;
       web_search();
       char m[80];

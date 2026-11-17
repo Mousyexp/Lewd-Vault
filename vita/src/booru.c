@@ -26,9 +26,13 @@ LvSite LV_SITES[LV_MAX_SITES] = {
   {"Sakugabooru", BK_MOEBOORU, "https://www.sakugabooru.com", NULL, 0, 0, "sakugabooru", "Anime animation clips (videos)"},
   // (video sites: only in the video browser)
   {"Rule34Video", BK_KVS, "https://rule34video.com", NULL, 1, 0, "rule34video", "Hentai and game animations", "hentai", 1},
+  // (image sites, not boorus)
+  {"E-Shuushuu", BK_ESHUU, "https://e-shuushuu.net", NULL, 1, 0, "eshuushuu", "Anime art, all ages"},
+  {"booru.io", BK_BOORUIO, "https://booru.io", NULL, 0, 0, "booruio", "Anime and hentai art"},
 };
-const int LV_NBUILTIN = 14;
-int LV_NSITES = 14;
+const int LV_NBUILTIN = 16;
+int LV_NSITES = 16;
+int lv_site_is_booru(const LvSite *s) { return s->kind != BK_ESHUU && s->kind != BK_BOORUIO && s->kind != BK_KVS; }
 // (the strings of the sites added by hand, kept here)
 static char added_names[LV_MAX_SITES][48], added_bases[LV_MAX_SITES][160];
 int lv_booru_add_site(const char *name, int kind, const char *base) {
@@ -165,6 +169,24 @@ void lv_booru_url_ex(const LvSite *s, const char *tags, int ratings, int sort, i
       strftime(sp, sizeof sp, " date:>=%Y-%m-%d", &g);
     }
     strncat(q, sp, sizeof q - strlen(q) - 1);
+  }
+  if (s->kind == BK_ESHUU || s->kind == BK_BOORUIO) {
+    // the search's first word only (both read one tag reliably; e-shuushuu as its number, "#169")
+    char w[128] = "";
+    sscanf(clean, "%127s", w);
+    if (s->kind == BK_ESHUU) {
+      static const char *by[LV_NSORTS] = {"date_added", "bayesian_rating", "favorites", "date_added"};
+      int pg = sort == LV_SORT_RANDOM ? 1 + (int)(time(NULL) / 60 % 500) + page : page;
+      int n = snprintf(out, cap, "%s/api/v1/images?page=%d&per_page=40&sort_by=%s", s->base, pg < 1 ? 1 : pg, by[sort >= 0 && sort < LV_NSORTS ? sort : 0]);
+      if (w[0] == '#' && n > 0 && (size_t)n < cap) snprintf(out + n, cap - n, "&tags=%d", atoi(w + 1));
+    } else {
+      // (booru.io: one page a search; past it, no address: the end)
+      if (page > 1) { out[0] = 0; return; }
+      char e[400];
+      enc(w, e, sizeof e);
+      snprintf(out, cap, "%s/api/legacy/query/entity?query=%s", s->base, e);
+    }
+    return;
   }
   if (s->kind == BK_KVS) {
     // a tag's page, in the site's order: the search's first word (or the preset), as the site's slug
@@ -382,9 +404,138 @@ int lv_kvs_video(const char *html, char *out, size_t cap, int *nev) {
   return -1;
 }
 
+// ---------- the image sites ----------
+void lv_esh_tag_url(const LvSite *s, const char *word, char *out, size_t cap) {
+  char w[200], e[400];
+  snprintf(w, sizeof w, "%s", word);
+  for (char *c = w; *c; c++) if (*c == '_') *c = ' ';
+  enc(w, e, sizeof e);
+  snprintf(out, cap, "%s/api/v1/tags/?search=%s&limit=20", s->base, e);
+}
+int lv_esh_tag_id(const char *text, size_t len, const char *word, char *out, size_t cap) {
+  Json j;
+  if (json_parse(&j, text, len) != 0) return -1;
+  int tags = json_get(&j, 0, "tags"), best = -1, best_exact = 0;
+  double best_use = -1;
+  char w[200];
+  snprintf(w, sizeof w, "%s", word);
+  for (char *c = w; *c; c++) if (*c == '_') *c = ' ';
+  for (int k = tags >= 0 ? tags + 1 : -1, i = 0; tags >= 0 && i < j.t[tags].size; i++, k = j.t[k].next) {
+    char title[200];
+    json_gs(&j, k, "title", title, sizeof title);
+    int exact = !strcasecmp(title, w);
+    double use = json_gn(&j, k, "usage_count");
+    if ((exact && !best_exact) || (exact == best_exact && use > best_use)) { best = (int)json_gn(&j, k, "tag_id"); best_exact = exact; best_use = use; }
+  }
+  json_free(&j);
+  if (best <= 0) return -1;
+  snprintf(out, cap, "#%d", best);
+  return 0;
+}
+// (the words of a picture's tags: "blonde hair" -> blonde_hair, lower case; booru.io's "x#character" -> x)
+static size_t tag_add(char *out, size_t o, size_t cap, const char *t) {
+  if (!t[0] || o + 2 >= cap) return o;
+  if (o) out[o++] = ' ';
+  for (const char *c = t; *c && *c != '#' && o + 1 < cap; c++) out[o++] = *c == ' ' ? '_' : (char)tolower((unsigned char)*c);
+  out[o] = 0;
+  return o;
+}
+// (no ratings on these sites: explicit when the tags say so, else general)
+static int rating_from_tags(const char *tags) {
+  static const char *x[] = {"nipples", "pussy", "penis", "sex", "nude", "cum", "anus", "vaginal", "fellatio", "completely_nude", NULL};
+  for (int k = 0; x[k]; k++) {
+    const char *p = tags;
+    size_t n = strlen(x[k]);
+    while ((p = strstr(p, x[k]))) {
+      if ((p == tags || p[-1] == ' ') && (p[n] == ' ' || !p[n])) return LV_R_EXPLICIT;
+      p += n;
+    }
+  }
+  return LV_R_GENERAL;
+}
+static LvPost *image_site_parse(const LvSite *s, const char *text, size_t len, int ratings, int *n) {
+  Json j;
+  if (json_parse(&j, text, len) != 0) return NULL;
+  int list = json_get(&j, 0, s->kind == BK_ESHUU ? "images" : "data");
+  if (list < 0 || j.t[list].type != J_ARR) { json_free(&j); return NULL; }
+  LvPost *out = calloc(j.t[list].size + 1, sizeof *out);
+  char *tags = malloc(8192);
+  if (!out || !tags) { free(out); free(tags); json_free(&j); return NULL; }
+  for (int k = list + 1, i = 0; i < j.t[list].size; i++, k = j.t[k].next) {
+    LvPost p;
+    memset(&p, 0, sizeof p);
+    char a[600] = "", b[600] = "", c[600] = "", page[600] = "";
+    size_t o = 0;
+    tags[0] = 0;
+    if (s->kind == BK_ESHUU) {
+      char fn[128], ext[16];
+      json_gs(&j, k, "filename", fn, sizeof fn);
+      json_gs(&j, k, "ext", ext, sizeof ext);
+      p.id = (long long)json_gn(&j, k, "image_id");
+      p.width = (int)json_gn(&j, k, "width");
+      p.height = (int)json_gn(&j, k, "height");
+      if (!fn[0] || !ext[0]) continue;
+      snprintf(a, sizeof a, "https://cdn.e-shuushuu.net/thumbs/%s.webp", fn);
+      // (the medium copy, made for screens, where there is one; else the picture)
+      snprintf(c, sizeof c, "%s/images/%s.%s", s->base, fn, ext);
+      if (json_gn(&j, k, "medium") >= 1) snprintf(b, sizeof b, "https://cdn.e-shuushuu.net/medium/%s.jpg", fn);
+      else snprintf(b, sizeof b, "%s", c);
+      snprintf(page, sizeof page, "%s/images/%lld", s->base, p.id);
+      snprintf(p.ext, sizeof p.ext, "%s", !strcmp(ext, "jpeg") ? "jpg" : ext);
+      int tl = json_get(&j, k, "tags");
+      for (int t = tl >= 0 ? tl + 1 : -1, m = 0; tl >= 0 && m < j.t[tl].size; m++, t = j.t[t].next) {
+        char tt[200];
+        json_gs(&j, t, "title", tt, sizeof tt);
+        o = tag_add(tags, o, 8192, tt);
+      }
+    } else {
+      char key[64], ctype[40];
+      json_gs(&j, k, "key", key, sizeof key);
+      json_gs(&j, k, "contentType", ctype, sizeof ctype);
+      if (!key[0] || strncmp(ctype, "image/", 6)) continue;
+      // (an id from the key, for the saved marks)
+      unsigned long long h = 1469598103934665603ull;
+      for (const char *q = key; *q; q++) h = (h ^ (unsigned char)*q) * 1099511628211ull;
+      p.id = (long long)(h >> 1);
+      int at = json_get(&j, k, "attributes");
+      p.width = (int)json_gn(&j, at, "width");
+      p.height = (int)json_gn(&j, at, "height");
+      int tr = json_get(&j, k, "transforms");
+      char t300[200] = "", t900[200] = "", t1500[200] = "", t2400[200] = "";
+      json_gs(&j, tr, "width=300:image/jpeg", t300, sizeof t300);
+      json_gs(&j, tr, "width=900:image/jpeg", t900, sizeof t900);
+      json_gs(&j, tr, "width=1500:image/jpeg", t1500, sizeof t1500);
+      json_gs(&j, tr, "width=2400:image/jpeg", t2400, sizeof t2400);
+      if (!t300[0]) continue;
+      snprintf(a, sizeof a, "%s/api/legacy/data/%s", s->base, t300);
+      snprintf(b, sizeof b, "%s/api/legacy/data/%s", s->base, t1500[0] ? t1500 : t900[0] ? t900 : t300);
+      snprintf(c, sizeof c, "%s/api/legacy/data/%s", s->base, t2400[0] ? t2400 : t1500[0] ? t1500 : t900[0] ? t900 : t300);
+      snprintf(page, sizeof page, "%s/p/%s", s->base, key);
+      snprintf(p.ext, sizeof p.ext, "jpg");
+      int tg = json_get(&j, k, "tags");
+      for (int t = tg >= 0 ? tg + 1 : -1, m = 0; tg >= 0 && m < j.t[tg].size; m++, t = j.t[t + 1].next) {
+        char tt[200];
+        json_str(&j, t, tt, sizeof tt); // (the key: the tag)
+        o = tag_add(tags, o, 8192, tt);
+      }
+    }
+    // minors never; a rating the search didn't want
+    if (any_never(tags)) continue;
+    p.rating = rating_from_tags(tags);
+    if (!(p.rating & ratings)) continue;
+    p.preview = sdup(a); p.sample = sdup(b); p.file = sdup(c); p.page = sdup(page); p.source = sdup(""); p.tags = sdup(tags);
+    if (!p.preview || !p.sample || !p.file || !p.page || !p.source || !p.tags) { free(p.preview); free(p.sample); free(p.file); free(p.page); free(p.source); free(p.tags); continue; }
+    out[(*n)++] = p;
+  }
+  free(tags);
+  json_free(&j);
+  return out;
+}
+
 LvPost *lv_booru_parse(const LvSite *s, const char *text, size_t len, int ratings, int *n) {
   *n = 0;
   if (s->kind == BK_KVS) return kvs_parse(text, len, n);
+  if (s->kind == BK_ESHUU || s->kind == BK_BOORUIO) return image_site_parse(s, text, len, ratings, n);
   Json j;
   if (json_parse(&j, text, len) != 0) return NULL;
   int list = 0;
@@ -394,6 +545,7 @@ LvPost *lv_booru_parse(const LvSite *s, const char *text, size_t len, int rating
   int count = j.t[list].size;
   LvPost *out = calloc(count ? count : 1, sizeof *out);
   char *tags = malloc(16384);
+  if (!out || !tags) { free(out); free(tags); json_free(&j); return NULL; } // (no memory: no page, not a crash)
   char a[1024], b[1024], c[1024], r[32];
   int k = list + 1;
   for (int i = 0; i < count; i++, k = j.t[k].next) {

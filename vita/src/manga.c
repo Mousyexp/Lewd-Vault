@@ -71,8 +71,9 @@ int lv_md_parse_list(const char *json, size_t n, LvBook *out, int cap, int *tota
   if (json_parse(&j, json, n) != 0) return -1;
   if (total) *total = (int)json_gn(&j, 0, "total");
   int data = json_get(&j, 0, "data"), got = 0;
-  for (int k = 0; data >= 0 && k < j.t[data].size && got < cap; k++) {
-    int m = json_at(&j, data, k), a = json_get(&j, m, "attributes");
+  // (item to item along the list: not the k-th looked for from the start each time)
+  for (int k = 0, m = data >= 0 ? data + 1 : -1; data >= 0 && j.t[data].type == J_ARR && k < j.t[data].size && got < cap; k++, m = j.t[m].next) {
+    int a = json_get(&j, m, "attributes");
     LvBook b;
     memset(&b, 0, sizeof b);
     json_gs(&j, m, "id", b.id, sizeof b.id);
@@ -110,8 +111,8 @@ int lv_md_parse_feed(const char *json, size_t n, LvChapter *out, int cap, int *t
   if (json_parse(&j, json, n) != 0) return -1;
   if (total) *total = (int)json_gn(&j, 0, "total");
   int data = json_get(&j, 0, "data"), got = 0;
-  for (int k = 0; data >= 0 && k < j.t[data].size && got < cap; k++) {
-    int c = json_at(&j, data, k), a = json_get(&j, c, "attributes");
+  for (int k = 0, c = data >= 0 ? data + 1 : -1; data >= 0 && j.t[data].type == J_ARR && k < j.t[data].size && got < cap; k++, c = j.t[c].next) {
+    int a = json_get(&j, c, "attributes");
     int ext = json_get(&j, a, "externalUrl");
     if (ext >= 0 && j.t[ext].type == J_STR) continue; // (hosted elsewhere: nothing to read here)
     LvChapter ch;
@@ -194,8 +195,7 @@ int lv_eh_parse_gdata(const char *json, size_t n, LvBook *out, int cap) {
   Json j;
   if (json_parse(&j, json, n) != 0) return -1;
   int list = json_get(&j, 0, "gmetadata"), got = 0;
-  for (int k = 0; list >= 0 && k < j.t[list].size && got < cap; k++) {
-    int g = json_at(&j, list, k);
+  for (int k = 0, g = list >= 0 ? list + 1 : -1; list >= 0 && j.t[list].type == J_ARR && k < j.t[list].size && got < cap; k++, g = j.t[g].next) {
     if (json_get(&j, g, "error") >= 0) continue;
     LvBook b;
     memset(&b, 0, sizeof b);

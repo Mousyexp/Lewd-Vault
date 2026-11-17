@@ -83,8 +83,12 @@ vault's `_app/kv/resume.json`, the same file the PC's Videos tab keeps, so it ca
 
 ## The Browser
 
-Anime and hentai boorus only: Danbooru, Yande.re, Konachan, Xbooru, Hypnohub, AIBooru, Safebooru,
-Sakugabooru, Gelbooru, and Xbooru's and Danbooru's comics, read through their JSON APIs (the same four kinds of site as the desktop's Discover: `src/booru.c`), so no web page
+Anime and hentai boorus: Danbooru, Yande.re, Konachan, Xbooru, Hypnohub, Safebooru, Sakugabooru,
+Gelbooru, and Xbooru's and Danbooru's comics, read through their JSON APIs; and **image sites** that
+aren't boorus, marked IMAGE SITE in the sites window after the boorus: **E-Shuushuu** (anime art; its
+own API, a search word looked up as its tag number first) and **booru.io** (anime and hentai art, one
+page of 50 a search). Each is a kind of its own in `src/booru.c` (`BK_ESHUU`, `BK_BOORUIO`), with
+tests against saved answers (the same four kinds of site as the desktop's Discover: `src/booru.c`), so no web page
 loads. The grid is the Library's; the site button is the tab bar (L/R step through it), Filter picks
 the ratings (General, Sensitive, Questionable, Explicit), the search and which category saves go into,
 and the sort is Latest, Hot (where the site has it), Top or Random. More results load as you scroll.

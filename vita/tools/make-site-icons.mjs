@@ -29,6 +29,8 @@ const SITES = {
   sakugabooru: ['#ff7a6a', '#b11f2b', '作'],
   rule34video: ['#ff5f7e', '#7a1030', 'R34'],
   r34anime: ['#ff9ad0', '#8a2a6a', 'R34'],
+  eshuushuu: ['#7fd3ff', '#1f6fb5', 'ES'],
+  booruio: ['#9aa7ff', '#3a3f9e', 'io'],
   hanime: ['#ff5aa8', '#8c1a5a', 'h'],
   missav: ['#ff8a4a', '#a3300e', 'M'],
   add: ['#3a2f3c', '#241c26', '@plus'],
