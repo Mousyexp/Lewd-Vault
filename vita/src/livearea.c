@@ -1,5 +1,5 @@
-// The LiveArea page (sce_sys/livearea/contents/template.xml): its left frame opens the Google Drive
-// vault and its right frame the vault on the card, straight away; the strip along the bottom shows
+// The LiveArea page (sce_sys/livearea/contents/template.xml): its first launcher opens the Google
+// Drive vault and its second the vault on the card, straight away; the panel under the heart shows
 // the vault's numbers. Compiled inside main.c (#include "livearea.c").
 //
 // A frame's target is psgm:play?titleid=LWDV00001&param=drive (or local): the system starts the app
@@ -72,13 +72,13 @@ static void la_update_stats(void) {
   if (!loaded_vault || decoy_session) return;
   static int loaded;
   if (!loaded) { sceSysmoduleLoadModule(SCE_SYSMODULE_LIVEAREA); loaded = 1; }
-  // (the strip's picture, next to the page it's written into)
+  // (the panel's picture, next to the page it's written into)
   sceIoMkdir(DATA "/livearea", 0777);
   SceIoStat st;
-  if (sceIoGetstat(DATA "/livearea/strip.png", &st) < 0) {
+  if (sceIoGetstat(DATA "/livearea/stats.png", &st) < 0) {
     size_t n = 0;
-    uint8_t *b = lv_read_all("app0:sce_sys/livearea/contents/strip.png", NULL, &n);
-    if (b) { FILE *f = fopen(DATA "/livearea/strip.png", "wb"); if (f) { fwrite(b, 1, n, f); fclose(f); } free(b); }
+    uint8_t *b = lv_read_all("app0:sce_sys/livearea/contents/stats.png", NULL, &n);
+    if (b) { FILE *f = fopen(DATA "/livearea/stats.png", "wb"); if (f) { fwrite(b, 1, n, f); fclose(f); } free(b); }
   }
   long long hearts = 0;
   double secs = 0;
@@ -88,7 +88,7 @@ static void la_update_stats(void) {
   if (secs >= 3600) snprintf(time_s, sizeof time_s, "%d h %d min", (int)(secs / 3600), (int)secs % 3600 / 60);
   else snprintf(time_s, sizeof time_s, "%d min", (int)(secs / 60));
   // (only numbers and the folder's name: what's in the vault never shows outside the app)
-  snprintf(line, sizeof line, "%s%s  ·  %d items  ·  %lld hearts  ·  %s looking", is_drive_vault(vault.root) ? "☁ " : "", nm ? nm + 1 : vault.root, vault.n, hearts, time_s);
+  snprintf(line, sizeof line, "%s%s\n%d items  \u00b7  %lld hearts\n%s spent looking", is_drive_vault(vault.root) ? "\u2601 " : "", nm ? nm + 1 : vault.root, vault.n, hearts, time_s);
   char xml[1200], esc[600];
   size_t o = 0;
   for (const char *p = line; *p && o + 6 < sizeof esc; p++) {
@@ -98,9 +98,9 @@ static void la_update_stats(void) {
   }
   esc[o] = 0;
   int n = snprintf(xml, sizeof xml,
-    "<?xml version=\"1.0\" encoding=\"utf-8\"?><update-frame><frame id=\"frame3\"><liveitem><background>strip.png</background>"
-    "<text valign=\"center\" align=\"left\" text-align=\"left\" text-valign=\"center\" word-wrap=\"off\" ellipsis=\"on\" x=\"36\">"
-    "<str size=\"22\" color=\"#fff5f8\" shadow=\"on\">%s</str></text></liveitem></frame></update-frame>", esc);
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?><update-frame><frame id=\"frame7\"><liveitem><background>stats.png</background>"
+    "<text valign=\"center\" align=\"left\" text-align=\"left\" text-valign=\"center\" word-wrap=\"on\" ellipsis=\"on\" x=\"40\" width=\"290\">"
+    "<str size=\"20\" color=\"#fff5f8\" shadow=\"on\">%s</str></text></liveitem></frame></update-frame>", esc);
   int r = sceLiveAreaUpdateFrameSync("01.00", xml, n, DATA "/livearea", 0);
   LOG("livearea update: %08x\n", r);
   (void)r;

@@ -50,7 +50,7 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
   FILE sce_sys/livearea/contents/drive.png sce_sys/livearea/contents/drive.png
   FILE sce_sys/livearea/contents/local.png sce_sys/livearea/contents/local.png
-  FILE sce_sys/livearea/contents/strip.png sce_sys/livearea/contents/strip.png
+  FILE sce_sys/livearea/contents/stats.png sce_sys/livearea/contents/stats.png
   FILE font.ttf font.ttf
   FILE cacert.pem cacert.pem
   FILE splash.png splash.png
