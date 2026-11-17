@@ -2,8 +2,8 @@
 // sit together seamlessly: bg.png (840 x 500), the gate startup.png (280 x 158), drive.png and
 // local.png (the 260 x 260 frames either side of the gate: the Google Drive vault and the vault on the
 // card, each opening it straight away) and strip.png (840 x 150 along the bottom, under the vault's
-// numbers the app writes there). Where style a1 puts them on the 840 x 500 background: frame2 x 0-260
-// and frame1 x 580-840 (y 90-350), frame3 y 350-500, the gate x 280-560 y 143-301.
+// numbers the app writes there). Where style a1 puts them on the 840 x 500 background: frame1 x 0-260
+// and frame2 x 580-840 (y 90-350), frame3 y 350-500, the gate x 280-560 y 143-301.
 // Rendered by Chromium (Playwright); the system wants 8-bit palette PNGs, made by Pillow.
 //   node vita/tools/make-livearea.mjs
 import { createRequire } from 'node:module';
