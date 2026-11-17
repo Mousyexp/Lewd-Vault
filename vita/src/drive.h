@@ -35,3 +35,5 @@ void drive_sync(const char *root, const char *folder, int make);
 // What's in Drive: 1 if the folder exists (signed in; asks Drive, so on a thread or once).
 int drive_folder_exists(const char *folder);
 const char *drive_last_sync(void);
+// 1 when the vault at root has been synced with Drive from this Vita.
+int drive_has_manifest(const char *root);

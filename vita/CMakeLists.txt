@@ -36,7 +36,7 @@ target_link_libraries(${PROJECT_NAME}
   curl ssl crypto zstd pthread z m
   SceAvPlayer_stub SceAudio_stub SceGxm_stub SceDisplay_stub SceSysmodule_stub SceCtrl_stub
   SceTouch_stub ScePower_stub SceAppUtil_stub SceCommonDialog_stub SceIme_stub ScePgf_stub
-  SceLibKernel_stub SceKernelThreadMgr_stub SceRtc_stub SceAppMgr_stub
+  SceLibKernel_stub SceKernelThreadMgr_stub SceRtc_stub SceAppMgr_stub SceLiveArea_stub
   SceNet_stub SceNetCtl_stub SceKernelModulemgr_stub SceIofilemgr_stub SceSysmem_stub SceProcessmgr_stub
 )
 
@@ -48,6 +48,9 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
   FILE sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
   FILE sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
+  FILE sce_sys/livearea/contents/drive.png sce_sys/livearea/contents/drive.png
+  FILE sce_sys/livearea/contents/local.png sce_sys/livearea/contents/local.png
+  FILE sce_sys/livearea/contents/strip.png sce_sys/livearea/contents/strip.png
   FILE font.ttf font.ttf
   FILE cacert.pem cacert.pem
   FILE splash.png splash.png

@@ -253,7 +253,8 @@ static struct {
   int dbltap, glow; // double tap in the full view: 0 zoom, 1 heart; the picture's colours behind it
   int wspan, wfull; // the Browser: Top's span (LV_SPAN_*), saves at full size
   int hide, tlock;  // SELECT shows: 0 the clock, 1 the calculator; touch lock's time (privacy.c)
-} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0};
+  char local_vault[512]; // the last vault opened that isn't the Google Drive one (livearea.c)
+} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, ""};
 static void cfg_load(void) {
   FILE *f = fopen(DATA "/config.txt", "r");
   if (!f) return;
@@ -283,6 +284,7 @@ static void cfg_load(void) {
     else if (!strcmp(line, "wfull")) cfg.wfull = atoi(eq) != 0;
     else if (!strcmp(line, "hide")) cfg.hide = atoi(eq) != 0;
     else if (!strcmp(line, "tlock")) cfg.tlock = atoi(eq) & 3;
+    else if (!strcmp(line, "local_vault")) snprintf(cfg.local_vault, sizeof cfg.local_vault, "%s", eq);
   }
   fclose(f);
   if (cfg.interval < 2 || cfg.interval > 60) cfg.interval = 5;
@@ -300,9 +302,9 @@ static void cfg_load(void) {
 static void cfg_save(void) {
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
-          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock);
+          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -872,6 +874,9 @@ static void close_vault(void) {
   pthread_mutex_unlock(&vmx);
 }
 static int decoy_session; // (opened with the decoy PIN: nothing about the lock, or which vault, changes)
+static int is_drive_vault(const char *root); // (livearea.c)
+static void open_start_vault(void);
+static void la_update_stats(void);
 static void open_vault(const char *path_in) {
   char path[512];
   snprintf(path, sizeof path, "%s", path_in);
@@ -879,7 +884,11 @@ static void open_vault(const char *path_in) {
   pthread_mutex_lock(&vmx);
   lv_vault_init(&vault, path);
   pthread_mutex_unlock(&vmx);
-  if (!decoy_session) { snprintf(cfg.vault, sizeof cfg.vault, "%s", path); cfg_save(); }
+  if (!decoy_session) {
+    snprintf(cfg.vault, sizeof cfg.vault, "%s", path);
+    if (!is_drive_vault(path)) snprintf(cfg.local_vault, sizeof cfg.local_vault, "%s", path);
+    cfg_save();
+  }
   screen = vault.untraceable ? S_LOCKED : S_UNLOCKING;
 }
 // Unlocking (two seconds of key making) and reading the vault (a big one takes a while) happen on a
@@ -943,6 +952,7 @@ static void finish_open(void) {
   show_opened();
   scroll = scroll_v = 0;
   sel = 0;
+  la_update_stats();
   screen = S_LIBRARY;
 }
 
@@ -1101,6 +1111,7 @@ static float chips_scroll;
 #include "pin.c"
 #include "privacy.c"
 #include "clean.c"
+#include "livearea.c"
 
 static int last_top_row = -1;
 static void draw_library(void) {
@@ -1933,9 +1944,13 @@ int main(void) {
 
   find_vaults();
   pin_load();
+  // started from a frame of the LiveArea: that vault (after the PIN, if there is one)
+  {
+    char param[1024] = "";
+    if (sceAppMgrGetAppParam(param) >= 0) launch_to = la_target(param);
+  }
   if (pin.on) pin_lock(-1);
-  else if (cfg.vault[0] && lv_is_vault(cfg.vault)) open_vault(cfg.vault);
-  else if (nfound == 1) open_vault(found[0]);
+  else open_start_vault();
 
   unsigned idle_save = 0;
   for (;;) {
@@ -1965,6 +1980,7 @@ int main(void) {
     if (loaded_vault) take_results();
     if (web_started) web_take_results();
     if (loaded_vault) wf_take();
+    if (frame_no % 30 == 0) la_poll_events();
     if (wf_run && screen != S_WIFI && screen != S_COVER) wf_stop(); // (the server only while its screen is open)
 
     // the keyboard's answer

@@ -1,8 +1,7 @@
 # The Vita's pictures, made from the app's heart (art/app-icon.png):
 #   sce_sys/icon0.png                    128 x 128  the bubble on the home screen
 #   sce_sys/pic0.png                     960 x 544  the cover art behind the LiveArea
-#   sce_sys/livearea/contents/bg.png     840 x 500  the LiveArea's background
-#   sce_sys/livearea/contents/startup.png 280 x 158 the gate you tap to start
+#   (the LiveArea page: tools/make-livearea.mjs)
 #   splash.png                           256 x 256  the heart the app's own loading screen draws
 # The system wants the sce_sys ones as 8-bit palette PNGs. Run with python3 (Pillow).
 import math, os, random
@@ -73,20 +72,7 @@ title(c, 'Lewd Vault', 64, 480, 418, anchor='mm')
 title(c, 'your private collection, on the go', 24, 480, 470, anchor='mm', fill=(240, 200, 214, 255), font=REG)
 pal(c, 'sce_sys/pic0.png')
 
-# the LiveArea: the heart on the left, the name on the right
-l = backdrop(840, 500, 0.3, 0.5, seed=21)
-put_heart(l, 300, 250, 250)
-title(l, 'Lewd Vault', 62, 450, 200)
-title(l, 'Library · Browser · Slideshow', 24, 452, 278, fill=(240, 200, 214, 255), font=REG)
-title(l, 'for PlayStation Vita', 20, 452, 314, fill=(200, 160, 180, 255), font=REG)
-pal(l, 'sce_sys/livearea/contents/bg.png')
-
-# the gate
-g = backdrop(280, 158, 0.28, 0.5, seed=5)
-put_heart(g, 104, 72, 80)
-title(g, 'Lewd', 30, 132, 50)
-title(g, 'Vault', 30, 132, 86)
-pal(g, 'sce_sys/livearea/contents/startup.png')
+# (the LiveArea page itself, bg.png, startup.png and its frames: tools/make-livearea.mjs)
 
 # the loading screen's heart (full colour, its own alpha)
 heart.resize((256, 256), Image.LANCZOS).save(os.path.join(root, 'splash.png'), optimize=True)

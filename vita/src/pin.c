@@ -119,11 +119,9 @@ static void pin_try(void) {
     pin_save();
   }
   if (pin_return < 0) {
-    // the app starting: now the vault
+    // the app starting: now the vault (the one the LiveArea asked for, if it did)
     find_vaults();
-    if (cfg.vault[0] && lv_is_vault(cfg.vault)) open_vault(cfg.vault);
-    else if (nfound == 1) open_vault(found[0]);
-    else screen = S_PICK;
+    open_start_vault();
   } else screen = pin_return;
 }
 

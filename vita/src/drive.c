@@ -627,6 +627,12 @@ static int ensure_root(Plan *pl, const char *folder, int make, const char **why)
   snprintf(pl->root_id, sizeof pl->root_id, "%s", id);
   return 0;
 }
+int drive_has_manifest(const char *root) {
+  char p[200];
+  manifest_path(root, p, sizeof p);
+  SceIoStat st;
+  return sceIoGetstat(p, &st) >= 0;
+}
 int drive_folder_exists(const char *folder) {
   if (!http) http = lv_http_new();
   Plan pl;

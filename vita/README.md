@@ -60,6 +60,14 @@ tries. It locks the app; an Untraceable vault is what keeps the files themselves
 shows what's in the vault and how it's been looked at. The **rear touchpad** scrolls the Library and
 the Browser, and a swipe across it moves through the full view.
 
+**Hide it** (SELECT, anywhere): a plain clock, or (Settings) a calculator that really calculates;
+the PIN and = gets back in, or with no PIN, holding the display for a second. **Touch lock**: hold L
+and R for a second and touch and buttons do nothing (for the time chosen, or until L and R are held
+again) while a picture, video or slideshow carries on (`src/privacy.c`). **Clean up** (Settings) shows
+the Library one at a time, the least looked-at first: swipe away (or ←) what you don't want, keep (→),
+undo (△); the ones let go go into the vault's `_trash` at the end, after asking. **Health check** finds
+items whose file is missing and counts for items that are gone, and puts them right (`src/clean.c`).
+
 **Continue watching**: a video left part-way starts where it stopped. The places are kept in the
 vault's `_app/kv/resume.json`, the same file the PC's Videos tab keeps, so it carries on across the two.
 
@@ -70,7 +78,9 @@ their JSON APIs (the same four kinds of site as the desktop's Discover: `src/boo
 loads. The grid is the Library's; the site button is the tab bar (L/R step through it), Filter picks
 the ratings (General, Sensitive, Questionable, Explicit), the search and which category saves go into,
 and the sort is Latest, Hot (where the site has it), Top or Random. More results load as you scroll.
-Gelbooru and Rule34 are there too, with your account's API key (Filter → API key: the user ID and the
+The site button opens a window of the sites, each with its own icon (or, where a site's is too
+small, the app's mascot holding up its name: `tools/make-site-icons.mjs`). Sakugabooru brings anime
+animation clips. Gelbooru and Rule34 are there too, with your account's API key (Filter → API key: the user ID and the
 key from the site's My Account → Options). As on the desktop, posts tagged as sexual content involving
 minors are never shown or searched for.
 
@@ -101,6 +111,16 @@ from a phone or PC on the same Wi-Fi; each goes onto the card and into the vault
 category, or "Wi-Fi"), with a card-sized thumbnail for pictures, encrypted in an Untraceable vault.
 Only that page is served: nothing in the vault can be read from outside, and the server stops when
 you leave the screen (`src/wifi.c`).
+
+## The LiveArea
+
+The page behind the bubble (`sce_sys/livearea/contents`, drawn by `tools/make-livearea.mjs`): the
+gate in the middle starts the app as usual; the frame on its left opens the **Google Drive vault**
+and the one on its right the **vault on the card**, straight away (past the PIN lock, if there is
+one); the strip along the bottom shows the vault's numbers (items, hearts, time spent looking),
+written by the app whenever a vault opens (`src/livearea.c`). The Google Drive vault is the one
+"Get it from Drive" made (a vault of its own, its folder ending in "(Drive)") or one that has been
+synced; with none on the card yet, its frame opens Google Drive's screen to get it.
 
 ## Google Drive
 
@@ -186,6 +206,8 @@ the compiler inlines across them); textures are only freed after the frame that 
 | `src/show.c` | The slideshow's sessions and plan; Continue watching |
 | `src/pin.c` | The PIN lock (and decoy PIN), and the stats page |
 | `src/wifi.c` | Wi-Fi transfer: the upload page and its server |
+| `src/privacy.c`, `src/clean.c` | The calculator disguise and touch lock; clean up and the health check |
+| `src/livearea.c` | The LiveArea's frames (which vault they open) and its numbers |
 | `src/drive.c`, `src/drive_ui.c` | Google Drive: the sign-in, the sync, its screen |
 | `src/third_party/qrcodegen.*` | Project Nayuki's QR code generator (MIT, its notice in the file) |
 | `src/vault.c` | `index.csv` / `views.csv`, finding files, thumbnails (packs too) |
@@ -197,7 +219,8 @@ the compiler inlines across them); textures are only freed after the frame that 
 | `src/net.c` | libcurl over the Vita's network |
 | `tests/drive_mock.py` | A stand-in for Google's sign-in and Drive, for trying the sync in Vita3K |
 | `tests/` | The core against the golden vaults and the site readers against saved answers (`tests/booru/`, from the sites' all-ages halves), on a PC |
-| `tools/make-livearea.py` | The home-screen icon and LiveArea pictures, from the app's icon |
+| `tools/make-livearea.py`, `tools/make-livearea.mjs` | The bubble, cover art and splash; the LiveArea page (Chromium via Playwright) |
+| `tools/make-site-icons.mjs` | The site switcher's tiles, from `art/favicons/` |
 | `font.ttf` | DejaVu Sans (see `FONT-LICENSE.txt`); the Vita's own font is used for Japanese |
 | `cacert.pem` | Mozilla's certificate authorities (certifi, MPL-2.0) |
 

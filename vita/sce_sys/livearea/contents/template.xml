@@ -1,9 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
-<livearea style="a1" format-ver="01.00" content-rev="1">
+<!-- Style a1: the gate in the middle starts the app as usual; the frame on its left opens the Google
+     Drive vault and the one on its right the vault on the card, straight away (the app reads the
+     param); the strip along the bottom shows the vault's numbers, which the app writes there
+     (src/livearea.c). The pictures: tools/make-livearea.mjs. -->
+<livearea style="a1" format-ver="01.00" content-rev="2">
   <livearea-background>
     <image>bg.png</image>
   </livearea-background>
   <gate>
     <startup-image>startup.png</startup-image>
   </gate>
+  <frame id="frame1">
+    <liveitem>
+      <image>local.png</image>
+      <target>psgm:play?titleid=LWDV00001&amp;param=local</target>
+    </liveitem>
+  </frame>
+  <frame id="frame2">
+    <liveitem>
+      <image>drive.png</image>
+      <target>psgm:play?titleid=LWDV00001&amp;param=drive</target>
+    </liveitem>
+  </frame>
+  <frame id="frame3">
+    <liveitem>
+      <background>strip.png</background>
+      <text valign="center" align="left" text-align="left" text-valign="center" word-wrap="off" ellipsis="on" x="36">
+        <str size="22" color="#fff5f8" shadow="on">Library · Browser · Slideshow · Google Drive · Wi-Fi transfer</str>
+      </text>
+    </liveitem>
+  </frame>
 </livearea>
