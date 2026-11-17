@@ -365,10 +365,11 @@ static void *sw_sound_main(void *arg) {
 }
 
 static void sw_show(LvVideo *v, vpx_image_t *img) {
-  // fit the screen (960 x 544): smaller frames are scaled up by the GPU instead
+  // made 480p (854 x 480 at most) before it's drawn: a bigger frame is scaled down here, once, and the
+  // GPU takes it from there to the screen
   int ow = (int)img->d_w, oh = (int)img->d_h;
-  if (ow > 960 || oh > 544) {
-    double s = ow * 544.0 > oh * 960.0 ? 960.0 / ow : 544.0 / oh;
+  if (ow > 854 || oh > 480) {
+    double s = ow * 480.0 > oh * 854.0 ? 854.0 / ow : 480.0 / oh;
     ow = ((int)(ow * s)) & ~1;
     oh = ((int)(oh * s)) & ~1;
   }

@@ -81,9 +81,11 @@ int lv_post_is_video(const LvPost *p);
 int lv_site_checks_items(const LvSite *s);
 // An episode's page: 1 when it may be shown (and post->file set to its MP4 where the page names one).
 int lv_item_check(const LvSite *s, LvPost *post, const char *html);
-// A KVS video page: the address of its MP4 (the smallest, the first it names), and 1
+// A KVS video page: the address of its MP4 (the 480p one, else the first it names), and 1
 // in *never when its tags carry one of the never-shown words. 0, or -1 when there's no video.
 int lv_kvs_video(const char *html, char *out, size_t cap, int *never);
+// A video's address that didn't answer (its 480p copy missing): the site's smaller copy. 0, or -1.
+int lv_video_fallback(const char *url, char *out, size_t cap);
 int lv_xv_video(const char *html, char *out, size_t cap, int *never);
 // A video of this length (seconds) or from a site for whole episodes: saved as a link (a favourite)
 // or downloaded, the choice offered (rather than downloaded straight away).

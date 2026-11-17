@@ -544,7 +544,7 @@ static LvPost *episodes_parse(const LvSite *s, const char *text, int *n) {
       // ("16 Min": the last of the card's details)
       const char *m = strstr(p, " Min<");
       if (m && m < end) { const char *b = m; while (b > p && isdigit((unsigned char)b[-1])) b--; q.duration = atoi(b) * 60; }
-      snprintf(file, sizeof file, "%s/media/videos/iphone/%lld.mp4", s->base, q.id); // (the small copy, made for phones)
+      snprintf(file, sizeof file, "%s/media/videos/hd/%lld.mp4", s->base, q.id); // (its "hd" copy: 480 lines, the Vita's screen)
       q.width = 276; q.height = 460;
     }
     p = next;
@@ -605,13 +605,14 @@ int lv_item_check(const LvSite *s, LvPost *post, const char *html) {
       const char *v = strstr(html, "property=\"og:video\" content=");
       if (v) attr(v, v + strlen(v), "content=", mp4, sizeof mp4);
     } else {
-      // (the small copy made for phones: .../flv/0807/38331/mobile.mp4)
+      // (its 480p copy, next to the one for phones: .../flv/0807/38331/mobile.mp4 -> 480p.mp4; if that
+      //  isn't there, lv_video_fallback goes back to mobile.mp4)
       const char *m = strstr(html, "/mobile.mp4");
       if (m) {
         const char *b = m;
         while (b > html && b[-1] != '"' && b[-1] != '\'' && b[-1] != ' ' && b - html > 0 && m - b < 500) b--;
-        size_t n = (size_t)(m + 11 - b);
-        if (n < sizeof mp4) { memcpy(mp4, b, n); mp4[n] = 0; }
+        size_t n = (size_t)(m - b);
+        if (n + 10 < sizeof mp4) { memcpy(mp4, b, n); memcpy(mp4 + n, "/480p.mp4", 10); }
       }
     }
     if (strncmp(mp4, "http", 4)) return 0;
@@ -651,6 +652,18 @@ int lv_xv_video(const char *html, char *out, size_t cap, int *nev) {
   return -1;
 }
 
+// A video's address that didn't answer: the site's smaller copy of it, where there's one. 0 and out, or -1.
+int lv_video_fallback(const char *url, char *out, size_t cap) {
+  static const char *const from[] = {"/media/videos/hd/", "/480p.mp4", NULL}, *const to[] = {"/media/videos/iphone/", "/mobile.mp4", NULL};
+  for (int k = 0; from[k]; k++) {
+    const char *f = strstr(url, from[k]);
+    if (!f) continue;
+    snprintf(out, cap, "%.*s%s%s", (int)(f - url), url, to[k], f + strlen(from[k]));
+    return 0;
+  }
+  return -1;
+}
+
 int lv_kvs_video(const char *html, char *out, size_t cap, int *nev) {
   *nev = 0;
   out[0] = 0;
@@ -667,13 +680,19 @@ int lv_kvs_video(const char *html, char *out, size_t cap, int *nev) {
     for (char *w = words; *w; w++) if (*w == '_') *w = ' ';
     if (never(slug, strlen(slug)) || any_never(words)) { *nev = 1; return -1; }
   }
-  // (the first, the smallest: 360p on most, played whole from the card, so it comes fastest; the
-  //  Vita's screen is 544 lines)
-  const char *keys[] = {"video_url:", "video_alt_url:"};
-  for (int k = 0; k < 2; k++) {
-    const char *v = strstr(html, keys[k]);
+  // 480p, the Vita's screen (544 lines): the one whose label says so; else the first (the smallest)
+  static const char *const keys[] = {"video_url:", "video_alt_url:", "video_alt_url2:", "video_alt_url3:"};
+  int pick = 0;
+  for (int k = 0; k < 4; k++) {
+    char lab[32];
+    snprintf(lab, sizeof lab, "%.*s_text:", (int)strlen(keys[k]) - 1, keys[k]);
+    const char *t = strstr(html, lab);
+    if (t && strstr(t, "480") && strstr(t, "480") < t + strlen(lab) + 12) { pick = k; break; }
+  }
+  for (int pass = 0; pass < 2; pass++) {
+    const char *v = strstr(html, keys[pass ? 0 : pick]);
     if (!v) continue;
-    v += strlen(keys[k]);
+    v += strlen(keys[pass ? 0 : pick]);
     while (*v == ' ') v++;
     char q = *v;
     if (q != '\'' && q != '"') continue;

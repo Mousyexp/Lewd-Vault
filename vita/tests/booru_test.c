@@ -77,7 +77,9 @@ int main(void) {
     t = slurp("tests/booru/hcity_episode.html", &n);
     LvPost q = {0};
     q.file = strdup("x");
-    CHECK(lv_item_check(&hy, &q, t) == 1 && !strcmp(q.file, "https://www.hentaicity.com/flv/0807/38331/mobile.mp4"), "hcity mp4 %s", q.file);
+    CHECK(lv_item_check(&hy, &q, t) == 1 && !strcmp(q.file, "https://www.hentaicity.com/flv/0807/38331/480p.mp4"), "hcity mp4 %s", q.file);
+    char fb[600];
+    CHECK(lv_video_fallback(q.file, fb, sizeof fb) == 0 && !strcmp(fb, "https://www.hentaicity.com/flv/0807/38331/mobile.mp4"), "hcity fallback %s", fb);
     char *bad = malloc(n + 100);
     snprintf(bad, n + 100, "<a href=\"https://www.hentaicity.com/tags/video/loli\">x</a>%s", t);
     CHECK(lv_item_check(&hy, &q, bad) == 0, "hcity never-shown tag");
@@ -110,7 +112,7 @@ int main(void) {
     t = slurp("tests/booru/hcloud_list.html", &n);
     p = lv_booru_parse(&hc, t, n, LV_R_ALL, &c);
     CHECK(p && c >= 20, "hc cards %d", c);
-    for (int k = 0; p && k < c; k++) CHECK(strstr(p[k].file, "/media/videos/iphone/") && strstr(p[k].preview, "/media/videos/tmb/") && p[k].duration >= 60, "hc card %d %s %d", k, p[k].file, p[k].duration);
+    for (int k = 0; p && k < c; k++) CHECK(strstr(p[k].file, "/media/videos/hd/") && strstr(p[k].preview, "/media/videos/tmb/") && p[k].duration >= 60, "hc card %d %s %d", k, p[k].file, p[k].duration);
     lv_posts_free(p, c);
     free(t);
     t = slurp("tests/booru/hcloud_episode.html", &n);
@@ -219,7 +221,7 @@ int main(void) {
     html = slurp("tests/booru/kvs_video.html", &n);
     char mp4[1024];
     int nev = 0;
-    CHECK(lv_kvs_video(html, mp4, sizeof mp4, &nev) == 0 && strstr(mp4, "_360.mp4") && !nev, "kvs mp4 %s", mp4);
+    CHECK(lv_kvs_video(html, mp4, sizeof mp4, &nev) == 0 && strstr(mp4, "_480p.mp4") && !nev, "kvs mp4 (480p) %s", mp4);
     // a page tagged with one of the never-shown words: no video
     char *bad = malloc(n + 64);
     snprintf(bad, n + 64, "<a href=\"/tags/loli-elf/\">x</a>%s", html);

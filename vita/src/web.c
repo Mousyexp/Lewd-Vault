@@ -570,6 +570,12 @@ static void *sample_main(void *arg) {
         __sync_synchronize();
         dl_post = p; dl_gen = gen;
         st = lv_http_stream_file(h, post.file, video_path, cap, &big_cancel, &big_progress, &g->have, &g->total, &err);
+        // (its 480p copy not there: the site's smaller one)
+        char alt[1024];
+        if ((st == 403 || st == 404 || st == 410) && !big_cancel && lv_video_fallback(post.file, alt, sizeof alt) == 0) {
+          g->have = 0; g->total = 0;
+          st = lv_http_stream_file(h, alt, video_path, cap, &big_cancel, &big_progress, &g->have, &g->total, &err);
+        }
         if (st == 200) g->done = 1; else g->failed = 1;
         n = (size_t)g->have;
         dl_post = -1;
@@ -1026,7 +1032,8 @@ static volatile int find_cached; // (none read: the last look's, from the card)
 static int find_tab, find_sel;
 static float find_scroll;
 static pthread_mutex_t fdmx = PTHREAD_MUTEX_INITIALIZER;
-static const char *video_tags_for(int kind) { return kind == BK_DANBOORU ? "filetype:mp4" : kind == BK_GELBOORU ? "video" : ""; }
+// (a site's videos, no bigger than the Vita's screen: its own size search)
+static const char *video_tags_for(int kind) { return kind == BK_DANBOORU ? "filetype:mp4 mpixels:..0.52" : kind == BK_GELBOORU ? "video width:<=960 height:<=960" : "mpixels:..0.52"; }
 static void draw_letter_icon(int x, int y, int sz, const char *name);
 static const char *KIND_NAMES[] = {"Danbooru", "Gelbooru", "Moebooru", "e621"};
 static LvSite find_sites[LV_MAX_SITES];
