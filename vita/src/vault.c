@@ -869,7 +869,7 @@ int lv_vault_add_files(LvVault *v, const LvNew *n, const uint8_t *data, size_t l
   lv_num_or_empty(n->height, h, sizeof h);
   lv_num_or_empty(n->duration, d, sizeof d);
   if (tw && th) snprintf(tsize, sizeof tsize, "%dx%d", tw, th); else tsize[0] = 0;
-  const char *cells[21] = {id, uid, name, n->name, n->category, n->kind, nsfw, q, n->added, w, h, d, "", tid, "", "", tsize, "", "", n->tags, n->source};
+  const char *cells[21] = {id, uid, name, n->name, n->category, n->kind, nsfw, q, n->added, w, h, d, "", tid, "", "", tsize, n->collection ? n->collection : "", "", n->tags, n->source};
   Buf row = {0};
   for (int k = 0; k < 21; k++) { if (k) bstr(&row, ","); csv_cell(&row, cells[k]); }
   bstr(&row, "\r\n");
@@ -903,7 +903,7 @@ int lv_vault_add_memory(LvVault *v, const LvNew *n, const LvAdded *a) {
   it->id = arena_dup(&v->arena, id); it->uid = arena_dup(&v->arena, uid); it->file = arena_dup(&v->arena, name);
   it->name = arena_dup(&v->arena, n->name); it->category = arena_dup(&v->arena, n->category); it->kind = arena_dup(&v->arena, n->kind);
   it->added = arena_dup(&v->arena, n->added); it->preview_id = arena_dup(&v->arena, ""); it->thumb = arena_dup(&v->arena, tid);
-  it->collection = arena_dup(&v->arena, ""); it->tags = arena_dup(&v->arena, n->tags); it->source = arena_dup(&v->arena, n->source);
+  it->collection = arena_dup(&v->arena, n->collection ? n->collection : ""); it->tags = arena_dup(&v->arena, n->tags); it->source = arena_dup(&v->arena, n->source);
   it->path = arena_dup(&v->arena, path);
   {
     // its cells, in the file's own column order (as the row appended was, by name)
@@ -915,7 +915,7 @@ int lv_vault_add_memory(LvVault *v, const LvNew *n, const LvAdded *a) {
     lv_num_or_empty(n->width, w, sizeof w);
     lv_num_or_empty(n->height, h, sizeof h);
     lv_num_or_empty(n->duration, d, sizeof d);
-    const char *val[21] = {it->id, it->uid, it->file, it->name, it->category, it->kind, nsfw, q, it->added, w, h, d, "", it->thumb, "", "", a->tsize, "", "", it->tags, it->source};
+    const char *val[21] = {it->id, it->uid, it->file, it->name, it->category, it->kind, nsfw, q, it->added, w, h, d, "", it->thumb, "", "", a->tsize, it->collection, "", it->tags, it->source};
     int nh = v->nhead ? v->nhead : 21;
     it->cells = arena_cells(&v->arena, nh);
     it->ncells = it->cells ? nh : 0;

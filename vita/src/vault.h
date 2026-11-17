@@ -86,6 +86,7 @@ typedef struct {
   const char *from; // (with no data: a file to copy in, piece by piece)
   int nsfw, quality, width, height;
   double duration;
+  const char *collection; // (optional: a comic's pages share one)
 } LvNew;
 // The same in two steps, for a thread that does the slow part: the files and the row (reads the
 // loaded items only for the next number), then the loaded vault (on the thread that draws it).

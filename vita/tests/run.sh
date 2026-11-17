@@ -10,3 +10,5 @@ ${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wno-unused-parameter -Wn
 "$out-booru"
 ${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wno-unused-parameter -o "$out-manga" tests/manga_test.c src/manga.c src/json.c
 "$out-manga"
+${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wno-unused-parameter -o "$out-discover" tests/discover_test.c src/discover.c src/json.c
+"$out-discover"

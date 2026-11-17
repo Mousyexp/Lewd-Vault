@@ -7,7 +7,7 @@
 // cropped), and the banner's to the banner's: nothing larger is ever made or drawn.
 
 typedef struct { const char *name, *site, *tags, *icon, *about; int blocked; } VSource;
-static const VSource VSRC[] = {
+static const VSource VSRC_BUILTIN[] = {
   {"Sakugabooru", "Sakugabooru", "", "sakugabooru", "Anime animation clips", 0},
   {"Xbooru", "Xbooru", "video", "xbooru", "Hentai clips", 0},
   {"Gelbooru", "Gelbooru", "video", "gelbooru", "Anime and hentai clips (key)", 0},
@@ -16,13 +16,85 @@ static const VSource VSRC[] = {
   {"hanime.tv", NULL, NULL, "hanime", "Hentai (browser check)", 1},
   {"MissAV", NULL, NULL, "missav", "JAV (browser check)", 1},
 };
-#define NVSRC ((int)(sizeof VSRC / sizeof *VSRC))
-static int nvsources(void) { return NVSRC; }
+#define NVSRC_BUILTIN ((int)(sizeof VSRC_BUILTIN / sizeof *VSRC_BUILTIN))
+// The sources offered: the built-in ones that answer, the ones added (the site finder, web.c: saved
+// in ux0:data/LWDV00001/video_sources.txt, "<site name>\t<tags>" a line), then the locked ones.
+#define VSRC_MAX 14
+static VSource VSRC[VSRC_MAX];
+static int NVSRC, vsrc_built, nvs_added;
+static char vs_name[VSRC_MAX][48], vs_tags[VSRC_MAX][64];
+static void vsrc_build(void) {
+  vsrc_built = 1;
+  // (the switcher's icons are kept by place: the places may have moved)
+  for (int k = 32; k < 48; k++) { if (site_tex[k]) release_tex(site_tex[k]); site_tex[k] = NULL; site_tex_tried[k] = 0; }
+  NVSRC = 0;
+  for (int k = 0; k < NVSRC_BUILTIN; k++) if (!VSRC_BUILTIN[k].blocked) VSRC[NVSRC++] = VSRC_BUILTIN[k];
+  for (int k = 0; k < nvs_added && NVSRC < VSRC_MAX - 2; k++) {
+    const char *ic = NULL;
+    for (int s = 0; s < LV_NSITES; s++) if (!strcmp(LV_SITES[s].name, vs_name[k])) ic = LV_SITES[s].icon;
+    VSRC[NVSRC++] = (VSource){vs_name[k], vs_name[k], vs_tags[k], ic, "Added: videos", 0};
+  }
+  for (int k = 0; k < NVSRC_BUILTIN; k++) if (VSRC_BUILTIN[k].blocked && NVSRC < VSRC_MAX) VSRC[NVSRC++] = VSRC_BUILTIN[k];
+}
+static void vsrc_load(void) {
+  FILE *f = fopen(DATA "/video_sources.txt", "r");
+  char ln[200];
+  nvs_added = 0;
+  while (f && fgets(ln, sizeof ln, f) && nvs_added < VSRC_MAX - NVSRC_BUILTIN) {
+    ln[strcspn(ln, "\r\n")] = 0;
+    char *t = strchr(ln, '\t');
+    if (!t || t == ln) continue;
+    *t = 0;
+    snprintf(vs_name[nvs_added], sizeof vs_name[0], "%s", ln);
+    snprintf(vs_tags[nvs_added], sizeof vs_tags[0], "%s", t + 1);
+    nvs_added++;
+  }
+  if (f) fclose(f);
+  vsrc_build();
+}
+static void vsrc_save(void) {
+  FILE *f = fopen(DATA "/video_sources.txt.part", "w");
+  if (!f) return;
+  for (int k = 0; k < nvs_added; k++) fprintf(f, "%s\t%s\n", vs_name[k], vs_tags[k]);
+  fclose(f);
+  sceIoRemove(DATA "/video_sources.txt");
+  sceIoRename(DATA "/video_sources.txt.part", DATA "/video_sources.txt");
+}
+// 1: a source for that site is offered already
+static int vsrc_has_site(const char *site) {
+  if (!vsrc_built) vsrc_load();
+  for (int k = 0; k < NVSRC; k++) if (VSRC[k].site && !strcmp(VSRC[k].site, site)) return 1;
+  return 0;
+}
+static int vsrc_add(const char *site, const char *tags) {
+  if (!vsrc_built) vsrc_load();
+  if (nvs_added >= VSRC_MAX - NVSRC_BUILTIN || vsrc_has_site(site)) return -1;
+  snprintf(vs_name[nvs_added], sizeof vs_name[0], "%s", site);
+  snprintf(vs_tags[nvs_added], sizeof vs_tags[0], "%s", tags);
+  nvs_added++;
+  vsrc_save();
+  vsrc_build();
+  return 0;
+}
+// (□ on an added one in the switcher: gone)
+static int vsrc_is_added(int k) { return k >= 0 && k < NVSRC && !strcmp(VSRC[k].about, "Added: videos"); }
+static void vsrc_remove(int k) {
+  for (int j = 0; j < nvs_added; j++)
+    if (!strcmp(vs_name[j], VSRC[k].name)) {
+      for (int m = j; m < nvs_added - 1; m++) { memcpy(vs_name[m], vs_name[m + 1], sizeof vs_name[0]); memcpy(vs_tags[m], vs_tags[m + 1], sizeof vs_tags[0]); }
+      nvs_added--;
+      break;
+    }
+  vsrc_save();
+  vsrc_build();
+}
+static int nvsources(void) { if (!vsrc_built) vsrc_load(); return NVSRC; }
 static const char *vsource_name(int k) { return VSRC[k].name; }
 static const char *vsource_icon(int k) { return VSRC[k].icon; }
 static const char *vsource_about(int k) { return VSRC[k].about; }
 static int vsource_blocked(int k) { return VSRC[k].blocked; }
 static int vsource_site(int k) {
+  if (k < 0 || k >= NVSRC) return -1;
   for (int s = 0; VSRC[k].site && s < LV_NSITES; s++) if (!strcmp(LV_SITES[s].name, VSRC[k].site)) return s;
   return -1;
 }

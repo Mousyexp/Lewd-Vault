@@ -15,7 +15,8 @@ static LvSearch lsearch;
 static char forgotten_key[16]; // ("forgotten": last seen before this, yyyymmdd...)
 static unsigned edits_at;       // (an edit waiting to be written: when the last one was)
 
-static void edited(void) { edits_at = frame_no ? frame_no : 1; }
+static int comic_n = -1; // (the comics' flags are worked out again: an edit can make a page a comic's)
+static void edited(void) { edits_at = frame_no ? frame_no : 1; comic_n = -1; }
 static void save_edits_now(void) {
   if (!vault.index_dirty) return;
   if (index_save_async() != 0) { sfx(SFX_ERROR); say("The changes couldn't be written to the card"); }
@@ -25,7 +26,8 @@ static void save_edits_now(void) {
 // ---------- which items show ----------
 static int lib_pass(int i) {
   const LvHot *h = &vault.hot[i];
-  if (cfg.kind == 1 && h->kind != LV_IMAGE) return 0;
+  if (cfg.lmode == 3) {} // (Comics: pages are pictures whatever the type filter says)
+  else if (cfg.kind == 1 && h->kind != LV_IMAGE) return 0;
   if (cfg.kind == 2 && h->kind != LV_GIF) return 0;
   if (cfg.kind == 3 && h->kind != LV_VIDEO) return 0;
   const LvItem *it = &vault.items[i];
@@ -55,6 +57,173 @@ static void lib_prepare(void) {
   gmtime_r(&t, &g);
   strftime(forgotten_key, sizeof forgotten_key, "%Y-%m-%d", &g);
   ROW_H = SIZE_H[lf.size < 0 || lf.size > 2 ? 1 : lf.size];
+}
+
+// ---------- the modes: everything, pictures, videos, comics ----------
+// A comic is a collection whose pages are marked as one: the category Comics (or Manga, Doujinshi,
+// Webtoon, Manhwa), or one of those words as a tag. Pages saved from the Manga tab are made that way.
+// Pictures leaves comics' pages out; Comics shows one card per book (its first page, its pages
+// counted), and a book opens at its first page, or where it was left.
+static const char *LMODES[] = {"All", "Pictures", "Videos", "Comics"};
+static const char *LMODE_ICONS[] = {"photos", "image", "film", "book"};
+static const char *COMIC_WORDS[] = {"comic", "comics", "manga", "doujinshi", "doujin", "webtoon", "manhwa", "manhua", NULL};
+static unsigned char *comic_flag; // per item: 1 a comic's page
+static int comic_vgen;
+static int comic_word(const char *w, size_t n) {
+  for (int k = 0; COMIC_WORDS[k]; k++)
+    if (strlen(COMIC_WORDS[k]) == n && !strncasecmp(w, COMIC_WORDS[k], n)) return 1;
+  return 0;
+}
+// (any word of s, split at anything not a letter or digit)
+static int has_comic_word(const char *s) {
+  if (!s) return 0;
+  while (*s) {
+    while (*s && !isalnum((unsigned char)*s)) s++;
+    const char *b = s;
+    while (*s && isalnum((unsigned char)*s)) s++;
+    if (s > b && comic_word(b, (size_t)(s - b))) return 1;
+  }
+  return 0;
+}
+static void comics_scan(void) {
+  if (comic_n == vault.n && comic_vgen == vgen && comic_flag) return;
+  free(comic_flag);
+  comic_flag = calloc(vault.n + 1, 1);
+  comic_n = vault.n; comic_vgen = vgen;
+  if (!comic_flag) return;
+  for (int i = 0; i < vault.n; i++) {
+    const LvItem *it = &vault.items[i];
+    if (!it->collection || !it->collection[0] || vault.hot[i].kind == LV_VIDEO) continue;
+    comic_flag[i] = has_comic_word(it->category) || has_comic_word(it->tags);
+  }
+}
+static int is_comic(int i) { return comic_flag && i < comic_n && comic_flag[i]; }
+static int mode_pass(int i) {
+  switch (cfg.lmode) {
+    case 1: return vault.hot[i].kind != LV_VIDEO && !is_comic(i);
+    case 2: return vault.hot[i].kind == LV_VIDEO;
+    case 3: return is_comic(i);
+  }
+  return 1;
+}
+// "page 2" before "page 10": runs of digits compared as numbers
+static int natcmp(const char *a, const char *b) {
+  while (*a && *b) {
+    if (isdigit((unsigned char)*a) && isdigit((unsigned char)*b)) {
+      while (*a == '0') a++;
+      while (*b == '0') b++;
+      const char *x = a, *y = b;
+      while (isdigit((unsigned char)*x)) x++;
+      while (isdigit((unsigned char)*y)) y++;
+      if (x - a != y - b) return (int)((x - a) - (y - b));
+      int c = strncmp(a, b, (size_t)(x - a));
+      if (c) return c;
+      a = x; b = y;
+      continue;
+    }
+    int c = tolower((unsigned char)*a) - tolower((unsigned char)*b);
+    if (c) return c;
+    a++; b++;
+  }
+  return (unsigned char)*a - (unsigned char)*b;
+}
+static const char *page_key(const LvItem *it) { return it->name && it->name[0] ? it->name : it->file; }
+static int cmp_pages(const void *x, const void *y) {
+  const LvItem *a = &vault.items[*(const int *)x], *b = &vault.items[*(const int *)y];
+  int c = strcmp(a->collection, b->collection);
+  if (c) return c;
+  c = natcmp(page_key(a), page_key(b));
+  return c ? c : *(const int *)x - *(const int *)y;
+}
+static int *book_count; // per item (a book's first page): its pages
+static int nbook_count;
+// The Comics mode's list: the books (one card each), or the pages of the book open. 0: not that mode.
+static int lib_books(void) {
+  comics_scan();
+  book_shelf = book_inside = 0;
+  if (cfg.lmode != 3) return 0;
+  int m = 0;
+  for (int i = 0; i < vault.n; i++) {
+    if (!is_comic(i)) continue;
+    if (cat >= 0 && vault.hot[i].cat != cat) continue;
+    if (!lib_pass(i)) continue;
+    shown[m++] = i;
+  }
+  qsort(shown, m, sizeof *shown, cmp_pages);
+  if (lf.coll[0]) { nshown = m; book_inside = 1; return 1; } // (a book: its pages, first to last)
+  if (nbook_count < vault.n + 1) {
+    int *nb = realloc(book_count, (vault.n + 1) * sizeof *nb);
+    if (!nb) { nshown = m; return 1; }
+    book_count = nb; nbook_count = vault.n + 1;
+  }
+  nshown = 0;
+  for (int k = 0; k < m; ) {
+    int e = k + 1;
+    while (e < m && !strcmp(vault.items[shown[e]].collection, vault.items[shown[k]].collection)) e++;
+    book_count[shown[k]] = e - k;
+    shown[nshown++] = shown[k];
+    k = e;
+  }
+  book_shelf = 1;
+  if (ROW_H < 220) ROW_H = 220; // (covers big enough to tell apart)
+  sort_mode = cfg.sort == 5 || cfg.sort == 6 ? 0 : cfg.sort;
+  qsort(shown, nshown, sizeof *shown, cmp_items);
+  return 1;
+}
+// Opening a book from the shelf: its pages, at the one after the page last looked at (unless that was
+// the last).
+static int shelf_sel; static float shelf_scroll;
+static void open_book(int k) {
+  const LvItem *it = &vault.items[shown[k]];
+  shelf_sel = k; shelf_scroll = scroll;
+  snprintf(lf.coll, sizeof lf.coll, "%s", it->collection);
+  refilter();
+  int at = 0;
+  const char *best = "";
+  for (int j = 0; j < nshown; j++) {
+    const LvItem *p = &vault.items[shown[j]];
+    if (p->view >= 0 && vault.views[p->view].last && strcmp(vault.views[p->view].last, best) > 0) { best = vault.views[p->view].last; at = j; }
+  }
+  if (best[0] && at > 0 && at < nshown - 1) {
+    char m[64];
+    snprintf(m, sizeof m, "Carrying on at page %d of %d", at + 1, nshown);
+    say(m);
+  } else at = 0;
+  sel = at; scroll = 0;
+  if (nshown) open_viewer(at, 0);
+}
+static void close_book(void) {
+  lf.coll[0] = 0;
+  refilter();
+  sel = shelf_sel < nshown ? shelf_sel : 0;
+  scroll = shelf_scroll;
+}
+static void set_mode(int m) {
+  if (m == cfg.lmode) return;
+  sfx(SFX_TAB);
+  if (cfg.lmode == 3 && book_inside) lf.coll[0] = 0;
+  cfg.lmode = m;
+  cfg_save();
+  refilter();
+  sel = 0; scroll = 0; scroll_v = 0;
+}
+// The modes, as one control: an icon and a word each; returns its width.
+static int draw_modes(int x, int y) {
+  int x0 = x;
+  int ws[4], tot = 0;
+  for (int k = 0; k < 4; k++) { ws[k] = text_w(15, LMODES[k]) + 46; tot += ws[k]; }
+  rrect(x, y, tot + 8, 40, 20, SURF2);
+  x += 4;
+  for (int k = 0; k < 4; k++) {
+    int on = k == cfg.lmode;
+    if (on) rrect(x, y + 4, ws[k], 32, 16, ACC);
+    unsigned col = on ? RGBA(20, 12, 16, 255) : DIM;
+    icon(LMODE_ICONS[k], x + 20, y + 20, col);
+    text(x + 34, y + 26, col, 15, LMODES[k]);
+    if (hit(x, y, ws[k], 40)) set_mode(k);
+    x += ws[k];
+  }
+  return x + 4 - x0;
 }
 
 // "For you": what you come back to and like, the stars, a little of what's new, and some chance

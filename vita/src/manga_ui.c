@@ -42,7 +42,8 @@ static struct {
   vita2d_texture *ptex[3]; // the page shown, and the next two
   int ptex_page[3];
   float zoom, pan_x, pan_y, swipe;
-} mg = {.adult = 1, .book = -1, .page = 0, .zoom = 1};
+  int tall_top; // (a tall page just turned to: it starts at its top)
+} mg = {.adult = 1, .book = -1, .page = 0, .zoom = 1, .tall_top = 1};
 static int manga_back = S_WEB;
 static int nmsources(void) { return MS_N; }
 static const char *msource_name(int k) { return MSRC_NAME[k]; }
@@ -86,6 +87,27 @@ static int mg_get(LvHttp *h, const char *url, uint8_t **b, size_t *n, size_t max
   LvReq rq = {.headers = MG_UA};
   return lv_http_req(h, url, &rq, b, n, max, NULL, err);
 }
+// A page's picture. E-Hentai: the picture page first, for the picture's address; a picture server
+// that doesn't answer: the page again, asking for another server (its "reload"), twice at most.
+// Stops early when *gen moves on from gen.
+static int mg_fetch_page(LvHttp *h, int src, const char *url, volatile int *genp, int gen, uint8_t **b, size_t *n, const char **err) {
+  *b = NULL; *n = 0;
+  if (src != MS_EHENTAI) return mg_get(h, url, b, n, 16u << 20, err) == 200;
+  char img[600], page_url[700];
+  snprintf(page_url, sizeof page_url, "%s", url);
+  for (int attempt = 0; attempt < 3 && *genp == gen; attempt++) {
+    img[0] = 0;
+    char nl[64] = "";
+    if (mg_get(h, page_url, b, n, 1u << 20, err) == 200) { lv_eh_parse_page((char *)*b, img, sizeof img); lv_eh_parse_reload((char *)*b, nl, sizeof nl); }
+    free(*b); *b = NULL;
+    if (img[0] && mg_get(h, img, b, n, 16u << 20, err) == 200) return 1;
+    free(*b); *b = NULL;
+    if (!nl[0]) break;
+    snprintf(page_url, sizeof page_url, "%s%snl=%s", url, strchr(url, '?') ? "&" : "?", nl);
+  }
+  return 0;
+}
+
 static void *mg_main(void *arg) {
   (void)arg;
   pin_to_core(2);
@@ -157,27 +179,13 @@ static void *mg_main(void *arg) {
         if (d.n < 0) snprintf(d.err, sizeof d.err, "%s", err && err[0] ? err : "The pages couldn't be read");
         break;
       case MJ_PAGE: {
-        // E-Hentai: the picture page first, for the picture's address
-        char img[600];
-        snprintf(img, sizeof img, "%s", j.url);
-        int got_img = 0;
-        if (j.src == MS_EHENTAI) {
-          // the picture page, then its picture; a picture server that doesn't answer: the page again,
-          // asking for another server (E-Hentai's "reload"), twice at most
-          char page_url[700];
-          snprintf(page_url, sizeof page_url, "%s", j.url);
-          for (int attempt = 0; attempt < 3 && !got_img && j.gen == mg_gen; attempt++) {
-            img[0] = 0;
-            char nl[64] = "";
-            if (mg_get(h, page_url, &b, &n, 1u << 20, &err) == 200) { lv_eh_parse_page((char *)b, img, sizeof img); lv_eh_parse_reload((char *)b, nl, sizeof nl); }
-            free(b); b = NULL;
-            if (img[0] && mg_get(h, img, &b, &n, 16u << 20, &err) == 200) got_img = 1;
-            else { free(b); b = NULL; if (!nl[0]) break; snprintf(page_url, sizeof page_url, "%s%snl=%s", j.url, strchr(j.url, '?') ? "&" : "?", nl); }
-          }
-        } else got_img = mg_get(h, img, &b, &n, 16u << 20, &err) == 200;
+        int got_img = mg_fetch_page(h, j.src, j.url, &mg_gen, j.gen, &b, &n, &err);
         if (got_img) {
           int hi = j.b; // (zoomed in: twice the screen)
-          if (lv_decode(b, n, hi ? W * 2 : W, hi ? H * 2 : H, &d.px) != 0) d.px.rgba = NULL;
+          int iw = 0, ih = 0;
+          // (a tall page, a webtoon's: the screen's width, as tall as a texture can be)
+          int tall = lv_image_size(b, n, &iw, &ih) && iw > 0 && ih > iw * 2.2f;
+          if (lv_decode(b, n, tall ? W : hi ? W * 2 : W, tall ? 4096 : hi ? H * 2 : H, &d.px) != 0) d.px.rgba = NULL;
         }
         if (!d.px.rgba) snprintf(d.err, sizeof d.err, "%s", err && err[0] ? err : "This page couldn't be loaded");
         break;
@@ -190,6 +198,203 @@ static void *mg_main(void *arg) {
   lv_http_free(h);
   return NULL;
 }
+// ---------- a chapter (or a gallery) into the vault, as a comic ----------
+// Its pages as pictures, as they come (not made smaller: they're pages to read), in the category
+// Comics, tagged comic and with the book's tags, one collection for the chapter: the Library's Comics
+// mode shows it as a book. On a thread of its own, so reading goes on meanwhile.
+typedef struct {
+  int src, vgen, total;
+  char **urls; int n;
+  LvBook book;
+  char coll[200], tags[1400];
+} MSave;
+typedef struct { LvNew nw; LvAdded added; char name[240], when[40], kind[8]; int vgen; } MSaved;
+static volatile int msave_on, msave_done, msave_total, msave_failed, msave_gen = 1;
+static char msave_title[200];
+static MSaved *msaved; // (pages written, waiting for the drawing thread)
+static int nmsaved, capmsaved;
+static pthread_mutex_t msmx = PTHREAD_MUTEX_INITIALIZER;
+static char msave_tags[1400], msave_coll[200]; // (the job's, for the loaded vault's copies)
+
+static const char *pic_ext(const uint8_t *b, size_t n) {
+  if (n >= 3 && b[0] == 0xFF && b[1] == 0xD8) return "jpg";
+  if (n >= 8 && !memcmp(b, "\x89PNG", 4)) return "png";
+  if (n >= 12 && !memcmp(b, "RIFF", 4) && !memcmp(b + 8, "WEBP", 4)) return "webp";
+  if (n >= 6 && !memcmp(b, "GIF8", 4)) return "gif";
+  return NULL;
+}
+static void *msave_main(void *arg) {
+  MSave *j = arg;
+  pin_to_core(1);
+  LvHttp *h = lv_http_new();
+  const char *err = NULL;
+  int gen = msave_gen;
+  // E-Hentai: every picture page of the gallery (the reader may have seen only the first few)
+  if (j->src == MS_EHENTAI && h) {
+    lv_strings_free(j->urls, j->n);
+    j->urls = NULL; j->n = 0;
+    char gid[24];
+    snprintf(gid, sizeof gid, "%s", j->book.id);
+    for (int p = 0; p < 60 && msave_gen == gen && (j->n < j->total || !j->total); p++) {
+      char url[600];
+      lv_eh_gallery_url(&j->book, p, url, sizeof url);
+      uint8_t *b = NULL; size_t n = 0;
+      char **got = NULL;
+      int m = mg_get(h, url, &b, &n, 8u << 20, &err) == 200 ? lv_eh_parse_gallery((char *)b, gid, &got) : -1;
+      free(b);
+      if (m <= 0) { lv_strings_free(got, m); break; }
+      char **nu = realloc(j->urls, (j->n + m) * sizeof *nu);
+      if (!nu) { lv_strings_free(got, m); break; }
+      j->urls = nu;
+      memcpy(j->urls + j->n, got, m * sizeof *got);
+      j->n += m;
+      free(got);
+    }
+    msave_total = j->n;
+  }
+  for (int k = 0; k < j->n && h && msave_gen == gen; k++) {
+    uint8_t *b = NULL; size_t n = 0;
+    int ok = mg_fetch_page(h, j->src, j->urls[k], &msave_gen, gen, &b, &n, &err);
+    if (!ok && msave_gen == gen) { free(b); ok = mg_fetch_page(h, j->src, j->urls[k], &msave_gen, gen, &b, &n, &err); } // (once more)
+    const char *ext = ok ? pic_ext(b, n) : NULL;
+    int w = 0, hh = 0;
+    if (!ext || !lv_image_size(b, n, &w, &hh)) { free(b); msave_failed++; msave_done++; continue; }
+    // the thumbnail: the page decoded straight to card size
+    uint8_t *th = NULL; size_t tn = 0; int tw = 0, tht = 0;
+    {
+      LvPixels px;
+      int cw, ch;
+      cover_size(b, n, &cw, &ch);
+      // (a tall page, a webtoon's: its top, in a page's shape, not a sliver of the whole strip)
+      int ok = hh > w * 1.6f ? decode_exact(b, n, (int)(ch * 0.7f), ch, &px) : lv_decode(b, n, cw, ch, &px);
+      if (ok == 0) { th = lv_encode_jpeg(&px, 85, &tn); tw = px.w; tht = px.h; free(px.rgba); }
+    }
+    MSaved d;
+    memset(&d, 0, sizeof d);
+    snprintf(d.name, sizeof d.name, "%.200s %03d.%s", j->coll, k + 1, ext);
+    snprintf(d.kind, sizeof d.kind, "%s", strcmp(ext, "gif") ? "image" : "gif");
+    now_iso(d.when, sizeof d.when);
+    LvNew nw = {.name = d.name, .category = "Comics", .kind = d.kind, .tags = j->tags, .source = j->urls[k], .added = d.when,
+                .nsfw = 9, .quality = 0, .width = w, .height = hh, .collection = j->coll};
+    saver_flush(); // (a rewrite of index.csv waiting to be written goes first: this appends to it)
+    pthread_mutex_lock(&vmx);
+    const char *why = NULL;
+    int r = -1;
+    if (loaded_vault && vgen == j->vgen) {
+      long long room = free_room(vault.root);
+      if (room >= 0 && room < (long long)n + 4 * 1024 * 1024) why = "Not enough room on the memory card";
+      else r = lv_vault_add_files(&vault, &nw, b, n, ext, th, tn, tw, tht, &d.added, &why);
+    } else why = "Another vault was opened";
+    pthread_mutex_unlock(&vmx);
+    free(b); free(th);
+    if (r != 0) {
+      msave_failed += j->n - k; msave_done = j->n;
+      snprintf(msave_title, sizeof msave_title, "%s", why ? why : "It couldn't be saved");
+      break;
+    }
+    d.nw = nw; d.vgen = j->vgen;
+    pthread_mutex_lock(&msmx);
+    if (nmsaved == capmsaved) { MSaved *nm = realloc(msaved, (capmsaved + 16) * sizeof *nm); if (nm) { msaved = nm; capmsaved += 16; } }
+    if (nmsaved < capmsaved) msaved[nmsaved++] = d;
+    pthread_mutex_unlock(&msmx);
+    msave_done++;
+  }
+  if (!h) msave_failed = msave_total;
+  lv_http_free(h);
+  lv_strings_free(j->urls, j->n);
+  free(j);
+  msave_on = 0;
+  return NULL;
+}
+// (the drawing thread: the pages written, into the loaded vault; then a word when it's all done)
+static void msave_take(void) {
+  static int was_on;
+  if (!was_on && !msave_on) return;
+  pthread_mutex_lock(&msmx);
+  int n = nmsaved;
+  MSaved *got = n ? malloc(n * sizeof *got) : NULL;
+  if (got) { memcpy(got, msaved, n * sizeof *got); nmsaved = 0; } else n = 0;
+  pthread_mutex_unlock(&msmx);
+  for (int k = 0; k < n; k++) {
+    MSaved *d = &got[k];
+    if (d->vgen != vgen || !loaded_vault) continue;
+    d->nw.name = d->name; d->nw.kind = d->kind; d->nw.added = d->when; d->nw.category = "Comics";
+    d->nw.tags = msave_tags; d->nw.source = ""; d->nw.collection = msave_coll;
+    int before = vault.n;
+    pthread_mutex_lock(&vmx);
+    int ok = lv_vault_add_memory(&vault, &d->nw, &d->added) == 0;
+    pthread_mutex_unlock(&vmx);
+    if (ok) library_grew(before);
+  }
+  free(got);
+  if (was_on && !msave_on) {
+    char m[300];
+    int okn = msave_done - msave_failed;
+    if (okn <= 0) { sfx(SFX_ERROR); snprintf(m, sizeof m, "Not saved: %s", msave_title[0] ? msave_title : "the pages didn't come"); }
+    else { sfx(SFX_SAVED); snprintf(m, sizeof m, "%d pages saved: Library \u203a Comics%s", okn, msave_failed ? " (some pages didn't come)" : ""); }
+    say(m);
+  }
+  was_on = msave_on;
+}
+// The vault's tags from the book's ("Big Breasts|female:sole female" → big_breasts female:sole_female)
+static void book_tags(const char *in, char *out, size_t cap) {
+  size_t o = 0;
+  for (const char *p = in; *p && o + 2 < cap; p++) {
+    char c = *p == '|' ? ' ' : *p == ' ' ? '_' : (char)tolower((unsigned char)*p);
+    if (c == ',' || c == '"') continue;
+    out[o++] = c;
+  }
+  out[o] = 0;
+  snprintf(out + o, cap - o, "%scomic", o ? " " : "");
+}
+static void msave_start(void) {
+  if (msave_on) { say("A chapter is being saved already"); return; }
+  if (!loaded_vault) { sfx(SFX_ERROR); say("Open a vault first: the pages go into it"); return; }
+  if (!mg.npages || mg.book < 0) { sfx(SFX_ERROR); say("The pages are still coming"); return; }
+  MSave *j = calloc(1, sizeof *j);
+  if (!j) return;
+  j->src = mg.src; j->vgen = vgen; j->book = mg.books[mg.book];
+  j->total = mg.pages_total;
+  j->urls = calloc(mg.npages, sizeof *j->urls);
+  if (!j->urls) { free(j); return; }
+  for (int k = 0; k < mg.npages; k++) { j->urls[k] = strdup(mg.pages[k]); if (j->urls[k]) j->n++; else break; }
+  if (mg.src == MS_MANGADEX && mg.ch && mg.chapter < mg.nch) snprintf(j->coll, sizeof j->coll, "%.150s \u2013 %.40s", j->book.title, mg.ch[mg.chapter].label);
+  else snprintf(j->coll, sizeof j->coll, "%.190s", j->book.title);
+  // (no characters a file name can't have, no doubled or trailing spaces)
+  {
+    char *o = j->coll;
+    for (const char *c = j->coll; *c; c++) {
+      char ch = strchr("/\\:\"*?<>|", *c) ? ' ' : *c;
+      if (ch == ' ' && (o == j->coll || o[-1] == ' ')) continue;
+      *o++ = ch;
+    }
+    while (o > j->coll && o[-1] == ' ') o--;
+    *o = 0;
+  }
+  for (int i = 0; i < vault.n; i++)
+    if (vault.items[i].collection && !strcmp(vault.items[i].collection, j->coll)) {
+      lv_strings_free(j->urls, j->n); free(j);
+      sfx(SFX_ERROR); say("It's in the vault already (Library \u203a Comics)");
+      return;
+    }
+  book_tags(j->book.tags, j->tags, sizeof j->tags);
+  snprintf(msave_tags, sizeof msave_tags, "%s", j->tags);
+  snprintf(msave_coll, sizeof msave_coll, "%s", j->coll);
+  msave_done = msave_failed = 0; msave_total = j->src == MS_EHENTAI && j->total ? j->total : j->n;
+  msave_title[0] = 0;
+  pthread_t t;
+  pthread_attr_t at;
+  pthread_attr_init(&at);
+  pthread_attr_setstacksize(&at, 512 * 1024); // (it decodes the thumbnails)
+  msave_on = 1;
+  if (pthread_create(&t, &at, msave_main, j) != 0) { msave_on = 0; lv_strings_free(j->urls, j->n); free(j); sfx(SFX_ERROR); say("It couldn't start"); return; }
+  pthread_detach(t);
+  sfx(SFX_OPEN);
+  char m[260];
+  snprintf(m, sizeof m, "Saving \u201c%.200s\u201d into the vault", j->coll);
+  say(m);
+}
+
 static void mg_start_thread(void) {
   if (mg_thread_on) return;
   pthread_t t;
@@ -259,6 +464,7 @@ static void mg_read(int chapter) {
   mg.chapter = chapter;
   mg.page = 0;
   mg.zoom = 1; mg.pan_x = mg.pan_y = 0;
+  mg.tall_top = 1;
   mg.gallery_p = 0;
   mg.pages_loading = 1;
   char url[600];
@@ -509,6 +715,7 @@ static void mg_turn(int d) {
   else { for (int k = 0; k < 3; k++) { release_tex(mg.ptex[k]); mg.ptex[k] = NULL; mg.ptex_page[k] = -1; } }
   mg.page = np;
   mg.zoom = 1; mg.pan_x = mg.pan_y = 0;
+  mg.tall_top = 1;
 }
 static void draw_reader(void) {
   mg_take();
@@ -533,12 +740,17 @@ static void draw_reader(void) {
     }
   }
   vita2d_texture *t = mg.ptex_page[0] == mg.page ? mg.ptex[0] : NULL;
+  int tall = 0;
+  static float tall_my, tall_v;
   if (t) {
     float tw = vita2d_texture_get_width(t), th = vita2d_texture_get_height(t);
-    float s = fminf(W / tw, H / th) * mg.zoom;
-    if (tw > W || th > H) s = fminf(W / tw, H / th) * mg.zoom; // (the sharper one, when zoomed)
+    // (a tall page, a webtoon's: the screen's width, from its top, scrolled down)
+    tall = th > tw * 2.2f;
+    float s = (tall ? W / tw : fminf(W / tw, H / th)) * mg.zoom;
     float dw = tw * s, dh = th * s;
     float mx = fmaxf(0, (dw - W) / 2), my = fmaxf(0, (dh - H) / 2);
+    if (tall && mg.tall_top) { mg.pan_y = my; mg.tall_top = 0; tall_v = 0; }
+    if (tall) { mg.pan_y += tall_v; tall_v *= 0.93f; if (fabsf(tall_v) < 0.3f) tall_v = 0; tall_my = my; }
     mg.pan_x = fminf(mx, fmaxf(-mx, mg.pan_x));
     mg.pan_y = fminf(my, fmaxf(-my, mg.pan_y));
     vita2d_draw_texture_scale(t, (W - dw) / 2 + mg.pan_x + mg.swipe, (H - dh) / 2 + mg.pan_y, s, s);
@@ -555,14 +767,27 @@ static void draw_reader(void) {
   if (in.touching) {
     if (in.tcount >= 2) { float d = hypotf(in.t2x - in.tx, in.t2y - in.ty); if (pd0 == 0) { pd0 = d; z0 = mg.zoom; } else mg.zoom = fminf(4, fmaxf(1, z0 * d / pd0)); }
     else if (mg.zoom > 1.01f) { pd0 = 0; mg.pan_x += in.drag_dx; mg.pan_y += in.drag_dy; }
+    else if (tall && fabsf((float)(in.ty - in.down_y)) >= fabsf((float)(in.tx - in.down_x))) { pd0 = 0; mg.pan_y += in.drag_dy; tall_v = 0; }
     else { pd0 = 0; mg.swipe += in.drag_dx; }
   } else {
     pd0 = 0;
+    if (in.flicked && tall && mg.zoom < 1.01f && fabsf(in.fvy) > fabsf(in.fvx)) tall_v = in.fvy * 1.4f;
     if (mg.swipe < -120) { mg.swipe = 0; mg_turn(1); }
     else if (mg.swipe > 120) { mg.swipe = 0; mg_turn(-1); }
     mg.swipe *= 0.6f;
   }
   // buttons: ←/→ (or a tap on either side) turn, L/R the chapters, ✕ zoom, ○ back
+  // the save button, top right (or △)
+  {
+    char sl[64];
+    if (msave_on) snprintf(sl, sizeof sl, "Saving %d / %d", msave_done, msave_total);
+    else snprintf(sl, sizeof sl, "Save %s", mg.src == MS_MANGADEX ? "chapter" : "gallery");
+    int bw = text_w(15, sl) + 48;
+    rrect(W - bw - 12, 10, bw, 36, 18, RGBA(0, 0, 0, 170));
+    if (msave_on) spinner(W - bw + 10, 28, 8); else icon("plus", W - bw + 10, 28, TEXT);
+    text(W - bw + 26, 34, TEXT, 15, sl);
+    if (hit(W - bw - 12, 6, bw, 44) || (in.pressed & SCE_CTRL_TRIANGLE)) { in.tap = 0; if (!msave_on) msave_start(); }
+  }
   if (in.tap && mg.zoom < 1.01f) { if (in.tap_x > W * 2 / 3) mg_turn(1); else if (in.tap_x < W / 3) mg_turn(-1); }
   if (in.pressed & SCE_CTRL_RIGHT) mg_turn(1);
   if (in.pressed & SCE_CTRL_LEFT) mg_turn(-1);
@@ -570,6 +795,12 @@ static void draw_reader(void) {
   if (mg.src == MS_MANGADEX && (in.pressed & SCE_CTRL_LTRIGGER) && mg.chapter > 0) { sfx(SFX_MORE); mg_read(mg.chapter - 1); return; }
   if (in.pressed & SCE_CTRL_CROSS) { mg.zoom = mg.zoom > 1.5f ? 1 : 2; mg.pan_x = mg.pan_y = 0; }
   if (mg.zoom > 1.01f) { mg.pan_x -= in.lx * 12; mg.pan_y -= in.ly * 12; }
+  else if (tall) {
+    // a tall page: the stick scrolls, ↑↓ a screenful (↓ at its foot: the next page)
+    mg.pan_y -= in.ly * 16;
+    if (in.pressed & SCE_CTRL_UP) tall_v = 22;
+    if (in.pressed & SCE_CTRL_DOWN) { if (mg.pan_y <= -tall_my + 2) mg_turn(1); else tall_v = -22; }
+  }
   // (zoomed in: the page again at twice the screen, once)
   static int hi_page = -1;
   if (mg.zoom > 1.25f && hi_page != mg.page && t && vita2d_texture_get_width(t) <= W) { hi_page = mg.page; mg_want_page(mg.page, 1); }

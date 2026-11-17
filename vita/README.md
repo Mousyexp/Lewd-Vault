@@ -29,7 +29,7 @@ Untraceable vault's cached thumbnails are encrypted with its key, like everythin
 
 | | Touch | Buttons |
 |---|---|---|
-| Library | tap a card; drag to scroll; hold a card for its quick actions; drag the right edge to fly through the months; tap a category chip | D-pad/stick; ✕ open (hold: quick actions); L/R category; △ sort; □ filters; START slideshow; ○ next tab |
+| Library | tap a mode (All, Pictures, Videos, Comics) or a category chip; tap a card; drag to scroll; hold a card for its quick actions; drag the right edge to fly through the months | D-pad/stick; ✕ open (hold: quick actions); L/R the mode; △ sort; □ filters; START slideshow; ○ next tab (in a book: back to the shelf) |
 | Full view | swipe for the next; pinch to zoom; double-tap zoom (or heart: Settings); the filmstrip at the bottom; pull up for details | ←/→ or L/R next; ✕ zoom; △ details (↑↓ choose, ←→ change: stars, level, category, tags, delete); □ heart; START slideshow; ○ back |
 | A video | tap the bar to jump | ✕ play/pause; ←/→ 10 s; the stick scrubs; ↑ 2× / 4× (no sound); ↓ A-B loop (A, B, off); L/R next |
 | Browser | tap the site button (the tabs), Filter, the sort, the search box; tap a card | L/R previous/next site; △ sort; □ filter; START the site list; ✕ open; ○ next tab |
@@ -38,6 +38,16 @@ Untraceable vault's cached thumbnails are encrypted with its key, like everythin
 
 Settings: search the Library, video volume, interface sounds, what a double tap does, the glow behind
 pictures, Google Drive, another vault, clearing the thumbnail cache.
+
+**Modes** (the switch beside the title, or L / R): **All**, **Pictures** (pictures and GIFs, not
+comics' pages), **Videos**, and **Comics**: a shelf of books, one card each (its first page, its pages
+counted). A book is a collection whose pages are marked as a comic: the category Comics, Manga,
+Doujinshi, Webtoon or Manhwa, or one of those words as a tag, so comics made on the PC or synced
+from Drive show up as they are. A book opens at its first page, or at the page after the one last
+looked at; its pages run in order ("page 2" before "page 10"); ○ goes back to the shelf. **Tall pages**
+(a webtoon's strips, taller than 2.2 times their width) are shown at the screen's width from their top
+and scroll down: drag, flick, the stick, or ↑↓ a screenful at a time (↓ at the foot: the next page).
+The Manga reader does the same.
 
 **The Library's tools** (`src/lib.c`), as on the phone: Filters (□) for the kind, NSFW up to, stars,
 smart albums (Never opened, Forgotten, Long videos, Most loved, 1 star, Continue watching), a
@@ -73,16 +83,25 @@ vault's `_app/kv/resume.json`, the same file the PC's Videos tab keeps, so it ca
 
 ## The Browser
 
-Danbooru, Yande.re, Konachan, e621, Xbooru, TBIB, Hypnohub, AIBooru, Safebooru and e926, read through
-their JSON APIs (the same four kinds of site as the desktop's Discover: `src/booru.c`), so no web page
+Anime and hentai boorus only: Danbooru, Yande.re, Konachan, Xbooru, Hypnohub, AIBooru, Safebooru,
+Sakugabooru, Gelbooru, and Xbooru's and Danbooru's comics, read through their JSON APIs (the same four kinds of site as the desktop's Discover: `src/booru.c`), so no web page
 loads. The grid is the Library's; the site button is the tab bar (L/R step through it), Filter picks
 the ratings (General, Sensitive, Questionable, Explicit), the search and which category saves go into,
 and the sort is Latest, Hot (where the site has it), Top or Random. More results load as you scroll.
 The site button opens the sites window (`tools/make-site-icons.mjs` draws its icons). It has three
 tabs (L / R): **Manga** (MangaDex and E-Hentai: covers, a book's chapters, and a reader that turns
 pages with ←/→, a tap at either side or a swipe, L / R for the chapters, ✕ to zoom; `src/manga.c`,
-`src/manga_ui.c`), **Pictures**, the sites, ending in **+** to add any booru by its address (the Vita works
-out which of the four kinds it is; □ removes one you added), and **Videos**, the video sources, which
+`src/manga_ui.c`; △ or **Save chapter** puts the chapter, or the whole E-Hentai gallery, into the
+vault as a comic: its pages as they are, the category Comics, the book's tags and `comic`, one
+collection, so it's a book in the Library's Comics mode), **Pictures**, the sites, and **Videos**. Each
+tab ends in **+**, the **source finder**: it reads the lists other booru tools keep (gallery-dl's
+supported sites, the `booru` library's sites.json, Grabber's site lists: `src/discover.c`), keeps the
+sites of the kinds the Browser reads, leaves out what's never offered (sites for minors, furry,
+pony and real-people boorus), then asks each one as the Browser would: does it answer, and how many of
+its latest 40 are videos. One press adds a site, or a video source (□ in the switcher removes one
+you added; "Type an address" adds any booru by hand). The lists know few sites the app doesn't have
+already: most of what turns up are the video sources (AIBooru, Hypnohub, Safebooru, ...). The Manga
+tab says why it can't offer more: each reader site is a program of its own. **Videos**, the video sources, which
 open the **video browser**: a banner with what's trending, then rows (Trending, New, Top this month,
 Top of all time, Something random) of cards, as the TV apps have them; a video plays in the
 Browser's own full view. hanime.tv and MissAV are listed but locked: both only answer after a
@@ -238,14 +257,15 @@ times (`perf ...`) and any step over 4 ms (`pt ...`).
 | File | What it is |
 |---|---|
 | `src/main.c` | The screens: picker, password, library, full view, settings, cover |
-| `src/lib.c` | The Library's filters, tags panel, saved filters, quick actions, selecting many, editing |
+| `src/lib.c` | The Library's modes (All, Pictures, Videos, Comics: books), filters, tags panel, saved filters, quick actions, selecting many, editing |
 | `src/show.c` | The slideshow's sessions and plan; Continue watching |
 | `src/pin.c` | The PIN lock (and decoy PIN), and the stats page |
 | `src/wifi.c` | Wi-Fi transfer: the upload page and its server |
 | `src/privacy.c`, `src/clean.c` | The calculator disguise and touch lock; clean up and the health check |
 | `src/livearea.c` | The LiveArea's frames (which vault they open) and its numbers |
 | `src/vbrowse.c` | The video browser |
-| `src/manga.c`, `src/manga_ui.c` | Manga: MangaDex and E-Hentai, the covers, chapters and the reader |
+| `src/manga.c`, `src/manga_ui.c` | Manga: MangaDex and E-Hentai, the covers, chapters and the reader, saving a chapter as a comic |
+| `src/discover.c`, `tests/discover/` | The source finder's readers of the booru lists, and saved copies of those lists |
 | `tools/make-ui-icons.mjs` | The tab bar's and buttons' icons (`ui/`) |
 | `src/drive.c`, `src/drive_ui.c` | Google Drive: the sign-in, the sync, its screen |
 | `src/third_party/qrcodegen.*` | Project Nayuki's QR code generator (MIT, its notice in the file) |

@@ -761,7 +761,7 @@ static void ask_previews(const int *list, int n) {
 
 // ---------- sheets: the sites, and the filter ----------
 
-enum { SH_NONE, SH_SITES, SH_FILTER, SH_SEARCH };
+enum { SH_NONE, SH_SITES, SH_FILTER, SH_SEARCH, SH_FIND };
 static int sheet, sheet_sel;
 
 // (the video sources: vbrowse.c)
@@ -771,6 +771,10 @@ static const char *vsource_icon(int k);
 static const char *vsource_about(int k);
 static int vsource_blocked(int k);
 static void vb_open(int k);
+static int vsrc_has_site(const char *site);
+static int vsrc_add(const char *site, const char *tags);
+static int vsrc_is_added(int k);
+static void vsrc_remove(int k);
 // (the manga sources: manga_ui.c)
 static const char *msource_name(int k);
 static const char *msource_icon(int k);
@@ -870,6 +874,255 @@ static void add_site_poll(void) {
   add_state = 0;
 }
 
+// ---------- finding sources: the lists other booru tools keep, read on the Vita ----------
+// gallery-dl's supported sites, the "booru" library's sites.json and Grabber's site lists
+// (discover.c), merged; each site found then asked once, as the Browser would (does it answer, and
+// with videos?). Pictures: the sites not here yet. Videos: those, and the sites here with videos that
+// the video browser hasn't got yet. One press adds one.
+typedef struct {
+  LvCand c;
+  int site;   // (one of LV_SITES already: its place; -1 a new one)
+  int state;  // 0 to ask, 1 asking, 2 answers, 3 doesn't answer (why), 4 added (pictures), 5 added (videos)
+  int videos; // (of the latest 40)
+  char why[40];
+} FRow;
+#define FROWS 48
+static FRow frows[FROWS];
+static int nfrows;
+static volatile int find_state; // 0 not yet, 1 reading the lists, 2 asking the sites, 3 done
+static volatile int find_lists;  // (the lists read)
+static int find_tab, find_sel;
+static float find_scroll;
+static pthread_mutex_t fdmx = PTHREAD_MUTEX_INITIALIZER;
+static const char *video_tags_for(int kind) { return kind == BK_DANBOORU ? "filetype:mp4" : kind == BK_GELBOORU ? "video" : ""; }
+static void draw_letter_icon(int x, int y, int sz, const char *name);
+static const char *KIND_NAMES[] = {"Danbooru", "Gelbooru", "Moebooru", "e621"};
+static void *find_main(void *arg) {
+  (void)arg;
+  pin_to_core(2); // (off the drawing thread's core)
+  LvHttp *h = lv_http_new();
+  static LvCand c[160];
+  int n = 0;
+  const char *err;
+  // the lists
+  for (int k = 0; k < 5 && h; k++) {
+    char url[300];
+    if (k == 0) snprintf(url, sizeof url, "%s", LV_INDEX_GALLERYDL);
+    else if (k == 1) snprintf(url, sizeof url, "%s", LV_INDEX_BOORUJS);
+    else snprintf(url, sizeof url, "%s%s/sites.txt", LV_INDEX_GRABBER, LV_GRABBER_DIRS[k - 2]);
+    uint8_t *b = NULL;
+    size_t bn = 0;
+    if (lv_http_get(h, url, &b, &bn, 4u << 20, NULL, NULL, &err) == 200 && b) {
+      if (k == 0) lv_disc_gallerydl((char *)b, bn, c, &n, 160);
+      else if (k == 1) lv_disc_boorujs((char *)b, bn, c, &n, 160);
+      else lv_disc_lines((char *)b, bn, LV_GRABBER_KINDS[k - 2], c, &n, 160);
+      find_lists++;
+    }
+    free(b);
+  }
+  // the rows: the sites found that aren't here; then the ones here, for their videos
+  pthread_mutex_lock(&fdmx);
+  nfrows = 0;
+  for (int k = 0; k < n && nfrows < FROWS; k++) {
+    int here = 0;
+    for (int s = 0; s < LV_NSITES && !here; s++) here = lv_disc_same_site(LV_SITES[s].base, c[k].base) && !LV_SITES[s].preset;
+    if (here) continue;
+    FRow *r = &frows[nfrows++];
+    memset(r, 0, sizeof *r);
+    r->c = c[k]; r->site = -1;
+  }
+  for (int s = 0; s < LV_NSITES && nfrows < FROWS; s++) {
+    const LvSite *st = &LV_SITES[s];
+    if (st->hidden || st->preset || st->kind == BK_E621 || vsrc_has_site(st->name)) continue;
+    FRow *r = &frows[nfrows++];
+    memset(r, 0, sizeof *r);
+    snprintf(r->c.name, sizeof r->c.name, "%s", st->name);
+    snprintf(r->c.base, sizeof r->c.base, "%s", st->base);
+    r->c.kind = st->kind; r->site = s;
+  }
+  find_state = 2;
+  pthread_mutex_unlock(&fdmx);
+  // each asked, as the Browser would: the latest 40, and how many are videos
+  for (int k = 0; h && k < nfrows; k++) {
+    pthread_mutex_lock(&fdmx);
+    FRow r = frows[k];
+    frows[k].state = 1;
+    pthread_mutex_unlock(&fdmx);
+    LvSite site = {.name = r.c.name, .kind = r.c.kind, .base = r.c.base};
+    if (r.site >= 0) site = LV_SITES[r.site];
+    char url[600];
+    int state = 3, videos = 0;
+    char why[40] = "doesn't answer";
+    const char *key = r.site >= 0 && wkeys[r.site][0] ? wkeys[r.site] : NULL;
+    if (site.needs_key && !key) snprintf(why, sizeof why, "needs an account key");
+    else {
+      for (int pass = 0; pass < 2; pass++) {
+        // (first as a picture site, then for its videos)
+        lv_booru_url_ex(&site, pass ? video_tags_for(site.kind) : "", LV_R_ALL, LV_SORT_LATEST, 0, key, 0, url, sizeof url);
+        uint8_t *b = NULL;
+        size_t bn = 0;
+        int st = lv_http_get(h, url, &b, &bn, 4u << 20, NULL, NULL, &err);
+        int np = 0;
+        LvPost *p = st == 200 && b ? lv_booru_parse(&site, (char *)b, bn, LV_R_ALL, &np) : NULL;
+        if (!pass) {
+          if (p && np > 0) state = 2;
+          else if (st == 403 || st == 503 || (b && bn > 15 && strstr((char *)b, "Just a moment"))) snprintf(why, sizeof why, "browser check (Cloudflare)");
+          else if (st == 200) snprintf(why, sizeof why, "answers, but not as a booru");
+        } else for (int q = 0; q < np; q++) videos += lv_post_is_video(&p[q]);
+        lv_posts_free(p, np);
+        free(b);
+        if (state != 2) break;
+      }
+    }
+    pthread_mutex_lock(&fdmx);
+    frows[k].state = state; frows[k].videos = videos;
+    snprintf(frows[k].why, sizeof frows[k].why, "%s", why);
+    pthread_mutex_unlock(&fdmx);
+  }
+  lv_http_free(h);
+  find_state = 3;
+  return NULL;
+}
+static void find_open(int tab) {
+  find_tab = tab; find_sel = 0; find_scroll = 0;
+  sheet = SH_FIND;
+  if (find_state == 1 || find_state == 2) return; // (still going)
+  find_state = 1; find_lists = 0;
+  nvsources(); // (the video sources read here, on this thread: the finder's thread only looks at them)
+  pthread_mutex_lock(&fdmx); nfrows = 0; pthread_mutex_unlock(&fdmx);
+  lv_net_init();
+  pthread_t t;
+  pthread_attr_t at;
+  pthread_attr_init(&at);
+  pthread_attr_setstacksize(&at, 256 * 1024);
+  if (pthread_create(&t, &at, find_main, NULL) == 0) pthread_detach(t);
+  else { find_state = 3; say("It couldn't start"); }
+}
+// the rows a tab shows (into list: places in frows)
+static int find_rows(int tab, int *list) {
+  int m = 0;
+  for (int k = 0; k < nfrows; k++) {
+    const FRow *r = &frows[k];
+    if (tab == 0 && r->site < 0) list[m++] = k;
+    else if (tab == 1 && (r->state <= 1 || r->videos > 0 || r->state == 5) && (r->state != 3)) list[m++] = k;
+  }
+  return m;
+}
+static void find_add(int k) {
+  FRow *r = &frows[k];
+  if (r->state != 2) {
+    if (r->state < 2) say("Still asking that site…");
+    else if (r->state == 3) { sfx(SFX_ERROR); char m[96]; snprintf(m, sizeof m, "%s %s", r->c.name, r->why); say(m); }
+    return;
+  }
+  int site = r->site;
+  if (site < 0) {
+    for (int s = 0; s < LV_NSITES; s++) if (lv_disc_same_site(LV_SITES[s].base, r->c.base) && !LV_SITES[s].preset) site = s;
+    if (site < 0) {
+      if (lv_booru_add_site(r->c.name, r->c.kind, r->c.base) != 0) { sfx(SFX_ERROR); say("No room for more sites (□ in the switcher removes one)"); return; }
+      custom_sites_save();
+      site = LV_NSITES - 1;
+    }
+  }
+  if (find_tab == 1) {
+    if (vsrc_add(LV_SITES[site].name, video_tags_for(LV_SITES[site].kind)) != 0) { sfx(SFX_ERROR); say("It's there already, or there's no room for more"); return; }
+    r->state = 5;
+    sfx(SFX_DONE);
+    char m[96]; snprintf(m, sizeof m, "%s added to the video sources", LV_SITES[site].name); say(m);
+  } else {
+    r->state = 4;
+    sfx(SFX_DONE);
+    char m[96]; snprintf(m, sizeof m, "%s added to the sites", LV_SITES[site].name); say(m);
+  }
+  r->site = site;
+}
+static void draw_find_sheet(void) {
+  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 170));
+  int wx = 60, wy = 18, ww = W - 120, wh = H - 36 - BAR + 40;
+  rrect(wx, wy, ww, wh, 26, SURF);
+  text(wx + 24, wy + 40, TEXT, 22, "Find sources");
+  // the tabs
+  static const char *tabs[] = {"Pictures", "Videos", "Manga"};
+  static const char *tab_icons[] = {"image", "film", "book"};
+  int segw = 390, tw3 = segw / 3, segx = wx + ww - segw - 20, segy = wy + 14;
+  rrect(segx, segy, segw, 40, 20, SURF2);
+  rrect(segx + 3 + find_tab * tw3, segy + 3, tw3 - 6, 34, 17, ACC);
+  for (int t = 0; t < 3; t++) {
+    unsigned c = t == find_tab ? RGBA(20, 12, 16, 255) : TEXT;
+    int lw = text_w(16, tabs[t]) + 30, lx = segx + t * tw3 + (tw3 - lw) / 2;
+    icon(tab_icons[t], lx + 11, segy + 20, c);
+    text(lx + 28, segy + 26, c, 16, tabs[t]);
+    if (hit(segx + t * tw3, segy, tw3, 40) && find_tab != t) { find_tab = t; find_sel = 0; find_scroll = 0; sfx(SFX_TAB); }
+  }
+  if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) { find_tab = (find_tab + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : 2)) % 3; find_sel = 0; find_scroll = 0; sfx(SFX_TAB); }
+  pthread_mutex_lock(&fdmx);
+  int list[FROWS], m = find_tab < 2 ? find_rows(find_tab, list) : 0;
+  int asking = 0, total = nfrows;
+  for (int k = 0; k < nfrows; k++) asking += frows[k].state <= 1;
+  // the line under the title: where it's at
+  char st[160];
+  if (find_state == 1) snprintf(st, sizeof st, "Reading the lists of boorus (gallery-dl, booru, Grabber)… %d of 5", find_lists);
+  else if (find_state == 2) snprintf(st, sizeof st, "Asking each site, as the Browser would… %d of %d", total - asking, total);
+  else if (!find_lists) snprintf(st, sizeof st, "The lists couldn't be read: is the Vita online?");
+  else snprintf(st, sizeof st, "From %d lists: %d sites of the kinds the Browser reads (anime and hentai only)", find_lists, total);
+  text_fit(wx + 24, wy + 72, FAINT, 14, st, ww - 48);
+  if (find_state == 1 || find_state == 2) spinner(wx + ww - 34, wy + 66, 9);
+  int top = wy + 90, rh = 66, vis = (wh - 150) / rh;
+  if (find_tab == 2) {
+    static const char *lines[] = {
+      "The Manga tab reads MangaDex and E-Hentai: their own APIs and pages, which no list describes",
+      "for other sites (each reader site is a program of its own, not a kind like the boorus).",
+      "So there's nothing to add here yet: open Manga in the switcher for both.",
+      "Comics already on the PC or in Google Drive show in the Library's Comics mode as they are."};
+    for (int k = 0; k < 4; k++) text_fit(wx + 30, top + 40 + k * 30, k == 2 ? TEXT : DIM, 16, lines[k], ww - 60);
+  } else {
+    if (find_sel >= m) find_sel = m ? m - 1 : 0;
+    if (find_sel < find_scroll) find_scroll = find_sel;
+    if (find_sel >= find_scroll + vis) find_scroll = find_sel - vis + 1;
+    if (in.touching && in.down_y > top) { static float acc; acc += in.drag_dy; if (acc < -50 && find_scroll + vis < m) { find_scroll++; acc = 0; } if (acc > 50 && find_scroll > 0) { find_scroll--; acc = 0; } }
+    for (int j = 0; j < vis && find_scroll + j < m; j++) {
+      int k = list[(int)find_scroll + j];
+      FRow *r = &frows[k];
+      int y = top + j * rh, on = (int)find_scroll + j == find_sel;
+      if (on) rrect(wx + 14, y, ww - 28, rh - 6, 16, SURF2);
+      draw_letter_icon(wx + 24, y + 8, 44, r->c.name);
+      text_fit(wx + 80, y + 28, TEXT, 18, r->c.name, ww - 330);
+      char sub[220];
+      const char *host = strstr(r->c.base, "://");
+      snprintf(sub, sizeof sub, "%s · %s%s", host ? host + 3 : r->c.base, KIND_NAMES[r->c.kind & 3], r->site >= 0 && find_tab == 1 && r->state < 4 ? " · in your sites" : "");
+      if (find_tab == 1 && r->state == 2) { size_t o = strlen(sub); snprintf(sub + o, sizeof sub - o, " · %d of the latest 40 are videos", r->videos); }
+      text_fit(wx + 80, y + 50, FAINT, 13, sub, ww - 330);
+      // the button
+      int bx = wx + ww - 200, by = y + 12;
+      if (r->state <= 1) { spinner(bx + 150, by + 18, 9); text(bx + 40, by + 24, FAINT, 14, "asking…"); }
+      else if (r->state == 3) text_fit(bx - 20, by + 24, ACC2, 13, r->why, 200);
+      else if (r->state >= 4) { rrect(bx + 40, by, 140, 36, 18, SURF2); text_center(bx + 110, by + 24, DIM, 15, "✓ Added"); }
+      else {
+        rrect(bx + 40, by, 140, 36, 18, ACC);
+        icon("plus", bx + 64, by + 18, RGBA(20, 12, 16, 255));
+        text(bx + 80, by + 24, RGBA(20, 12, 16, 255), 15, "Add");
+        if (hit(bx + 40, by, 140, 36)) { find_sel = (int)find_scroll + j; in.pressed |= SCE_CTRL_CROSS; }
+      }
+      if (hit(wx + 14, y, ww - 260, rh - 6)) find_sel = (int)find_scroll + j;
+    }
+    if (!m && find_state == 3) text_center(W / 2, top + 80, DIM, 17, find_tab ? "No more sites with videos found" : "Every site the lists know (of the kinds the Browser reads) is here already");
+    if (in.pressed & SCE_CTRL_DOWN) { if (find_sel + 1 < m) { find_sel++; sfx(SFX_TICK); } }
+    if (in.pressed & SCE_CTRL_UP) { if (find_sel > 0) { find_sel--; sfx(SFX_TICK); } }
+    if ((in.pressed & SCE_CTRL_CROSS) && m) find_add(list[find_sel]);
+  }
+  pthread_mutex_unlock(&fdmx);
+  // the foot: by its address instead (the old way), and closing
+  int fy = wy + wh - 52, bw = text_w(15, "Type an address") + 50;
+  rrect(wx + 20, fy, bw, 38, 19, SURF2);
+  icon("search", wx + 42, fy + 19, TEXT);
+  text(wx + 58, fy + 25, TEXT, 15, "Type an address");
+  text(wx + 40 + bw, fy + 25, FAINT, 13, "□ type an address   ○ close");
+  if ((hit(wx + 20, fy, bw, 38) || (in.pressed & SCE_CTRL_SQUARE)) && !ime_open) { sheet = SH_NONE; ime_start(14, "The site's address (like booru.example.org)", "", 0); }
+  else if ((in.pressed & SCE_CTRL_CIRCLE) || (in.tap && !(in.tap_x >= wx && in.tap_x < wx + ww && in.tap_y >= wy && in.tap_y < wy + wh))) { sfx(SFX_CLOSE); sheet = SH_SITES; }
+  in.pressed = 0;
+  in.tap = 0;
+}
+
 // The site switcher: a window with two tabs, Pictures (the sites, and + to add one) and Videos (the
 // video sources, opening the video browser); each with its icon (sites/*.png).
 static int sites_tab;      // 0 pictures, 1 videos, 2 manga
@@ -900,7 +1153,7 @@ static void draw_sites_sheet(void) {
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 170));
   const int cols = 6, tw = 142, th = 136, gap = 10;
   int vis[LV_MAX_SITES], nvis = sites_visible(vis);
-  int n = sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : nvis + 1; // (+ the add tile)
+  int n = (sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : nvis) + 1; // (+ the add tile)
   int rows = (n + cols - 1) / cols, vis_rows = rows < 3 ? rows : 3;
   int ww = cols * tw + (cols - 1) * gap + 36, wh = vis_rows * th + (vis_rows - 1) * gap + 100;
   int wx = (W - ww) / 2, wy = 18;
@@ -922,7 +1175,7 @@ static void draw_sites_sheet(void) {
   if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
     sites_tab = (sites_tab + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : 2)) % 3;
     sheet_sel = 0; sites_scroll = 0; sfx(SFX_TAB);
-    n = sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : nvis + 1;
+    n = (sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : nvis) + 1;
     rows = (n + cols - 1) / cols;
   }
   if (sheet_sel >= n) sheet_sel = n - 1;
@@ -937,11 +1190,11 @@ static void draw_sites_sheet(void) {
     int x = wx + 18 + (k % cols) * (tw + gap), y = top + r * (th + gap);
     int on = k == sheet_sel;
     const char *name, *about, *ic;
-    int cur, blocked = 0, add = !sites_tab && k == nvis, slot;
+    int cur, blocked = 0, add = k == n - 1, slot;
     int site = !sites_tab && k < nvis ? vis[k] : -1;
-    if (sites_tab == 2) { name = msource_name(k); about = msource_about(k); ic = msource_icon(k); cur = screen == S_MANGA && k == mg_src_now(); slot = 48 + k; }
+    if (add) { name = sites_tab == 2 ? "More manga" : sites_tab ? "Add a source" : "Add a site"; about = "Found for you, one press"; ic = "add"; cur = 0; slot = 31; }
+    else if (sites_tab == 2) { name = msource_name(k); about = msource_about(k); ic = msource_icon(k); cur = screen == S_MANGA && k == mg_src_now(); slot = 48 + k; }
     else if (sites_tab) { name = vsource_name(k); about = vsource_about(k); ic = vsource_icon(k); cur = k == vb_cur; blocked = vsource_blocked(k); slot = 32 + k; }
-    else if (add) { name = "Add a site"; about = "Any booru, by its address"; ic = "add"; cur = 0; slot = 31; }
     else { name = LV_SITES[site].name; about = LV_SITES[site].about; ic = LV_SITES[site].icon; cur = site == cfg.site; slot = site; }
     if (on) rrect(x - 3, y - 3, tw + 6, th + 6, 20, ACC);
     rrect(x, y, tw, th, 18, on ? SURF2 : with_alpha(SURF2, 140));
@@ -952,6 +1205,7 @@ static void draw_sites_sheet(void) {
     text_fit(x + 10, y + 100, cur ? ACC : TEXT, 15, name, tw - 20);
     if (about) text_fit(x + 10, y + 122, FAINT, 12, about, tw - 20);
     if (cur) { circle(x + tw - 16, y + 16, 10, ACC); text_center(x + tw - 16, y + 21, RGBA(20, 12, 16, 255), 13, "✓"); }
+    if (sites_tab == 1 && !add && vsrc_is_added(k)) { rrect(x + 8, y + 8, 50, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 33, y + 23, DIM, 12, "\u25a1 off"); }
     if (!sites_tab && !add && LV_SITES[site].needs_key && !wkeys[site][0]) { rrect(x + 8, y + 8, 36, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 26, y + 23, DIM, 12, "key"); }
     if (blocked) { rrect(x + 8, y + 8, 50, 20, 10, RGBA(0, 0, 0, 170)); text_center(x + 33, y + 23, DIM, 12, "locked"); }
     if (hit(x, y, tw, th)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
@@ -968,13 +1222,13 @@ static void draw_sites_sheet(void) {
   if (in.pressed & SCE_CTRL_DOWN) { row = (row + 1) % rows; sheet_sel = row * cols + col < n ? row * cols + col : col; }
   if (in.pressed & SCE_CTRL_UP) { row = (row + rows - 1) % rows; while (row * cols + col >= n) row--; sheet_sel = row * cols + col; }
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP | SCE_CTRL_LEFT | SCE_CTRL_RIGHT)) sfx(SFX_TICK);
-  if (in.pressed & SCE_CTRL_CROSS) {
+  if ((in.pressed & SCE_CTRL_CROSS) && sheet_sel == n - 1) { sfx(SFX_OPEN); find_open(sites_tab); }
+  else if ((in.pressed & SCE_CTRL_SQUARE) && sites_tab == 1 && vsrc_is_added(sheet_sel)) { vsrc_remove(sheet_sel); sfx(SFX_DELETE); say("Video source removed"); }
+  else if (in.pressed & SCE_CTRL_CROSS) {
     if (sites_tab == 2) { sfx(SFX_SELECT); sheet = SH_NONE; manga_open(sheet_sel); }
     else if (sites_tab) {
       if (vsource_blocked(sheet_sel)) { sfx(SFX_ERROR); say("This site only answers after a browser check (Cloudflare), so the Vita can't reach it"); }
       else { sfx(SFX_SELECT); sheet = SH_NONE; vb_open(sheet_sel); }
-    } else if (sheet_sel == nvis) {
-      if (!ime_open) { sheet = SH_NONE; ime_start(14, "The site's address (like booru.example.org)", "", 0); }
     } else { int st = vis[sheet_sel]; sfx(SFX_SELECT); sheet = SH_NONE; if (st != cfg.site) { cfg.site = st; if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST; web_search(); } }
   }
   // □ on a site added by hand: removed
@@ -1355,6 +1609,7 @@ static void draw_web(void) {
   if (sheet == SH_SITES) draw_sites_sheet();
   else if (sheet == SH_FILTER) draw_filter_sheet();
   else if (sheet == SH_SEARCH) draw_search_sheet();
+  else if (sheet == SH_FIND) draw_find_sheet();
   if (wkey_ask && !ime_open) { wkey_ask = 0; ime_start(11, "API key", "", 0); }
 }
 

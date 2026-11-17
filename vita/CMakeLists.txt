@@ -23,7 +23,7 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
 
 # (src/web.c, lib.c, show.c and drive_ui.c are compiled as part of main.c)
 add_executable(${PROJECT_NAME} src/main.c src/vault.c src/lvcrypt.c src/image.c src/video.c src/booru.c src/json.c src/net.c src/sfx.c
-  src/drive.c src/manga.c src/third_party/qrcodegen.c)
+  src/drive.c src/manga.c src/discover.c src/third_party/qrcodegen.c)
 # Google Drive: a build can carry a "TVs and Limited Input devices" key of the PC's Google Cloud project
 # (CI secrets; never in the repository). Without one, it's typed in once on the Vita.
 if(NOT "$ENV{LEWD_VAULT_GOOGLE_TV_CLIENT_ID}" STREQUAL "" AND NOT "$ENV{LEWD_VAULT_GOOGLE_TV_CLIENT_SECRET}" STREQUAL "")

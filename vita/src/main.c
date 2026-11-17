@@ -28,6 +28,7 @@
 #include <psp2/kernel/processmgr.h>
 #include <psp2/power.h>
 #include <pthread.h>
+#include <ctype.h>
 #include <dirent.h>
 #include <math.h>
 #include <stdarg.h>
@@ -47,6 +48,7 @@
 #include "booru.h"
 #include "drive.h"
 #include "net.h"
+#include "discover.h"
 #include <psp2/kernel/clib.h>
 #ifdef LV_DEBUG
 // (debug builds: PT("label") logs the time since the last mark when it's over 4 ms)
@@ -269,7 +271,8 @@ static struct {
   int wspan, wfull; // the Browser: Top's span (LV_SPAN_*), saves at full size
   int hide, tlock;  // SELECT shows: 0 the clock, 1 the calculator; touch lock's time (privacy.c)
   char local_vault[512]; // the last vault opened that isn't the Google Drive one (livearea.c)
-} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, ""};
+  int lmode;             // the Library's mode: 0 everything, 1 pictures, 2 videos, 3 comics (lib.c)
+} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0};
 static void cfg_load(void) {
   FILE *f = fopen(DATA "/config.txt", "r");
   if (!f) return;
@@ -300,6 +303,7 @@ static void cfg_load(void) {
     else if (!strcmp(line, "hide")) cfg.hide = atoi(eq) != 0;
     else if (!strcmp(line, "tlock")) cfg.tlock = atoi(eq) & 3;
     else if (!strcmp(line, "local_vault")) snprintf(cfg.local_vault, sizeof cfg.local_vault, "%s", eq);
+    else if (!strcmp(line, "lmode")) cfg.lmode = atoi(eq);
   }
   fclose(f);
   if (cfg.interval < 2 || cfg.interval > 60) cfg.interval = 5;
@@ -309,6 +313,7 @@ static void cfg_load(void) {
   if (cfg.wsort < 0 || cfg.wsort > 3) cfg.wsort = 0;
   if (cfg.wpages < 0 || cfg.wpages > 50) cfg.wpages = 0;
   if (cfg.kind < 0 || cfg.kind > 3) cfg.kind = 0;
+  if (cfg.lmode < 0 || cfg.lmode > 3) cfg.lmode = 0;
   if (cfg.sort < 0 || cfg.sort >= 7) cfg.sort = 0;
   if (cfg.wsel < 0) cfg.wsel = 0;
   if (cfg.sounds < 0 || cfg.sounds > 100) cfg.sounds = 70;
@@ -317,9 +322,9 @@ static void cfg_load(void) {
 static void cfg_save(void) {
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
-          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault);
+          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -335,6 +340,9 @@ static const char *SORTS[] = {"Newest", "Oldest", "Most viewed", "Top rated", "M
 #define NSORTS 7
 static int lib_pass(int i);
 static void lib_prepare(void);
+static int mode_pass(int i);
+static int lib_books(void);
+static int book_shelf, book_inside; // (lib.c: the Comics mode's shelf of books, or one book's pages)
 static void sort_foryou(void);
 
 static int is_video(const LvItem *it) { return !strcmp(it->kind, "video"); }
@@ -366,8 +374,10 @@ static int cmp_items(const void *a, const void *b) {
 }
 static Grid lgrid;
 static float lib_aspect(int k) {
+  if (book_shelf) return 0.7f; // (every book the same shape, as on a shelf)
   const LvItem *it = &vault.items[shown[k]];
-  return it->width > 0 && it->height > 0 ? (float)it->width / it->height : 0.75f;
+  float a = it->width > 0 && it->height > 0 ? (float)it->width / it->height : 0.75f;
+  return a < 0.5f ? 0.5f : a; // (a webtoon's strip: a card, not a sliver; the card shows its top)
 }
 
 static void refilter(void) {
@@ -376,9 +386,10 @@ static void refilter(void) {
   nshown = 0;
   if (!shown) { grid_build(&lgrid, 0, NULL); return; }
   lib_prepare();
+  if (lib_books()) { grid_build(&lgrid, nshown, lib_aspect); return; } // (the Comics mode: books, or a book's pages in order)
   for (int i = 0; i < vault.n; i++) {
     if (cat >= 0 && vault.hot[i].cat != cat) continue;
-    if (!lib_pass(i)) continue;
+    if (!mode_pass(i) || !lib_pass(i)) continue;
     shown[nshown++] = i;
   }
   sort_mode = cfg.sort;
@@ -743,6 +754,7 @@ static void ask_thumbs(const int *items, int n) {
   pthread_mutex_unlock(&mx);
 }
 static int big_hi, big_hi_item = -1;
+static int is_tall(const LvItem *it) { return it->width > 0 && it->height > it->width * 2.2f && strcmp(it->kind, "video"); }
 static void ask_big(int item) {
   pthread_mutex_lock(&mx);
   big_gen++;
@@ -750,6 +762,9 @@ static void ask_big(int item) {
   big_ask.gen = big_gen;
   big_ask.max_w = big_hi ? 1920 : W; // (the screen's pixels; twice that only once zoomed in)
   big_ask.max_h = big_hi ? 1920 : H;
+  // (a tall page, a webtoon's strip: read at the screen's width, scrolling down, so it's decoded to
+  //  that width, as tall as a texture can be)
+  if (item >= 0 && item < vault.n && is_tall(&vault.items[item])) { big_ask.max_w = W; big_ask.max_h = 4096; }
   big_failed = 0;
   pthread_cond_signal(&cv);
   pthread_mutex_unlock(&mx);
@@ -1479,6 +1494,15 @@ static void draw_library(void) {
       rrect(x + cw - tw - 16, y + ch - 26, tw + 12, 20, 10, RGBA(0, 0, 0, 150));
       text(x + cw - tw - 10, y + ch - 11, TEXT, 13, d);
     }
+    if (book_shelf) { // (a book: its name across the foot, its pages in the corner)
+      grad(x, y + ch - 46, cw, 46, RGBA(0, 0, 0, 255), 0, 200, 0);
+      text_fit((int)x + 8, (int)(y + ch - 10), TEXT, 14, it->collection, (int)cw - 16);
+      char pc[24];
+      snprintf(pc, sizeof pc, "%d p", book_count[i]);
+      int tw = text_w(13, pc);
+      rrect(x + cw - tw - 16, y + 6, tw + 12, 20, 10, RGBA(0, 0, 0, 160));
+      text(x + cw - tw - 10, y + 21, TEXT, 13, pc);
+    }
     if (lv_likes_of(&vault, it) > 0) heart(x + 16, y + ch - 16, 6, ACC);
     if (is_locked(i)) { // (above the level the slideshow session has reached)
       vita2d_draw_rectangle(x, y, cw, ch, RGBA(14, 10, 14, 225));
@@ -1494,6 +1518,7 @@ static void draw_library(void) {
     if (hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR) {
       sel = k;
       if (selecting) { picked[i] ^= 1; npicked += picked[i] ? 1 : -1; sfx(SFX_TOGGLE); }
+      else if (book_shelf) { sfx(SFX_OPEN); open_book(k); in = saved_in; return; }
       else { sfx(SFX_SELECT); open_viewer(k, 0); in = saved_in; return; }
     }
   }
@@ -1502,6 +1527,10 @@ static void draw_library(void) {
     if (!thumb_of(shown[k]) && tstate[shown[k]] != 3) { if (k < lgrid.n) want_size(shown[k], lgrid.r[k].w, lgrid.r[k].h); wanted[nw++] = shown[k]; }
   ask_thumbs(wanted, nw);
   if (!nshown) {
+    if (cfg.lmode == 3 && !query[0]) {
+      text_center(W / 2, TOP + 150, DIM, 20, "No comics yet");
+      text_center(W / 2, TOP + 180, FAINT, 16, "Save a chapter from the Manga tab, or give a collection the category Comics");
+    } else
     text_center(W / 2, TOP + 150, DIM, 20, query[0] ? "Nothing matches that search" : "Nothing here");
     if (query[0]) text_center(W / 2, TOP + 180, FAINT, 16, "Tap Library below to see everything again");
   }
@@ -1514,29 +1543,47 @@ static void draw_library(void) {
 
   // --- the top: title, then the category chips ---
   vita2d_draw_rectangle(0, 0, W, TOP, with_alpha(BG, 250));
-  text(18, 36, TEXT, 26, "Library");
-  char info[96];
-  snprintf(info, sizeof info, "%d %s", nshown, nshown == 1 ? "item" : "items");
-  text(18 + text_w(26, "Library") + 12, 34, FAINT, 15, info);
   int sx = W - 16;
+  int title_end;
+  if (book_inside) { // (in a book: back to the shelf, and its name)
+    rrect(12, 8, 44, 36, 18, SURF2);
+    icon("back", 34, 26, TEXT);
+    if (hit(12, 4, 44, 44)) { sfx(SFX_BACK); close_book(); in = saved_in; in.pressed = 0; in.tap = 0; draw_bar(); return; }
+    title_end = 66;
+  } else {
+    text(18, 36, TEXT, 26, "Library");
+    title_end = 18 + text_w(26, "Library") + 14;
+    title_end += draw_modes(title_end, 6) + 12;
+  }
   char kl[64];
-  int nf = (cfg.kind != 0) + (lf.nsfw_max != 0) + (lf.stars_min != 0) + (lf.album != 0) + (lf.coll[0] != 0);
+  int nf = (cfg.kind != 0) + (lf.nsfw_max != 0) + (lf.stars_min != 0) + (lf.album != 0) + (lf.coll[0] != 0 && !book_inside);
   if (nf) snprintf(kl, sizeof kl, "Filters \u00b7 %d", nf); else snprintf(kl, sizeof kl, "Filters");
   int hb;
-  sx -= head_button(sx, "sort", SORTS[cfg.sort], SURF2, &hb) + 10;
-  if (hb || (!selecting && (in.pressed & SCE_CTRL_TRIANGLE))) { sfx(SFX_TOGGLE); cfg.sort = (cfg.sort + 1) % NSORTS; refilter(); cfg_save(); sel = 0; scroll = 0; }
+  if (!book_inside) {
+    sx -= head_button(sx, "sort", SORTS[cfg.sort], SURF2, &hb) + 10;
+    if (hb || (!selecting && (in.pressed & SCE_CTRL_TRIANGLE))) { sfx(SFX_TOGGLE); cfg.sort = (cfg.sort + 1) % NSORTS; refilter(); cfg_save(); sel = 0; scroll = 0; }
+  }
   sx -= head_button(sx, "sliders", kl, nf ? with_alpha(ACC, 110) : SURF2, &hb) + 10;
   if (hb || (!selecting && (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); lsheet = LS_FILTERS; lsheet_sel = 0; }
   if (query[0]) {
     char q[160];
-    snprintf(q, sizeof q, "\u201c%s\u201d", query);
+    snprintf(q, sizeof q, "\u201c%.14s%s\u201d", query, strlen(query) > 14 ? "\u2026" : "");
     sx -= head_button(sx, "xmark", q, with_alpha(ACC, 80), &hb) + 10;
     if (hb) { query[0] = 0; refilter(); }
   }
-  // categories: L / R, or tap
-  if (in.pressed & (SCE_CTRL_RTRIGGER | SCE_CTRL_LTRIGGER)) sfx(SFX_TAB);
-  if (in.pressed & SCE_CTRL_RTRIGGER) { cat = cat + 1 >= vault.ncats ? -1 : cat + 1; refilter(); sel = 0; scroll = 0; }
-  if (in.pressed & SCE_CTRL_LTRIGGER) { cat = cat - 1 < -1 ? vault.ncats - 1 : cat - 1; refilter(); sel = 0; scroll = 0; }
+  {
+    char info[200];
+    if (book_inside) snprintf(info, sizeof info, "%s \u00b7 %d pages", lf.coll, nshown);
+    else snprintf(info, sizeof info, "%d %s", nshown, book_shelf ? (nshown == 1 ? "book" : "books") : nshown == 1 ? "item" : "items");
+    int room = sx - title_end - 6;
+    if (book_inside) text_fit(title_end, 33, TEXT, 20, info, room);
+    else if (room > text_w(15, info)) text(title_end, 32, FAINT, 15, info);
+  }
+  // the modes: L / R (in a book: back to the shelf first); the categories: tap
+  if (in.pressed & (SCE_CTRL_RTRIGGER | SCE_CTRL_LTRIGGER)) {
+    if (book_inside) close_book();
+    set_mode((cfg.lmode + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : 3)) % 4);
+  }
   if (in.touching && in.ty < TOP && in.ty > 48) chips_scroll -= in.drag_dx;
   if (chips_scroll < 0) chips_scroll = 0;
   float cxp = 12 - chips_scroll;
@@ -1548,7 +1595,7 @@ static void draw_library(void) {
       if (hit((int)cxp, 50, w, 38)) { sfx(SFX_TAB); cat = k; refilter(); sel = 0; scroll = 0; }
     }
     // keep the chosen chip in view
-    if (k == cat && (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER))) {
+    if (k == cat && (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) && 0) {
       if (cxp < 0) chips_scroll += cxp - 12;
       if (cxp + w > W) chips_scroll += cxp + w - W + 12;
     }
@@ -1566,9 +1613,11 @@ static void draw_library(void) {
     if ((in.pressed & SCE_CTRL_TRIANGLE) && npicked) { sfx(SFX_OPEN); lsheet = LS_BATCH; lsheet_sel = 0; delete_armed = 0; }
     if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); selecting = 0; if (picked) memset(picked, 0, vault.n + 1); npicked = 0; in.pressed &= ~SCE_CTRL_CIRCLE; }
   } else {
-    if (open_now && nshown) { sfx(SFX_SELECT); open_viewer(sel, 0); }
-    if ((in.pressed & SCE_CTRL_START) && nshown) { sfx(SFX_SLIDESHOW); open_viewer(sel, 1); }
-    if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_WEB; } // (○ goes round the tabs: Library, Browser, Settings)
+    if (open_now && nshown && book_shelf) { sfx(SFX_OPEN); open_book(sel); }
+    else if (open_now && nshown) { sfx(SFX_SELECT); open_viewer(sel, 0); }
+    if ((in.pressed & SCE_CTRL_START) && nshown && !book_shelf) { sfx(SFX_SLIDESHOW); open_viewer(sel, 1); }
+    if ((in.pressed & SCE_CTRL_CIRCLE) && book_inside) { sfx(SFX_BACK); close_book(); }
+    else if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_WEB; } // (○ goes round the tabs: Library, Browser, Settings)
   }
   draw_bar();
   in = saved_in;
@@ -1596,6 +1645,8 @@ static float mo_x, mo_y;             // the slide's motion: which way it drifts 
 static unsigned heart_at;            // (a double tap's heart, shown big for a moment)
 static unsigned view_started;
 static float pinch_d0, zoom0;
+static int tall_top;   // (a tall page just shown: it starts at its top)
+static float tall_v;   // (and a flick keeps it moving)
 
 // A video is closed at the start of the next frame, not in the middle of one: the frame being put
 // together may already draw its picture, which lives in the player's own memory.
@@ -1724,6 +1775,7 @@ static void show_item(int k) {
   vk = k;
   LvItem *it = &vault.items[shown[vk]];
   zoom = 1; pan_x = pan_y = 0;
+  tall_top = 1; tall_v = 0;
   big_hi_item = -1;
   mo_x = (rnd() % 2001) / 1000.0f - 1; mo_y = (rnd() % 2001) / 1000.0f - 1;
   char now[40];
@@ -1781,8 +1833,10 @@ static void close_viewer(void) {
 
 static void fmt_time(uint64_t ms, char *o, size_t n) { int s = (int)(ms / 1000); snprintf(o, n, "%d:%02d", s / 60, s % 60); }
 
+static int tall_fit; static float tall_my;
 static void draw_viewer(void) {
   if (nshown == 0) { screen = S_LIBRARY; return; }
+  tall_fit = 0;
   LvItem *it = &vault.items[shown[vk]];
   // the player opened on the other thread, for this picture
   if (vopen_ready && !vid) {
@@ -1843,10 +1897,14 @@ static void draw_viewer(void) {
   if (t) {
     float tw = is_frame ? lv_video_width(vid) : vita2d_texture_get_width(t);
     float th = is_frame ? lv_video_height(vid) : vita2d_texture_get_height(t);
-    float s = fminf(W / tw, avail_h / th) * zoom * ms;
+    // (a tall page: the screen's width, scrolled down; the thumbnail, cropped, stays whole meanwhile)
+    tall_fit = !is_frame && t != th_now && th > tw * 2.2f;
+    float s = (tall_fit ? W / tw : fminf(W / tw, avail_h / th)) * zoom * ms;
     float dw = tw * s, dh = th * s;
     // keep a zoomed picture's edges on screen
     float mx = fmaxf(0, (dw - W) / 2), my = fmaxf(0, (dh - avail_h) / 2);
+    if (tall_fit && tall_top) { pan_y = my; tall_top = 0; }
+    if (tall_fit) { pan_y += tall_v; tall_v *= 0.93f; if (fabsf(tall_v) < 0.3f) tall_v = 0; tall_my = my; }
     pan_x = fminf(mx, fmaxf(-mx, pan_x));
     pan_y = fminf(my, fmaxf(-my, pan_y));
     float x = (W - dw) / 2 + pan_x + swipe_x + mdx, y = (avail_h - dh) / 2 + pan_y + mdy;
@@ -1881,11 +1939,13 @@ static void draw_viewer(void) {
     } else {
       pinch_d0 = 0;
       if (zoom > 1.01f) { pan_x += in.drag_dx; pan_y += in.drag_dy; }
+      else if (tall_fit && fabsf((float)(in.ty - in.down_y)) >= fabsf((float)(in.tx - in.down_x))) { pan_y += in.drag_dy; tall_v = 0; }
       else if (fabsf((float)(in.tx - in.down_x)) > fabsf((float)(in.ty - in.down_y))) swipe_x += in.drag_dx;
       else if (in.ty - in.down_y < -60) { details = 1; }
     }
   } else {
     pinch_d0 = 0;
+    if (in.flicked && tall_fit && zoom < 1.01f && fabsf(in.fvy) > fabsf(in.fvx)) tall_v = in.fvy * 1.4f;
     if (swipe_x > 120) { swipe_x = 0; sfx(SFX_TICK); show_item(vk - 1); return; }
     if (swipe_x < -120) { swipe_x = 0; sfx(SFX_TICK); show_item(vk + 1); return; }
     swipe_x *= 0.7f;
@@ -1946,6 +2006,11 @@ static void draw_viewer(void) {
     if (fabsf(in.lx) > 0.4f && frame_no % 6 == 0) { lv_video_seek(vid, (int64_t)lv_video_pos(vid) + (int64_t)(in.lx * 4000)); chrome_until = frame_no + 120; }
   } else if (zoom > 1.01f) {
     pan_x -= in.lx * 12; pan_y -= in.ly * 12;
+  } else if (tall_fit && !details) {
+    // a tall page: the stick scrolls, ↑↓ a screenful (↓ at its foot: the next page)
+    pan_y -= in.ly * 16;
+    if (in.pressed & SCE_CTRL_UP) tall_v = 22;
+    if (in.pressed & SCE_CTRL_DOWN) { if (pan_y <= -tall_my + 2) { sfx(SFX_TICK); show_item(vk + 1); return; } tall_v = -22; }
   }
   if (in.now & SCE_CTRL_RTRIGGER && in.ly) zoom = fminf(6, fmaxf(1, zoom - in.ly * 0.05f));
 
@@ -2408,6 +2473,7 @@ int main(void) {
     if (web_started) web_take_results();
     PT("web_take_results");
     if (loaded_vault) wf_take();
+    msave_take();
     if (frame_no % 30 == 0) la_poll_events();
     if (wf_run && screen != S_WIFI && screen != S_COVER) wf_stop(); // (the server only while its screen is open)
 
