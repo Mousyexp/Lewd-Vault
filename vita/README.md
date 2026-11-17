@@ -56,6 +56,17 @@ In **All**, a row over the grid: **Continue watching** (videos stopped part way,
 Library with two fingers to make the cards a size bigger or smaller (the three sizes of Filters' Card
 size). On the Comics shelf each book has its spine, its pages' edges and a bar for how far it's been read.
 
+The tab bar: its capsule stretches from tab to tab; the Library shows how many came in from the
+Browser since it was looked at; the Browser has a ring while a save, an offline copy or a conversion
+is going; hold Library for the Comics shelf, hold Browser for Favourites. A new tab slides in from its
+side; sheets spring open. The video browser's banner drifts slowly; each source is left where it was;
+**Up next** has your favourite videos. Search: your recent searches on the site as chips; after typing,
+"Did you mean" offers the tags the last word could be (from the results and past searches);
+**≈ Similar** in either full view's details (✕ there) searches for what that one is most about.
+**Three fingers tapped together** (all at once, kept still, lifted quickly) bring up the calculator
+cover at once, as SELECT does. The very first start shows three cards: the vault, the gestures and
+Wi-Fi transfer.
+
 On every screen the chosen card or row has the same ring, gliding from one to the next; a card
 still loading shows its shape with a light passing over it and a small loading ring.
 

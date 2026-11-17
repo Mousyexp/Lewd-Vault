@@ -372,9 +372,21 @@ static void draw_cats_sheet(void) {
 
 static void lib_after_change(void) { refilter(); if (sel >= nshown) sel = nshown ? nshown - 1 : 0; }
 
+// A sheet's backdrop and body. Opening (not drawn the frame before): the dim comes in, and an
+// outline springs out from it and settles, a little past and back, as it lands.
 static void sheet_frame(int x, int y, int w, int h) {
-  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 150));
+  static unsigned last, opened;
+  if (frame_no - last > 2) opened = frame_no;
+  last = frame_no;
+  unsigned age = frame_no - opened;
+  float p = fminf(1, age / 14.0f);
+  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, (int)(150 * fminf(1, age / 6.0f))));
   rrect(x, y, w, h, 16, SURF);
+  if (p < 1) {
+    // (a damped spring: out past the edge, back, settling)
+    float g = 10 * expf(-5 * p) * cosf(p * 9.0f);
+    ring9(x - g, y - g, w + 2 * g, h + 2 * g, with_alpha(ACC, (int)(200 * (1 - p))));
+  }
 }
 static int sheet_row(int k, int x, int y, int w, int rh, const char *name, const char *value) {
   if (k == lsheet_sel) rrect(x + 6, y, w - 12, rh - 4, 10, SURF2);

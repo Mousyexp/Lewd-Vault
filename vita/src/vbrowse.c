@@ -142,8 +142,14 @@ typedef struct {
 static VRow vrows[VB_ROWS];
 static vita2d_texture *vb_hero;
 static int vb_hero_state;
-static int vb_row, vb_col[VB_ROWS];
-static float vb_y, vb_x[VB_ROWS]; // (the view: how far down; each row: how far along)
+static int vb_row, vb_col[VB_ROWS + 1];
+static float vb_y, vb_x[VB_ROWS + 1]; // (the view: how far down; each row: how far along; [VB_ROWS]: Up next)
+// (where each source was left: its row and each row's card, put back when it's opened again)
+static struct { int set, row, col[VB_ROWS + 1]; } vb_mem[VSRC_MAX];
+static int upnext_n(void), upnext_state(int j), upnext_len(int j); // (favs.c: the favourite videos, "Up next")
+static vita2d_texture *upnext_tex(int j, int w, int h);
+static const char *upnext_title(int j);
+static void upnext_play(int j), upnext_take(void);
 static pthread_cond_t vbcv = PTHREAD_COND_INITIALIZER;
 static volatile int vb_gen;
 static int vb_thread_on;
@@ -249,9 +255,11 @@ static void vb_open(int k) {
   nvb_done = 0;
   nvb_want = 0;
   if (vb_list.ready) { lv_posts_free(vb_list.p, vb_list.n); vb_list.ready = 0; }
+  if (vb_src >= 0 && vb_src < VSRC_MAX) { vb_mem[vb_src].set = 1; vb_mem[vb_src].row = vb_row; memcpy(vb_mem[vb_src].col, vb_col, sizeof vb_col); }
   vb_clear();
   vb_src = k;
   vb_cur = k;
+  if (k >= 0 && k < VSRC_MAX && vb_mem[k].set) { vb_row = vb_mem[k].row; memcpy(vb_col, vb_mem[k].col, sizeof vb_col); }
   pthread_cond_broadcast(&vbcv);
   pthread_mutex_unlock(&vbmx);
   if (!vb_thread_on) {
@@ -349,6 +357,9 @@ static void vb_ask(int r, int k) {
 
 static void draw_videos(void) {
   vb_take();
+  upnext_take();
+  int nup = upnext_n();
+  if (vb_row > VB_ROWS || (vb_row == VB_ROWS && !nup)) vb_row = 0;
   vita2d_draw_rectangle(0, 0, W, H, RGBA(8, 6, 10, 255));
   const VSource *src = &VSRC[vb_src < 0 ? 0 : vb_src];
   int site = vsource_site(vb_src);
@@ -359,9 +370,11 @@ static void draw_videos(void) {
   // ---- the banner: the first trending video, big, fading into the page ----
   VRow *r0 = &vrows[0];
   if (vb_hero) {
-    float s = W / (float)vita2d_texture_get_width(vb_hero);
-    vita2d_draw_texture_scale(vb_hero, 0, y0, s, HERO_H / (float)vita2d_texture_get_height(vb_hero));
-    (void)s;
+    // (slowly moving: a little zoomed in, drifting side to side and back, like a trailer)
+    float tw = vita2d_texture_get_width(vb_hero), th = vita2d_texture_get_height(vb_hero);
+    float u = 0.5f - 0.5f * cosf(frame_no * 6.2832f / 1500), z = 1.1f;
+    float pw = tw / z, ph = th / z;
+    vita2d_draw_texture_part_scale(vb_hero, 0, y0, (tw - pw) * u, (th - ph) * 0.4f, pw, ph, W / pw, HERO_H / ph);
   } else rrect(0, y0, W, HERO_H, 0, RGBA(30, 20, 30, 255));
   grad(0, y0 + HERO_H - 120, W, 120, RGBA(8, 6, 10, 255), 15, 255, 0);
   grad(0, y0, 360, HERO_H, RGBA(8, 6, 10, 255), 190, 0, 1);
@@ -390,6 +403,7 @@ static void draw_videos(void) {
     if (row->state == 3) { text(30, ry + 60, FAINT, 14, row->err[0] ? row->err : "Nothing here"); continue; }
     if (row->state < 2) { for (int k = 0; k < 5; k++) skeleton(30 + k * (VB_CW + 12), ry + 32, VB_CW, VB_CH, 10); spinner(30 + VB_CW / 2, ry + 32 + VB_CH / 2, 12); continue; }
     if (!row->n) { text(30, ry + 60, FAINT, 14, "No videos here"); continue; }
+    if (vb_col[r] >= row->n) vb_col[r] = row->n - 1; // (a remembered place past a shorter list)
     // (the chosen card kept in sight)
     float want = vb_col[r] * (VB_CW + 12) - (W - 60 - VB_CW) / 2.0f;
     if (want < 0) want = 0;
@@ -420,6 +434,33 @@ static void draw_videos(void) {
       if (hit((int)x, (int)cy, VB_CW, VB_CH) && in.tap_y < H - BAR) { vb_row = r; vb_col[r] = k; sfx(SFX_SELECT); vb_play(r, k); return; }
     }
   }
+  // ---- Up next: the favourite videos, after the rows ----
+  if (nup) {
+    const int r = VB_ROWS;
+    if (ry < H && ry + VB_CH + 40 > 0) {
+      text(30, ry + 20, r == vb_row ? TEXT : DIM, 18, "Up next \u00b7 your Favourites");
+      float want = vb_col[r] * (VB_CW + 12) - (W - 60 - VB_CW) / 2.0f;
+      if (want < 0) want = 0;
+      if (r == vb_row) vb_x[r] += (want - vb_x[r]) * 0.25f;
+      if (in.touching && in.down_y > ry && in.down_y < ry + VB_CH + 40) { vb_x[r] -= in.drag_dx; vb_row = r; }
+      for (int k = 0; k < nup; k++) {
+        float x = 30 + k * (VB_CW + 12) - vb_x[r], cy = ry + 32;
+        if (x > W || x + VB_CW < 0) continue;
+        int on = r == vb_row && k == vb_col[r] && !in.touching;
+        vita2d_texture *t = upnext_tex(k, VB_CW, VB_CH);
+        if (t) draw_cover(t, x, cy, VB_CW, VB_CH, RGBA(255, 255, 255, 255));
+        else if (upnext_state(k) == 3) rrect(x, cy, VB_CW, VB_CH, 10, SURF);
+        else { skeleton(x, cy, VB_CW, VB_CH, 10); spinner(x + VB_CW / 2, cy + VB_CH / 2, 10); }
+        grad(x, cy + VB_CH - 50, VB_CW, 50, RGBA(0, 0, 0, 255), 0, 200, 0);
+        text_fit((int)x + 10, (int)cy + VB_CH - 12, TEXT, 13, upnext_title(k), VB_CW - 20);
+        int len = upnext_len(k);
+        if (len > 0) { char l[16]; snprintf(l, sizeof l, "%d:%02d", len / 60, len % 60); int lw = text_w(11, l) + 12; rrect(x + VB_CW - lw - 6, cy + 8, lw, 18, 9, RGBA(0, 0, 0, 160)); text(x + VB_CW - lw, cy + 21, TEXT, 11, l); }
+        heart(x + 16, cy + 18, 6, ACC);
+        if (on) focus_ring(x, cy, VB_CW, VB_CH);
+        if (hit((int)x, (int)cy, VB_CW, VB_CH) && in.tap_y < H - BAR) { vb_row = r; vb_col[r] = k; sfx(SFX_SELECT); upnext_play(k); return; }
+      }
+    }
+  }
   // ---- the top: back, the source (its tab of the site switcher) ----
   grad(0, 0, W, 70, RGBA(8, 6, 10, 255), 210, 0, 0);
   rrect(16, 10, 44, 40, 20, with_alpha(TEXT, 40));
@@ -435,15 +476,17 @@ static void draw_videos(void) {
   if (hit(72, 10, sw, 40)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
   text(W - 20 - text_w(13, "✕ play  ·  ○ back  ·  START sources"), 36, FAINT, 13, "✕ play  ·  ○ back  ·  START sources");
   // ---- the buttons ----
-  VRow *cur = &vrows[vb_row];
-  if (in.pressed & SCE_CTRL_DOWN) { if (vb_row < VB_ROWS - 1) { vb_row++; sfx(SFX_TICK); } }
+  int last_row = nup ? VB_ROWS : VB_ROWS - 1, cur_n = vb_row == VB_ROWS ? nup : vrows[vb_row].n;
+  if (in.pressed & SCE_CTRL_DOWN) { if (vb_row < last_row) { vb_row++; sfx(SFX_TICK); } }
   if (in.pressed & SCE_CTRL_UP) { if (vb_row > 0) { vb_row--; sfx(SFX_TICK); } }
-  if (in.pressed & SCE_CTRL_RIGHT) { if (vb_col[vb_row] < cur->n - 1) { vb_col[vb_row]++; sfx(SFX_TICK); } }
+  cur_n = vb_row == VB_ROWS ? nup : vrows[vb_row].n;
+  VRow *cur = vb_row < VB_ROWS ? &vrows[vb_row] : NULL;
+  if (in.pressed & SCE_CTRL_RIGHT) { if (vb_col[vb_row] < cur_n - 1) { vb_col[vb_row]++; sfx(SFX_TICK); } }
   if (in.pressed & SCE_CTRL_LEFT) { if (vb_col[vb_row] > 0) { vb_col[vb_row]--; sfx(SFX_TICK); } }
   vb_x[vb_row] += in.lx * 12;
-  if ((in.pressed & SCE_CTRL_CROSS) && cur->n) { sfx(SFX_SELECT); vb_play(vb_row, vb_col[vb_row]); return; }
+  if ((in.pressed & SCE_CTRL_CROSS) && cur_n) { sfx(SFX_SELECT); if (cur) vb_play(vb_row, vb_col[vb_row]); else upnext_play(vb_col[vb_row]); return; }
   if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = S_WEB; return; }
   if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
   // the next ones just out of sight, ready
-  for (int k = vb_col[vb_row]; k < vb_col[vb_row] + 6 && k < cur->n; k++) vb_ask(vb_row, k);
+  if (cur) for (int k = vb_col[vb_row]; k < vb_col[vb_row] + 6 && k < cur->n; k++) vb_ask(vb_row, k);
 }

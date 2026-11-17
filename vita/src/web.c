@@ -1704,7 +1704,75 @@ static void wcount_tags(void) {
   }
   free(tab);
 }
-enum { SR_TYPE, SR_MARK, SR_CLEAR, SR_HEAD, SR_TAG, SR_RECENT, SR_BMARK };
+enum { SR_TYPE, SR_MARK, SR_CLEAR, SR_HEAD, SR_TAG, SR_RECENT, SR_BMARK, SR_CHIPS, SR_AC };
+// ---- completing the last word typed: the tags it could be (from these results' tags and the words of
+// past searches), shown after the keyboard closes: in the sheet and as chips over the grid ----
+static char ac_list[10][48];
+static int nac, ac_chip;
+static unsigned ac_until; // (the chips over the grid: until then)
+static void wcount_tags(void);
+static void ac_build(const char *q) {
+  nac = 0;
+  const char *w = strrchr(q, ' ');
+  w = w ? w + 1 : q;
+  if (*w == '-' || *w == '~') w++;
+  size_t n = strlen(w);
+  if (n < 2) return;
+  wcount_tags();
+  const char *cand[64];
+  int nc = 0;
+  for (int k = 0; k < nwtags && nc < 64; k++) cand[nc++] = wtags[k].t;
+  // (the words of past searches)
+  static char words[48][48];
+  int nw = 0;
+  for (int k = 0; k < nwrecent && nw < 48; k++) {
+    char b[160];
+    snprintf(b, sizeof b, "%s", wrecent[k].q);
+    for (char *s = strtok(b, " "); s && nw < 48; s = strtok(NULL, " ")) { if (*s == '-' || *s == '~') s++; snprintf(words[nw++], 48, "%s", s); }
+  }
+  for (int k = 0; k < nw && nc < 64; k++) cand[nc++] = words[k];
+  // starting with it first, then containing it; not itself; once each
+  for (int pass = 0; pass < 2; pass++)
+    for (int k = 0; k < nc && nac < 10; k++) {
+      const char *c = cand[k];
+      if (!strcasecmp(c, w)) continue;
+      int ok = pass == 0 ? !strncasecmp(c, w, n) : strncasecmp(c, w, n) && strcasestr(c, w) != NULL;
+      if (!ok) continue;
+      int dup = 0;
+      for (int j = 0; j < nac; j++) dup |= !strcmp(ac_list[j], c);
+      if (!dup) snprintf(ac_list[nac++], 48, "%s", c);
+    }
+  ac_chip = 0;
+  ac_until = nac ? frame_no + 600 : 0;
+}
+// the last word put in place of one of them, and searched again
+static void ac_apply(int k) {
+  if (k < 0 || k >= nac) return;
+  char q[128];
+  snprintf(q, sizeof q, "%s", cfg.wquery);
+  char *w = strrchr(q, ' ');
+  w = w ? w + 1 : q;
+  if (*w == '-' || *w == '~') w++;
+  *w = 0;
+  snprintf(cfg.wquery, sizeof cfg.wquery, "%s%s", q, ac_list[k]);
+  nac = 0; ac_until = 0;
+  sfx(SFX_SELECT);
+  web_search();
+}
+// chips: a row of them from x, at most to x + w; the one chosen (sel, or -1) ringed. Returns the one
+// tapped, or -1.
+static int chips_row(int x, int y, int w, const char *const *labels, int n, int sel) {
+  int cx = x, got = -1;
+  for (int k = 0; k < n; k++) {
+    int cw = text_w(15, labels[k]) + 26;
+    if (cx + cw > x + w) break;
+    rrect(cx, y, cw, 30, 15, k == sel ? with_alpha(ACC, 230) : SURF2);
+    text(cx + 13, y + 21, k == sel ? RGBA(20, 12, 16, 255) : TEXT, 15, labels[k]);
+    if (hit(cx, y, cw, 30)) got = k;
+    cx += cw + 8;
+  }
+  return got;
+}
 typedef struct { int kind, i; } SRow;
 static float ssheet_scroll;
 static void web_add_tag(const char *t, int minus) {
@@ -1718,6 +1786,12 @@ static void draw_search_sheet(void) {
   SRow rows[64];
   int n = 0;
   rows[n++] = (SRow){SR_TYPE, 0};
+  if (nac && cfg.wquery[0]) rows[n++] = (SRow){SR_AC, 0};
+  // (the recent searches on this site, as chips under it)
+  const char *chip_l[8];
+  int chip_i[8], nchip = 0;
+  for (int k = 0; k < nwrecent && nchip < 8; k++) if (wrecent[k].site == cfg.site && wrecent[k].q[0]) { chip_i[nchip] = k; chip_l[nchip++] = wrecent[k].q; }
+  if (nchip) rows[n++] = (SRow){SR_CHIPS, 0};
   if (cfg.wquery[0]) { rows[n++] = (SRow){SR_MARK, 0}; rows[n++] = (SRow){SR_CLEAR, 0}; }
   if (nwtags) { rows[n++] = (SRow){SR_HEAD, 0}; for (int k = 0; k < nwtags; k++) rows[n++] = (SRow){SR_TAG, k}; }
   if (nwrecent) { rows[n++] = (SRow){SR_HEAD, 1}; for (int k = 0; k < nwrecent && n < 60; k++) rows[n++] = (SRow){SR_RECENT, k}; }
@@ -1747,6 +1821,26 @@ static void draw_search_sheet(void) {
       case SR_TYPE: text(x + 20, ry + 27, TEXT, 17, "Search"); text_fit(x + 110, ry + 27, cfg.wquery[0] ? ACC : FAINT, 15, cfg.wquery[0] ? cfg.wquery : "type tags, like blue_hair smile", w - 130); break;
       case SR_MARK: text(x + 20, ry + 27, TEXT, 17, marked ? "★ Bookmarked (✕ to remove)" : "☆ Bookmark this search"); break;
       case SR_CLEAR: text(x + 20, ry + 27, TEXT, 17, "Clear the search"); break;
+      case SR_CHIPS: {
+        static int chip_sel;
+        if (chip_sel >= nchip) chip_sel = nchip - 1;
+        if (k == sheet_sel && (in.pressed & SCE_CTRL_RIGHT) && chip_sel < nchip - 1) { chip_sel++; sfx(SFX_TICK); }
+        if (k == sheet_sel && (in.pressed & SCE_CTRL_LEFT) && chip_sel > 0) { chip_sel--; sfx(SFX_TICK); }
+        int t = chips_row(x + 20, ry + 6, w - 40, chip_l, nchip, k == sheet_sel ? chip_sel : -1);
+        if (t >= 0) { chip_sel = t; sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; in.tap = 0; }
+        r.i = chip_i[chip_sel < 0 ? 0 : chip_sel];
+        rows[k].i = r.i;
+        break;
+      }
+      case SR_AC: {
+        const char *l[10];
+        for (int j = 0; j < nac; j++) l[j] = ac_list[j];
+        if (k == sheet_sel && (in.pressed & SCE_CTRL_RIGHT) && ac_chip < nac - 1) { ac_chip++; sfx(SFX_TICK); }
+        if (k == sheet_sel && (in.pressed & SCE_CTRL_LEFT) && ac_chip > 0) { ac_chip--; sfx(SFX_TICK); }
+        int t = chips_row(x + 20, ry + 6, w - 40, l, nac, k == sheet_sel ? ac_chip : -1);
+        if (t >= 0) { ac_chip = t; sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; in.tap = 0; }
+        break;
+      }
       case SR_TAG: text(x + 30, ry + 27, TEXT, 17, wtags[r.i].t); snprintf(b, sizeof b, "%d", wtags[r.i].n); text(x + w - 26 - text_w(14, b), ry + 27, FAINT, 14, b); break;
       case SR_RECENT: case SR_BMARK: {
         const WSearch *s = r.kind == SR_RECENT ? &wrecent[r.i] : &wmarks[r.i];
@@ -1755,7 +1849,7 @@ static void draw_search_sheet(void) {
         break;
       }
     }
-    if (hit(x, ry, w, rh)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
+    if (r.kind != SR_CHIPS && r.kind != SR_AC && hit(x, ry, w, rh)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
   if (in.pressed & SCE_CTRL_DOWN) do sheet_sel = (sheet_sel + 1) % n; while (rows[sheet_sel].kind == SR_HEAD);
@@ -1773,6 +1867,9 @@ static void draw_search_sheet(void) {
         break;
       case SR_CLEAR: if (go) { sfx(SFX_CLOSE); cfg.wquery[0] = 0; sheet = SH_NONE; web_search(); } break;
       case SR_TAG: sfx(SFX_SELECT); web_add_tag(wtags[r.i].t, sq); sheet = SH_NONE; web_search(); break;
+      case SR_AC: if (go) { sheet = SH_NONE; ac_apply(ac_chip); } break;
+      case SR_CHIPS: r.kind = SR_RECENT; // (a chip: a recent search, as its row would be)
+      /* fall through */
       case SR_RECENT: case SR_BMARK: {
         WSearch *a = r.kind == SR_RECENT ? wrecent : wmarks;
         int *na = r.kind == SR_RECENT ? &nwrecent : &nwmarks;
@@ -1855,6 +1952,10 @@ static void draw_web(void) {
   static int wlast_top_row = -1;
   if (first < wgrid.n && wgrid.row[first] != wlast_top_row) { if (wlast_top_row >= 0 && (in.touching || wscroll_v != 0 || in.ly)) sfx(SFX_TICK); wlast_top_row = wgrid.row[first]; }
   int wanted[48], nw = 0, last = first;
+  // (a tap on the "Did you mean" strip is the strip's, not the cards' under it)
+  int strip_on = nac && !sheet_open && (frame_no < ac_until || (!nposts && !wloading));
+  int strip_tap = strip_on && in.tap && in.tap_y >= TOP + 2 && in.tap_y < TOP + 44;
+  if (strip_tap) in.tap = 0;
   int flinging = fabsf(wscroll_v) > 30; // (flung fast: no previews asked for in passing; rings shown)
   float fr_x = -1, fr_y = 0, fr_w = 0, fr_h = 0;
   for (int k = first; k < nposts && k < wgrid.n; k++) {
@@ -1887,6 +1988,22 @@ static void draw_web(void) {
     if (!sheet_open && hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR) { wsel = k; sfx(SFX_SELECT); wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; wv_back = S_WEB; screen = S_WEBVIEW; wv_show(k); return; }
   }
   if (fr_x >= 0) focus_ring(fr_x, fr_y, fr_w, fr_h);
+  // (the last word typed could be one of these: chips over the grid for a while, or while there's
+  //  nothing found)
+  if (strip_on && nac) {
+    if (strip_tap) in.tap = 1;
+    const char *l[10];
+    for (int j = 0; j < nac; j++) l[j] = ac_list[j];
+    int y = TOP + 8;
+    int lw = text_w(14, "Did you mean") + 24;
+    rrect(14, y - 4, W - 28, 38, 19, with_alpha(SURF, 235));
+    text(28, y + 19, DIM, 14, "Did you mean");
+    int t = chips_row(14 + lw, y, W - 28 - lw - 40, l, nac, -1);
+    rrect(W - 52, y, 30, 30, 15, SURF2);
+    text_center(W - 37, y + 21, DIM, 14, "\u2715");
+    if (hit(W - 56, y - 4, 40, 38)) { nac = 0; ac_until = 0; in.tap = 0; }
+    else if (t >= 0) { in.tap = 0; ac_apply(t); return; }
+  }
   // (the next screenful the way it's going)
   if (!flinging) {
     int up = wscroll_v < -1 || in.ly < -0.2f || (in.touching && in.drag_dy > 2);
@@ -2429,6 +2546,22 @@ static int wv_episode_card(const LvPost *p) {
   }
   return in.tap && in.tap_x >= x && in.tap_x < x + w && in.tap_y >= y && in.tap_y < y + h; // (a tap on the card: its own)
 }
+// "Similar to this": a search for what this post is most about (similar_tags, main.c), on its site
+static int wv_similar(const LvPost *p) {
+  char q[160];
+  similar_tags(p->tags, NULL, q, sizeof q);
+  if (!q[0]) { sfx(SFX_ERROR); say("No tags here to go by"); return 0; }
+  sfx(SFX_SELECT);
+  snprintf(cfg.wquery, sizeof cfg.wquery, "%s", q);
+  wv_drop();
+  wdetails = 0;
+  screen = S_WEB;
+  web_search();
+  char m[200];
+  snprintf(m, sizeof m, "Like this: %s", q);
+  say(m);
+  return 1;
+}
 static void draw_webview(void) {
   if (!nposts) { screen = wv_back; return; }
   if (sw_on && wv < nposts) { draw_save_wizard(); return; }
@@ -2564,7 +2697,8 @@ static void draw_webview(void) {
   // □: Save (an episode: ♥ Favorite); START: an episode's Offline
   if (in.pressed & SCE_CTRL_SQUARE) { if (wv_is_long()) fav_toggle_video(&posts[wv], wv_site()); else sw_open(); wchrome_until = frame_no + 120; }
   if ((in.pressed & SCE_CTRL_START) && wv_is_long()) { wv_offline(); wchrome_until = frame_no + 120; }
-  if (in.pressed & SCE_CTRL_CROSS) {
+  if ((in.pressed & SCE_CTRL_CROSS) && wdetails) { if (wv_similar(p)) return; }
+  else if (in.pressed & SCE_CTRL_CROSS) {
     if (wv_vid) lv_video_pause(wv_vid, !lv_video_paused(wv_vid));
     else { wzoom = wzoom > 1.5f ? 1 : 2.5f; wpan_x = wpan_y = 0; }
   }
@@ -2638,6 +2772,10 @@ static void draw_webview(void) {
     char line[300];
     snprintf(line, sizeof line, "%s #%lld", LV_SITES[cfg.site].name, p->id);
     text(30, top + 46, TEXT, 22, line);
+    // ≈ Similar (✕ while the details are up)
+    rrect(W - 200, top + 22, 170, 36, 18, ACC);
+    text_center(W - 115, (int)top + 46, RGBA(20, 12, 16, 255), 16, "\u2248 Similar  \u2715");
+    if (hit(W - 200, (int)top + 22, 170, 36)) { if (wv_similar(p)) return; }
     int ri = p->rating == LV_R_EXPLICIT ? 3 : p->rating == LV_R_QUESTIONABLE ? 2 : p->rating == LV_R_SENSITIVE ? 1 : 0;
     snprintf(line, sizeof line, "%s  ·  %s  ·  score %d  ·  %d × %d", RATING_NAMES[ri], p->ext, p->score, p->width, p->height);
     text(30, top + 76, DIM, 15, line);

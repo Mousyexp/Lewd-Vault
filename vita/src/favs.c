@@ -190,6 +190,44 @@ static void fav_take(void) {
     free(got[k].px.rgba);
   }
 }
+static float bar_busy(void) {
+  if (msave_on && msave_total > 0) return fminf(1, msave_done / (float)msave_total);
+  if (conv_on) return 2;
+  if (saving) return big_progress > 0 ? fminf(1, big_progress) : 2;
+  return -1;
+}
+static void fav_thread_start(void) {
+  if (!fav_thread_on) {
+    lv_net_init();
+    pthread_t t;
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setstacksize(&at, 512 * 1024); // (it decodes previews)
+    fav_thread_on = pthread_create(&t, &at, fav_main, NULL) == 0;
+    if (fav_thread_on) pthread_detach(t);
+  }
+}
+static int fav_list(int tab, int *out);
+static void fav_play(int at, int offline);
+// ---- the video browser's "Up next" row: the favourite videos (vbrowse.c) ----
+static int upnext_n(void) {
+  if (!favs_loaded) favs_load();
+  int list[FAV_MAX];
+  return fav_list(0, list);
+}
+static int upnext_at(int j) { int list[FAV_MAX], m = fav_list(0, list); return j >= 0 && j < m ? list[j] : -1; }
+static vita2d_texture *upnext_tex(int j, int w, int h) {
+  int k = upnext_at(j);
+  if (k < 0) return NULL;
+  fav_thread_start();
+  if (!fav_tex[k]) fav_ask(k, w, h);
+  return fav_tex[k];
+}
+static int upnext_state(int j) { int k = upnext_at(j); return k < 0 ? 3 : fav_ts[k]; }
+static const char *upnext_title(int j) { int k = upnext_at(j); return k < 0 ? "" : favs[k].title; }
+static int upnext_len(int j) { int k = upnext_at(j); return k < 0 ? 0 : favs[k].length; }
+static void upnext_play(int j) { int k = upnext_at(j); if (k < 0) return; fav_play(k, 0); if (screen == S_WEBVIEW) wv_back = S_VIDEOS; }
+static void upnext_take(void) { fav_take(); }
 static void favs_open(int tab) {
   if (!favs_loaded) favs_load();
   fav_drop_textures();
@@ -209,7 +247,8 @@ static void favs_open(int tab) {
 // (the favourites of the tab, in order: their places in favs)
 static int fav_list(int tab, int *out) {
   int m = 0;
-  for (int k = 0; k < nfavs; k++) if (favs[k].kind == (tab ? FAV_COMIC : FAV_VIDEO)) out[m++] = k;
+  // (one AI-made, by its title, isn't shown: kept from before that was checked, it stays out of sight)
+  for (int k = 0; k < nfavs; k++) if (favs[k].kind == (tab ? FAV_COMIC : FAV_VIDEO) && !lv_ai_made(favs[k].title)) out[m++] = k;
   return m;
 }
 static int site_named(const char *name) {

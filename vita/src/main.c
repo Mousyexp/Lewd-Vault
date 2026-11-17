@@ -197,7 +197,14 @@ static int text_w(int size, const char *s) {
   memcpy(tw_cache[at].s, s, n + 1);
   return w;
 }
+// A drawing given a coordinate that isn't a number, or is absurdly far off: not drawn (NaN or a huge
+// value reaching the GPU draws garbage over the whole screen). Debug builds say who asked.
+static unsigned bad_draws;
+#define BAD1(v) (!isfinite(v) || fabsf(v) > 20000.0f)
+#define DRAW_GUARD(...) do { float g_[] = {__VA_ARGS__}; for (unsigned g_i = 0; g_i < sizeof g_ / sizeof *g_; g_i++) if (BAD1(g_[g_i])) { \
+    if (bad_draws++ < 40) LOG("bad draw in %s from %p: arg %u = %f\n", __func__, __builtin_return_address(0), g_i, (double)g_[g_i]); return; } } while (0)
 static void text(int x, int y, unsigned col, int size, const char *s) {
+  if (x < -4000 || x > 4000 || y < -4000 || y > 4000 || !s) return; // (off anywhere sensible: a bad number)
   if (pgf && has_wide(s)) vita2d_pgf_draw_text(pgf, x, y, col, size / 17.0f, s);
   else vita2d_font_draw_text(font, x, y, col, size, s);
 }
@@ -253,12 +260,14 @@ static void make_disc(void) {
   vita2d_texture_set_filters(disc, SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
 }
 static void circle(float cx, float cy, float r, unsigned c) {
+  DRAW_GUARD(cx, cy, r);
   if (r <= 0) return;
   if (!disc) { vita2d_draw_fill_circle(cx, cy, r, c); return; }
   float s = r * 2 / DISC;
   vita2d_draw_texture_tint_scale(disc, cx - r, cy - r, s, s, c);
 }
 static void rrect(float x, float y, float w, float h, float r, unsigned c) {
+  DRAW_GUARD(x, y, w, h, r);
   if (r * 2 > h) r = h / 2;
   if (r * 2 > w) r = w / 2;
   if (r < 1 || !disc) { vita2d_draw_rectangle(x, y, w, h, c); return; }
@@ -297,6 +306,7 @@ static void make_ring(void) {
   vita2d_texture_set_filters(ring_tex, SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
 }
 static void ring9(float x, float y, float w, float h, unsigned c) {
+  DRAW_GUARD(x, y, w, h);
   if (!ring_tex || w < 34 || h < 34) { rrect(x, y, w, 3, 1, c); rrect(x, y + h - 3, w, 3, 1, c); return; }
   const float q = 16, S = 64;
   vita2d_draw_texture_tint_part_scale(ring_tex, x, y, 0, 0, q, q, 1, 1, c);
@@ -313,6 +323,7 @@ static void ring9(float x, float y, float w, float h, unsigned c) {
 static struct { float x, y, w, h; int scr; unsigned at; } fring = {0, 0, 0, 0, -1, 0};
 static int screen_now(void);
 static void focus_ring(float x, float y, float w, float h) {
+  DRAW_GUARD(x, y, w, h);
   int scr = screen_now();
   if (fring.scr != scr || frame_no - fring.at > 3) { fring.x = x; fring.y = y; fring.w = w; fring.h = h; fring.scr = scr; }
   else { fring.x += (x - fring.x) * 0.35f; fring.y += (y - fring.y) * 0.35f; fring.w += (w - fring.w) * 0.35f; fring.h += (h - fring.h) * 0.35f; }
@@ -324,6 +335,7 @@ static void focus_ring(float x, float y, float w, float h) {
 // A card still loading: its shape, with a light passing over it (and its ring, small, in the middle)
 static void grad(float x, float y, float w, float h, unsigned col, int a0, int a1, int across);
 static void skeleton(float x, float y, float w, float h, float r) {
+  DRAW_GUARD(x, y, w, h);
   rrect(x, y, w, h, r, SURF);
   float band = fmaxf(40, w * 0.4f), span = w + band;
   float p = fmodf(frame_no * 6.0f + x * 0.7f + y * 0.3f, span * 1.6f) - band;
@@ -332,6 +344,7 @@ static void skeleton(float x, float y, float w, float h, float r) {
   if (b1 > mid && mid > x) grad(fmaxf(mid, x), y + 2, b1 - fmaxf(mid, x), h - 4, TEXT, 18, 0, 1);
 }
 static void heart(float cx, float cy, float s, unsigned c) {
+  DRAW_GUARD(cx, cy, s);
   circle(cx - s * 0.5f, cy - s * 0.2f, s * 0.55f, c);
   circle(cx + s * 0.5f, cy - s * 0.2f, s * 0.55f, c);
   for (int i = 0; i < (int)(s * 1.3f); i++) {
@@ -426,10 +439,12 @@ static struct {
   int sndpack;           // the interface sounds: SND_PACKS
   int conv;              // offline copies made 480p by a conversion service: 0 off (as it starts), 1 on
   int acc_h, acc_s, acc_v; // the custom accent (theme 11): hue 0-359, saturation and value 0-100
-} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100};
+  int onboarded;           // the three cards of the first start seen (an install from before them: yes)
+} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0};
 static void cfg_load(void) {
   FILE *f = fopen(DATA "/config.txt", "r");
   if (!f) return;
+  cfg.onboarded = 1; // (it was used before: unless it says otherwise, nothing to show)
   char line[600];
   while (fgets(line, sizeof line, f)) {
     line[strcspn(line, "\r\n")] = 0;
@@ -465,6 +480,7 @@ static void cfg_load(void) {
     else if (!strcmp(line, "acc_h")) cfg.acc_h = atoi(eq);
     else if (!strcmp(line, "acc_s")) cfg.acc_s = atoi(eq);
     else if (!strcmp(line, "acc_v")) cfg.acc_v = atoi(eq);
+    else if (!strcmp(line, "onboarded")) cfg.onboarded = atoi(eq) != 0;
   }
   fclose(f);
   if (cfg.interval < 2 || cfg.interval > 60) cfg.interval = 5;
@@ -489,9 +505,9 @@ static void cfg_load(void) {
 static void cfg_save(void) {
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
-          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v);
+          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v, cfg.onboarded);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -972,6 +988,7 @@ static void drop_textures(void) {
 
 // Draws a texture to cover a box (cropped to fill it, like object-fit: cover).
 static void draw_cover(vita2d_texture *t, float x, float y, float w, float h, unsigned tint) {
+  DRAW_GUARD(x, y, w, h);
   float tw = vita2d_texture_get_width(t), th = vita2d_texture_get_height(t);
   float s = fmaxf(w / tw, h / th);
   float sw = w / s, sh = h / s;
@@ -992,6 +1009,7 @@ typedef struct {
   int last_tap_x, last_tap_y;
   float bdx, bdy; // the rear touchpad: how far a finger on it moved since the last frame
   int back_on, back_x0;
+  int panic; // (three fingers tapped together: the calculator, at once)
 } Input;
 static Input in;
 static unsigned prev_buttons;
@@ -1031,8 +1049,39 @@ static void read_input(void) {
   }
   sceTouchPeek(SCE_TOUCH_PORT_FRONT, &t, 1);
   in.tap = in.dbl = in.flicked = 0;
+  in.panic = 0;
   in.drag_dx = in.drag_dy = 0;
   in.tcount = t.reportNum;
+  // the panic tap: three fingers, landing together (within ~150 ms), apart from each other (not a
+  // palm), staying put, never a fourth, lifted within half a second. Anything else isn't it, and a
+  // touch of two or more fingers is never a tap either.
+  {
+    static unsigned g0, tri_at;
+    static int maxc, tri_ok, px[3], py[3];
+    int c = t.reportNum;
+    if (c > 0 && !prev_touch) { g0 = frame_no; maxc = 0; tri_ok = 1; tri_at = 0; }
+    if (c > maxc) maxc = c;
+    if (c > 3) tri_ok = 0;
+    if (c == 3 && !tri_at) {
+      if (frame_no - g0 > 9) tri_ok = 0;
+      tri_at = frame_no;
+      for (int k = 0; k < 3; k++) { px[k] = t.report[k].x / 2; py[k] = t.report[k].y / 2; }
+      for (int a = 0; a < 3; a++)
+        for (int b = a + 1; b < 3; b++)
+          if (abs(px[a] - px[b]) + abs(py[a] - py[b]) < 40) tri_ok = 0;
+    } else if (c == 3 && tri_at) {
+      // (each finger near one of where they landed: the reports' order can change)
+      for (int k = 0; k < 3; k++) {
+        int near = 0;
+        for (int j = 0; j < 3; j++) near |= abs(t.report[k].x / 2 - px[j]) < 24 && abs(t.report[k].y / 2 - py[j]) < 24;
+        if (!near) tri_ok = 0;
+      }
+    }
+    if (c == 0 && prev_touch) {
+      if (tri_at && tri_ok && maxc == 3 && frame_no - g0 <= 30) in.panic = 1;
+      if (maxc >= 2) in.moved = 1; // (no tap from it)
+    }
+  }
   if (t.reportNum > 0) {
     int x = t.report[0].x / 2, y = t.report[0].y / 2;
     if (t.reportNum > 1) { in.t2x = t.report[1].x / 2; in.t2y = t.report[1].y / 2; }
@@ -1496,6 +1545,7 @@ static vita2d_texture *ui_icon(const char *name) {
 }
 // an icon centred on (cx, cy), at its own size (they're made at the size they're drawn)
 static void icon(const char *name, float cx, float cy, unsigned col) {
+  DRAW_GUARD(cx, cy);
   vita2d_texture *t = ui_icon(name);
   if (!t) return;
   float w = vita2d_texture_get_width(t), h = vita2d_texture_get_height(t);
@@ -1507,7 +1557,14 @@ static void icon(const char *name, float cx, float cy, unsigned col) {
 // around the pill)
 #define PILL_W 600
 #define PILL_H 62
-static float pill_sel_x = -1;
+static float pill_sel_x = -1, pill_sel_r = -1; // (the capsule's two edges: the leading one moves faster)
+static int lib_new;          // saved from the Browser since the Library was last looked at: its badge
+static float bar_busy(void); // (favs.c) a save or conversion going: 0-1, 2 not known how far; -1 none
+static void set_mode(int m); // (lib.c)
+static void favs_open(int tab); // (favs.c)
+static void ac_build(const char *q); // (web.c)
+static void draw_onboarding(void);
+static int tab_prev = -1; static unsigned tab_at; // (the tab switched from, and when: the slide)
 static int tab_of_screen(void) {
   switch (screen) {
     case S_LIBRARY: case S_FAVS: return 0;
@@ -1518,6 +1575,27 @@ static int tab_of_screen(void) {
   return -1;
 }
 static void draw_bar(void) {
+  // a tab changed (a tap, ○, a shortcut): the new one slides in from its side, a curtain of the
+  // background drawing back over the first few frames (nothing of the old screen is kept)
+  {
+    static int last_tab = -1;
+    int now_tab = tab_of_screen();
+    if (now_tab >= 0 && last_tab >= 0 && now_tab != last_tab) { tab_prev = last_tab; tab_at = frame_no; }
+    last_tab = now_tab;
+    unsigned age = frame_no - tab_at;
+    if (tab_prev >= 0 && now_tab >= 0 && age < 14) {
+      float p = age / 14.0f, e = 1 - (1 - p) * (1 - p) * (1 - p);
+      float cover = W * (1 - e);
+      int a = (int)(255 * (1 - e * 0.6f));
+      if (now_tab > tab_prev) { // (from the right: the left part covered, drawing back to the left)
+        vita2d_draw_rectangle(0, 0, cover, H, with_alpha(BG, a));
+        grad(cover, 0, 80, H, BG, a, 0, 1);
+      } else {
+        vita2d_draw_rectangle(W - cover, 0, cover, H, with_alpha(BG, a));
+        grad(W - cover - 80, 0, 80, H, BG, 0, a, 1);
+      }
+    } else tab_prev = -1;
+  }
   // (tucked: a smaller pill, icons only)
   float t = chrome_hide;
   int pw = (int)(PILL_W - 300 * t), ph = (int)(PILL_H - 20 * t);
@@ -1534,18 +1612,56 @@ static void draw_bar(void) {
   static const char *labels[] = {"Library", "Browser", "Slideshow", "Settings"};
   static const char *icons[][2] = {{"photos", "photos_fill"}, {"compass", "compass_fill"}, {"play", "play_fill"}, {"gear", "gear_fill"}};
   int sel_tab = tab_of_screen();
-  // the selected tab's capsule slides to it
+  // the selected tab's capsule morphs to it: its leading edge goes first, the other follows, so it
+  // stretches on the way and settles to its size there
   if (sel_tab >= 0) {
-    float tx = px + sel_tab * tw;
-    pill_sel_x = pill_sel_x < 0 ? tx : pill_sel_x + (tx - pill_sel_x) * 0.3f;
-    rrect(pill_sel_x + 6, py + 5, tw - 12, PILL_H - 10, (PILL_H - 10) / 2, with_alpha(TEXT, 26));
+    float tl = px + sel_tab * tw + 6, tr = px + (sel_tab + 1) * tw - 6;
+    if (pill_sel_x < 0) { pill_sel_x = tl; pill_sel_r = tr; }
+    int right = tl > pill_sel_x;
+    pill_sel_x += (tl - pill_sel_x) * (right ? 0.18f : 0.38f);
+    pill_sel_r += (tr - pill_sel_r) * (right ? 0.38f : 0.18f);
+    if (fabsf(tl - pill_sel_x) < 0.3f) pill_sel_x = tl;
+    if (fabsf(tr - pill_sel_r) < 0.3f) pill_sel_r = tr;
+    rrect(pill_sel_x, py + 5, pill_sel_r - pill_sel_x, PILL_H - 10, (PILL_H - 10) / 2, with_alpha(TEXT, 26));
   }
+  if (sel_tab == 0 && screen == S_LIBRARY) lib_new = 0;
+  // (held on a tab: its shortcut, Library: the Comics shelf, Browser: Favourites)
+  static int long_fired;
+  if (!in.touching) long_fired = 0;
+  if (in.touching && !in.moved && !long_fired && frame_no - in.down_frame > 32 && in.down_y >= py - 10 && in.down_x >= px && in.down_x < px + 2 * tw) {
+    long_fired = 1;
+    sfx(SFX_OPEN);
+    if (in.down_x < px + tw) { screen = S_LIBRARY; set_mode(3); say("Comics"); }
+    else { favs_open(0); }
+  }
+  if (long_fired) in.tap = 0;
   for (int k = 0; k < 4; k++) {
     int cx = px + k * tw + tw / 2;
     int on = k == sel_tab;
     unsigned c = on ? ACC : with_alpha(TEXT, 200);
     icon(icons[k][on], cx, t > 0.5f ? py + PILL_H / 2 : py + 23, c);
     if (t < 0.5f) text_center(cx, py + PILL_H - 9, with_alpha(c, (int)(255 * (1 - 2 * t))), 12, labels[k]);
+    int iy = t > 0.5f ? py + PILL_H / 2 : py + 23;
+    // (the Library: how many came in from the Browser since it was looked at)
+    if (k == 0 && lib_new > 0 && !on) {
+      char b[8];
+      snprintf(b, sizeof b, "%d", lib_new > 99 ? 99 : lib_new);
+      int bw = text_w(11, b) + 10;
+      rrect(cx + 8, iy - 18, bw < 18 ? 18 : bw, 18, 9, ACC);
+      text_center(cx + 8 + (bw < 18 ? 18 : bw) / 2, iy - 5, RGBA(20, 12, 16, 255), 11, b);
+    }
+    // (the Browser: a ring round it while something's being saved or converted)
+    if (k == 1) {
+      float f = bar_busy();
+      if (f >= 0) {
+        int dots = 24;
+        for (int d = 0; d < dots; d++) {
+          float a = -1.5708f + d * 6.2832f / dots;
+          int lit = f > 1.5f ? ((d - (int)(frame_no / 3)) % dots + dots) % dots < 7 : d < (int)(f * dots + 0.5f);
+          circle(cx + cosf(a) * 17, iy + sinf(a) * 17, 1.6f, lit ? ACC : with_alpha(TEXT, 40));
+        }
+      }
+    }
     // (the button that leads here: ○ goes round Library, Browser, Slideshow, Settings)
     int next = sel_tab >= 0 && k == (sel_tab + 1) % 4 && screen != S_DRIVE && screen != S_WIFI && screen != S_STATS && screen != S_HEALTH;
     if (next && t < 0.5f) { circle(cx + 26, py + 14, 8, with_alpha(TEXT, 36)); text_center(cx + 26, py + 19, DIM, 11, "○"); }
@@ -1584,6 +1700,7 @@ static void ramps_init(void) {
 }
 // (x, y, w, h) in col's colour, its alpha going from a0 to a1 (down, or across)
 static void grad(float x, float y, float w, float h, unsigned col, int a0, int a1, int across) {
+  DRAW_GUARD(x, y, w, h);
   if (!ramps[0]) ramps_init();
   if (a0 < 0) a0 = 0;
   if (a0 > 255) a0 = 255;
@@ -1602,6 +1719,7 @@ static void grad(float x, float y, float w, float h, unsigned col, int a0, int a
 }
 // A loading circle: eight dots going round (anything that takes a while shows one)
 static void spinner(float cx, float cy, float r) {
+  DRAW_GUARD(cx, cy, r);
   for (int k = 0; k < 8; k++) {
     float a = frame_no * 0.12f + k * 0.785f;
     circle(cx + cosf(a) * r, cy + sinf(a) * r, r * 0.13f + k * r * 0.022f, with_alpha(ACC, 70 + k * 22));
@@ -2232,6 +2350,28 @@ static void show_item(int k) {
   ask_big(shown[vk]);
 }
 static void fmt_time(uint64_t ms, char *o, size_t n);
+// "Similar to this": the two tags of these that say most what it is: specific ones (a character, a
+// series: long, with underscores or brackets) before generic ones, never the generic ones of a list,
+// never one already searched for (exclude). out: "a b", or "" when there's none.
+static void similar_tags(const char *tags, const char *exclude, char *out, size_t cap) {
+  static const char *const GENERIC[] = {"1girl", "1boy", "2girls", "solo", "highres", "absurdres", "video", "animated", "sound", "tagme",
+    "mp4", "webm", "gif", "nude", "sex", "penis", "pussy", "breasts", "large_breasts", "nipples", "hentai", "anime", "uncensored", "censored",
+    "english", "japanese", "translated", "commentary", "3d", "2d", "looking_at_viewer", "blush", "smile", "open_mouth", NULL};
+  char b[2048], best[2][64] = {"", ""};
+  int score[2] = {-1, -1};
+  snprintf(b, sizeof b, "%s", tags ? tags : "");
+  for (char *s = strtok(b, " "); s; s = strtok(NULL, " ")) {
+    size_t n = strlen(s);
+    if (n < 3 || n > 60 || strchr(s, ':')) continue;
+    int skip = 0;
+    for (int g = 0; GENERIC[g] && !skip; g++) skip = !strcasecmp(s, GENERIC[g]);
+    if (skip || (exclude && strcasestr(exclude, s))) continue;
+    int sc = (int)n + (strchr(s, '(') ? 20 : 0) + (strchr(s, '_') ? 6 : 0);
+    if (sc > score[0]) { score[1] = score[0]; memcpy(best[1], best[0], 64); score[0] = sc; snprintf(best[0], 64, "%s", s); }
+    else if (sc > score[1]) { score[1] = sc; snprintf(best[1], 64, "%s", s); }
+  }
+  snprintf(out, cap, "%s%s%s", best[0], best[1][0] ? " " : "", best[1]);
+}
 // ----- the video controls, the same in both full views (the Library's and the Browser's) -----
 // A play/pause button in the middle with ten seconds back and on either side; the bar at the foot
 // with what has downloaded as a lighter part, the time gone, and a pill with the time left. A skip
@@ -2317,6 +2457,7 @@ static int vctl_dbl_side(int x) { return x < W / 3 ? -1 : x > W * 2 / 3 ? 1 : 0;
 
 // A picture drawn in a rectangle: contained (cover 0) to covering it, cropped (cover 1)
 static void draw_in_rect(vita2d_texture *t, float tw, float th, float x, float y, float w, float h, float cover, unsigned tint) {
+  DRAW_GUARD(tw, th, x, y, w, h, cover);
   float sc = fminf(w / tw, h / th), sv = fmaxf(w / tw, h / th), s = sc + (sv - sc) * cover;
   float pw = fminf(tw, w / s), ph = fminf(th, h / s);
   vita2d_draw_texture_tint_part_scale(t, x + (w - pw * s) / 2, y + (h - ph * s) / 2, (tw - pw) / 2, (th - ph) / 2, pw, ph, s, s, tint);
@@ -2720,7 +2861,7 @@ static void draw_viewer(void) {
     text_fit(30, top + 46, TEXT, 22, it->name[0] ? it->name : it->file, W - 420);
     // editing, as the phone does: the stars, the level dial, the category, the tags, delete
     // (↑↓ choose, ←→ change, ✕ for tags and delete; or touch)
-    enum { E_STARS, E_LEVEL, E_CAT, E_TAGS, E_DELETE, E_N };
+    enum { E_STARS, E_LEVEL, E_CAT, E_TAGS, E_DELETE, E_SIMILAR, E_N };
     static int efocus;
     if (efocus == E_STARS) rrect(W - 400, top + 16, 110, 40, 10, SURF2);
     stars(ii, W - 390, top + 46, efocus == E_STARS);
@@ -2737,7 +2878,10 @@ static void draw_viewer(void) {
     text_center(W - 350, (int)top + 116, efocus == E_TAGS ? RGBA(20, 12, 16, 255) : TEXT, 14, "Edit tags");
     rrect(W - 292, top + 96, 90, 28, 14, efocus == E_DELETE ? RGBA(220, 70, 80, 255) : SURF2);
     text_center(W - 247, (int)top + 116, TEXT, 14, delete_armed ? "Again" : "Delete");
+    rrect(W - 194, top + 96, 104, 28, 14, efocus == E_SIMILAR ? ACC : SURF2);
+    text_center(W - 142, (int)top + 116, efocus == E_SIMILAR ? RGBA(20, 12, 16, 255) : TEXT, 14, "\u2248 Similar");
     int act = 0;
+    if (hit(W - 194, (int)top + 96, 104, 28)) { efocus = E_SIMILAR; act = 1; }
     if (hit(W - 400, (int)top + 96, 100, 28)) { efocus = E_TAGS; act = 1; }
     if (hit(W - 292, (int)top + 96, 90, 28)) { efocus = E_DELETE; act = 1; }
     if (details) {
@@ -2750,6 +2894,26 @@ static void draw_viewer(void) {
       if (d && efocus == E_CAT) { sfx(SFX_TOGGLE); set_category(ii, d); }
       if ((in.pressed & SCE_CTRL_CROSS) || act) {
         if (efocus == E_TAGS && !ime_open) ime_start(4, "Tags (separated by spaces)", it->tags, 0);
+        else if (efocus == E_SIMILAR) {
+          // (the Library searched for what this one's most about)
+          char q[160];
+          similar_tags(it->tags, NULL, q, sizeof q);
+          if (!q[0]) { sfx(SFX_ERROR); say("No tags here to go by"); }
+          else {
+            details = 0;
+            close_viewer();
+            // (either of them: "~a ~b")
+            char *sp = strchr(q, ' ');
+            if (sp) { *sp = 0; snprintf(query, sizeof query, "~%s ~%s", q, sp + 1); *sp = ' '; }
+            else snprintf(query, sizeof query, "%s", q);
+            refilter();
+            sel = 0; scroll = 0;
+            char m[200];
+            snprintf(m, sizeof m, "Like this: %s", q);
+            say(m);
+            return;
+          }
+        }
         else if (efocus == E_DELETE && delete_confirmed()) {
           save_edits_now();
           int k = vk;
@@ -3104,6 +3268,86 @@ static void draw_settings(void) {
   draw_bar();
 }
 
+// ----- the first start: three cards (the vault, the gestures, Wi-Fi), then the vault list -----
+// Lines of text, broken at spaces to fit w; returns the y after the last
+static int text_wrap(int x, int y, unsigned c, int size, const char *s, int w, int lh) {
+  char line[256];
+  int n = 0;
+  const char *p = s;
+  while (*p) {
+    const char *e = p;
+    while (*e && *e != ' ' && *e != '\n') e++;
+    int wl = (int)(e - p);
+    char trial[256];
+    snprintf(trial, sizeof trial, "%.*s%s%.*s", n, line, n ? " " : "", wl, p);
+    if (n && text_w(size, trial) > w) { line[n] = 0; text(x, y, c, size, line); y += lh; n = 0; snprintf(trial, sizeof trial, "%.*s", wl, p); }
+    n = snprintf(line, sizeof line, "%s", trial);
+    if (n >= (int)sizeof line) n = sizeof line - 1;
+    if (*e == '\n') { line[n] = 0; text(x, y, c, size, line); y += lh; n = 0; }
+    p = *e ? e + 1 : e;
+  }
+  if (n) { line[n] = 0; text(x, y, c, size, line); y += lh; }
+  return y;
+}
+static void draw_onboarding(void) {
+  static int page;
+  static float slide; // (the cards' place: page, eased; a finger drags it)
+  static const struct { const char *icon, *title, *body; } CARDS[3] = {
+    {"photos", "Your vault",
+     "Lewd Vault keeps pictures, videos and comics in a vault: a folder on the memory card, the same as on the PC and the phones, so a vault moves between them as it is. "
+     "Next, pick one on the card, or start a new one. A PIN can lock it, and a decoy PIN can open a harmless one (Settings, Privacy)."},
+    {"sliders", "Gestures",
+     "Swipe across a picture for the next one; swipe it down to close it.\n"
+     "Pinch the Library for bigger or smaller cards.\n"
+     "Double tap the left or right of a video: ten seconds back or on.\n"
+     "Tap with three fingers together, or press SELECT: a calculator covers everything at once.\n"
+     "Hold L and R: touch lock."},
+    {"wifi", "Send from a phone or PC",
+     "Settings, Wi-Fi transfer shows an address. Open it in a browser on a phone or PC on the same Wi-Fi and drop pictures and videos in: they arrive in the vault. "
+     "The Browser finds more on the sites you choose, and Favourites keeps long videos as links."},
+  };
+  vita2d_draw_rectangle(0, 0, W, H, BG);
+  // a soft glow of the accent behind
+  circle(W / 2, H / 2 - 20, 260, with_alpha(ACC, 18));
+  circle(W / 2, H / 2 - 20, 170, with_alpha(ACC2, 14));
+  static int was_touching;
+  if (in.touching) slide -= in.drag_dx / (float)(W - 160);
+  else {
+    if (was_touching) { // (let go: a flick turns the page, else the nearest)
+      if (in.flicked && fabsf(in.fvx) > 6) page += in.fvx < 0 ? 1 : -1;
+      else page = (int)roundf(slide);
+    }
+    if (page < 0) page = 0;
+    if (page > 2) page = 2;
+    slide += (page - slide) * 0.22f;
+  }
+  was_touching = in.touching;
+  if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_CROSS | SCE_CTRL_RTRIGGER)) {
+    if (page == 2 && (in.pressed & SCE_CTRL_CROSS)) { sfx(SFX_DONE); cfg.onboarded = 1; cfg_save(); return; }
+    if (page < 2) { page++; sfx(SFX_TICK); }
+  }
+  if ((in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER | SCE_CTRL_CIRCLE)) && page > 0) { page--; sfx(SFX_TICK); }
+  const int cw = W - 220, ch = 380, cy = 50;
+  for (int k = 0; k < 3; k++) {
+    float x = W / 2 - cw / 2 + (k - slide) * (cw + 40);
+    if (x > W || x + cw < 0) continue;
+    rrect(x, cy, cw, ch, 26, SURF);
+    circle(x + 70, cy + 76, 36, ACC);
+    icon(CARDS[k].icon, x + 70, cy + 76, RGBA(20, 12, 16, 255));
+    text(x + 126, cy + 88, TEXT, 30, CARDS[k].title);
+    textf(x + cw - 70, cy + 52, FAINT, 14, "%d / 3", k + 1);
+    text_wrap(x + 40, cy + 150, DIM, 17, CARDS[k].body, cw - 80, 27);
+  }
+  // the dots, and the button
+  for (int k = 0; k < 3; k++) rrect(W / 2 - 34 + k * 24 - (k == page ? 6 : 0), cy + ch + 26, k == page ? 22 : 10, 10, 5, k == page ? ACC : with_alpha(TEXT, 60));
+  const char *btn = page == 2 ? "Start  ✕" : "Next  ✕";
+  int bw = text_w(18, btn) + 50, bx = W - 60 - bw, by = cy + ch + 12;
+  rrect(bx, by, bw, 44, 22, ACC);
+  text_center(bx + bw / 2, by + 29, RGBA(20, 12, 16, 255), 18, btn);
+  if (hit(bx, by, bw, 44)) { if (page == 2) { sfx(SFX_DONE); cfg.onboarded = 1; cfg_save(); return; } page++; sfx(SFX_TICK); }
+  if (page < 2) { text(60, by + 29, FAINT, 15, "Skip"); if (hit(40, by, 90, 44)) { sfx(SFX_DONE); cfg.onboarded = 1; cfg_save(); } }
+}
+
 // ----- the cover: a plain clock, nothing of the vault (SELECT, from anywhere) -----
 static void draw_cover_screen(void) {
   vita2d_draw_rectangle(0, 0, W, H, RGBA(10, 12, 16, 255));
@@ -3133,6 +3377,7 @@ static int power_main(SceSize args, void *argp) {
 
 // The vault got an item (a save from the Browser): the Library's per-item arrays grow with it.
 static void library_grew(int before) {
+  if (screen != S_LIBRARY && vault.n > before) lib_new += vault.n - before;
   pthread_mutex_lock(&mx);
   signed char *t = realloc(tstate, vault.n + 1);
   short *so = realloc(slot_of, (vault.n + 1) * sizeof *so);
@@ -3290,7 +3535,7 @@ int main(void) {
       static char got[2100]; // (an API key can be long)
       int r = ime_poll(got, sizeof got);
       if (r == 1 && ime_for == 1) { snprintf(password, sizeof password, "%s", got); load_state = 0; screen = S_UNLOCKING; }
-      if (r == 1 && ime_for == 3) { char clean[128]; snprintf(cfg.wquery, sizeof cfg.wquery, "%s", lv_booru_clean(got, clean, sizeof clean)); sheet = SH_NONE; screen = S_WEB; web_search(); }
+      if (r == 1 && ime_for == 3) { char clean[128]; snprintf(cfg.wquery, sizeof cfg.wquery, "%s", lv_booru_clean(got, clean, sizeof clean)); ac_build(cfg.wquery); sheet = SH_NONE; screen = S_WEB; web_search(); }
       if (r == 1 && ime_for == 4 && screen == S_VIEWER && vk < nshown) { if (lv_item_set(&vault, shown[vk], "tags", got) == 0) { edited(); sfx(SFX_DONE); } }
       if (r == 1 && ime_for == 5 && got[0]) saved_add_current(got);
       if (r == 1 && ime_for == 6) batch_add_tag(got);
@@ -3313,6 +3558,16 @@ int main(void) {
       if (r != 0) memset(&in, 0, sizeof in);
       else in.pressed = 0, in.tap = 0;
     }
+    // three fingers tapped together: the calculator, from anywhere, at once
+    if (in.panic && screen != S_CALC && screen != S_UNLOCKING && screen != S_PICK) {
+      if (vid) lv_video_pause(vid, 1);
+      if (wv_vid) lv_video_pause(wv_vid, 1);
+      slideshow = 0;
+      tl_on = 0;
+      if (screen == S_COVER) screen = cover_return;
+      calc_open(screen);
+      memset(&in, 0, sizeof in);
+    }
     // SELECT: the cover, from anywhere (and back)
     if (in.pressed & SCE_CTRL_SELECT) {
       if (screen == S_COVER) screen = cover_return;
@@ -3331,7 +3586,7 @@ int main(void) {
     vita2d_start_drawing();
     vita2d_clear_screen();
     switch (screen) {
-      case S_PICK: draw_pick(); break;
+      case S_PICK: if (!cfg.onboarded) draw_onboarding(); else draw_pick(); break;
       case S_LOCKED: draw_locked(); break;
       case S_UNLOCKING:
         draw_unlocking(!vault.untraceable || vault.has_key);
@@ -3374,14 +3629,17 @@ int main(void) {
     // (debug builds: how long each frame's work took, per screen, written to the log every 5 s)
     {
       static uint64_t sum, worst;
-      static unsigned n, slow, last_screen = 999;
+      static unsigned n, slow, last_screen = 999, pool_min = 0xFFFFFFFFu;
+      unsigned pf = vita2d_pool_free_space();
+      if (pf < pool_min) pool_min = pf;
       uint64_t dt = sceKernelGetProcessTimeWide() - perf_t0;
       if ((unsigned)screen != last_screen || n >= 300) {
         if (n && last_screen != 999) {
           struct mallinfo mi = mallinfo(); // (the heap: in use now, and the most it has grown to)
-          LOG("perf screen=%u frames=%u avg=%.2fms worst=%.2fms over16ms=%u heap=%.1fMB arena=%.1fMB\n", last_screen, n, sum / 1000.0 / n, worst / 1000.0, slow,
-              mi.uordblks / 1048576.0, mi.arena / 1048576.0);
+          LOG("perf screen=%u frames=%u avg=%.2fms worst=%.2fms over16ms=%u heap=%.1fMB arena=%.1fMB pool_free_min=%uKB\n", last_screen, n, sum / 1000.0 / n, worst / 1000.0, slow,
+              mi.uordblks / 1048576.0, mi.arena / 1048576.0, pool_min / 1024);
         }
+        pool_min = 0xFFFFFFFFu;
         sum = worst = 0; n = slow = 0; last_screen = (unsigned)screen;
       }
       sum += dt; n++;
