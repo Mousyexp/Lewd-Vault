@@ -60,7 +60,8 @@ static struct {
   uint8_t *raw; // (a save: the sample's bytes, handed over; a video's are in its file; hires: a copy)
   size_t rawn;
   char cat[64];
-} big_job = {-1, 0, 0, 0, 0, 0, NULL, 0, ""};
+  int nsfw, stars, notags; // (a save: the level, the stars, and 1 to leave the site's tags off; -1 level: from the rating)
+} big_job = {-1, 0, 0, 0, 0, 0, NULL, 0, "", -1, 5, 0};
 // the search a page is for, copied when asked (the settings may change while it loads)
 static struct { int site, ratings, sort, span; char q[128], key[200], hidden[512]; } job_q;
 static int saving;
@@ -376,14 +377,15 @@ static long long free_room(const char *root) {
 }
 
 // The save's files, written here on the save thread: the vault is locked only while it's touched.
+static int save_nsfw = -1, save_stars = 5, save_notags; // (the save being written: its choices)
 static void write_save(const LvPost *post, WDone *d, int vgen_asked, const char *cat) {
   int video = lv_post_is_video(post), gif = !strcmp(post->ext, "gif");
   snprintf(d->name, sizeof d->name, "%s %lld.%s", LV_SITES[job_q.site].name, post->id, d->ext);
   snprintf(d->cat, sizeof d->cat, "%s", cat);
   now_iso(d->when, sizeof d->when);
   int ri = post->rating == LV_R_EXPLICIT ? 3 : post->rating == LV_R_QUESTIONABLE ? 2 : post->rating == LV_R_SENSITIVE ? 1 : 0;
-  LvNew nw = {.name = d->name, .category = d->cat, .kind = video ? "video" : gif ? "gif" : "image", .tags = post->tags,
-              .source = post->page, .added = d->when, .nsfw = RATING_NSFW[ri], .quality = 5, .width = d->w, .height = d->h,
+  LvNew nw = {.name = d->name, .category = d->cat, .kind = video ? "video" : gif ? "gif" : "image", .tags = save_notags ? "" : post->tags,
+              .source = post->page, .added = d->when, .nsfw = save_nsfw >= 0 ? save_nsfw : RATING_NSFW[ri], .quality = save_stars, .width = d->w, .height = d->h,
               .from = d->a ? NULL : video_path};
   saver_flush(); // (a rewrite of index.csv waiting to be written goes first: this appends to it)
   size_t need = d->a ? d->an : 0;
@@ -407,7 +409,7 @@ static void write_save(const LvPost *post, WDone *d, int vgen_asked, const char 
   // what the loaded vault needs, kept with the result (the post's strings go with it)
   d->nw = nw;
   d->nw.name = d->name; d->nw.category = d->cat; d->nw.added = d->when;
-  d->nw.tags = strdup(post->tags); d->nw.source = strdup(post->page);
+  d->nw.tags = strdup(save_notags ? "" : post->tags); d->nw.source = strdup(post->page);
   d->vgen = vgen_asked;
 }
 
@@ -422,6 +424,7 @@ static void *sample_main(void *arg) {
     big_job.hires = 0;
     char cat[64];
     snprintf(cat, sizeof cat, "%s", big_job.cat);
+    save_nsfw = big_job.nsfw; save_stars = big_job.stars; save_notags = big_job.notags;
     uint8_t *raw = big_job.raw;
     size_t rawn = big_job.rawn;
     big_job.post = -1;
@@ -637,6 +640,9 @@ static void wv_show(int k) {
   pthread_mutex_unlock(&wmx);
   // (and the next ones: their previews ahead of time)
 }
+// (the save page's choices; -1 level: from the post's rating; "" category: the usual one)
+static int sw_nsfw = -1, sw_stars = 5, sw_notags;
+static char sw_cat[64];
 static void wv_save(void) {
   if (saving || wv >= nposts) return;
   if (is_saved(&posts[wv])) { sfx(SFX_ERROR); say("Already in your vault"); return; }
@@ -650,7 +656,8 @@ static void wv_save(void) {
   big_job.save = 1;
   big_job.vgen = vgen;
   big_job.full = cfg.wfull;
-  snprintf(big_job.cat, sizeof big_job.cat, "%s", save_category());
+  snprintf(big_job.cat, sizeof big_job.cat, "%s", sw_cat[0] ? sw_cat : save_category());
+  big_job.nsfw = sw_nsfw; big_job.stars = sw_stars; big_job.notags = sw_notags;
   big_job.raw = wv_raw; // (handed over: the full view doesn't need them once shown)
   big_job.rawn = wv_rawn;
   wv_raw = NULL;
@@ -1727,7 +1734,7 @@ static void draw_web(void) {
   static int wlast_top_row = -1;
   if (first < wgrid.n && wgrid.row[first] != wlast_top_row) { if (wlast_top_row >= 0 && (in.touching || wscroll_v != 0 || in.ly)) sfx(SFX_TICK); wlast_top_row = wgrid.row[first]; }
   int wanted[48], nw = 0, last = first;
-  int flinging = fabsf(wscroll_v) > 30; // (flung fast: no previews asked for in passing, no spinners)
+  int flinging = fabsf(wscroll_v) > 30; // (flung fast: no previews asked for in passing; rings shown)
   for (int k = first; k < nposts && k < wgrid.n; k++) {
     Rect rc = wgrid.r[k];
     float x = rc.x, y = TOP + 6 + rc.y - wscroll, cw = rc.w, ch = rc.h;
@@ -1743,10 +1750,9 @@ static void draw_web(void) {
     else {
       rrect(x - g, y - g, cw + 2 * g, ch + 2 * g, 8, SURF);
       if (wstate[k] == 3) text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No preview");
-      else if (flinging) {}
       else {
-        if (wstate[k] == 1) spinner(x + cw / 2, y + ch / 2, 10);
-        if (nw < 48) wanted[nw++] = k;
+        spinner(x + cw / 2, y + ch / 2, 10); // (a loading ring: the grid never waits for its preview)
+        if (!flinging && nw < 48) wanted[nw++] = k;
       }
     }
     const char *badge = lv_post_is_video(p) ? "VIDEO" : !strcmp(p->ext, "gif") ? "GIF" : NULL;
@@ -1853,8 +1859,202 @@ static void draw_web(void) {
 
 // ---------- the full view's drawing ----------
 
+
+// ---------- the save page: a few steps, each the whole screen, then an overview ----------
+// Opened by Save (or □) in the Browser's full view: 1 how explicit (the level, 0-10), 2 the
+// category, 3 stars and the site's tags, then the overview (a tap on a row goes back to its step)
+// and Save. The picture stays on the left all along. ← → change, ✕ next, ○ back, △ save now.
+static int sw_on, sw_step, sw_catsel;
+static float sw_anim;
+static const char *SW_STEPS[4] = {"Level", "Category", "Stars and tags", "Overview"};
+static int sw_ncats(void) { return (loaded_vault ? vault.ncats : 0) + 2; } // (the usual one, the vault's, a new one)
+static const char *sw_cat_name(int k) {
+  if (k == 0) return save_category();
+  if (k - 1 < vault.ncats) return vault.cats[k - 1];
+  // (a name just typed, not a category yet: it shows here until the save makes it one)
+  if (sw_cat[0]) { int known = 0; for (int c = 0; c < vault.ncats; c++) if (!strcmp(vault.cats[c], sw_cat)) known = 1; if (!known) return sw_cat; }
+  return "+ New category";
+}
+static void sw_open(void) {
+  if (wv >= nposts) return;
+  if (is_saved(&posts[wv])) { sfx(SFX_ERROR); say("Already in your vault"); return; }
+  if (!loaded_vault) { say("Open a vault first"); return; }
+  const LvPost *p = &posts[wv];
+  int ri = p->rating == LV_R_EXPLICIT ? 3 : p->rating == LV_R_QUESTIONABLE ? 2 : p->rating == LV_R_SENSITIVE ? 1 : 0;
+  sw_nsfw = RATING_NSFW[ri]; // (from its rating, each time: a different post, a different level)
+  sw_catsel = 0;
+  for (int k = 0; k < vault.ncats; k++) if (sw_cat[0] && !strcmp(vault.cats[k], sw_cat)) sw_catsel = k + 1;
+  if (sw_catsel == 0) sw_cat[0] = 0;
+  sw_step = 0; sw_on = 1; sw_anim = 0;
+  if (wv_vid && !lv_video_paused(wv_vid)) lv_video_pause(wv_vid, 1);
+  sfx(SFX_OPEN);
+}
+static void sw_do_save(void) {
+  sw_on = 0;
+  wv_save();
+}
+static int big_btn(int x, int y, int w, int h, const char *label, unsigned bg, unsigned fg) {
+  rrect(x, y, w, h, h / 2, bg);
+  text_center(x + w / 2, y + h / 2 + 7, fg, 19, label);
+  return hit(x, y - 4, w, h + 8);
+}
+static void draw_save_wizard(void) {
+  const LvPost *p = &posts[wv];
+  vita2d_draw_rectangle(0, 0, W, H, BG);
+  sw_anim += (1 - sw_anim) * 0.3f;
+  // the picture, on the left
+  vita2d_texture *t = wv_tex_post == wv && wv_tex ? wv_tex : preview_of(wv);
+  const int PW = 360;
+  rrect(0, 0, PW, H, 0, RGBA(0, 0, 0, 255));
+  if (t) {
+    float tw = vita2d_texture_get_width(t), th = vita2d_texture_get_height(t), sc = fminf((PW - 24) / tw, (H - 24) / th);
+    vita2d_draw_texture_scale(t, PW / 2 - tw * sc / 2, H / 2 - th * sc / 2, sc, sc);
+  } else spinner(PW / 2, H / 2, 20);
+  // the step's place: four dots, and its name
+  int x0 = PW + 36, xr = W - 30;
+  for (int k = 0; k < 4; k++) {
+    int on = k == sw_step;
+    rrect(x0 + k * 56, 26, 46, 8, 4, on ? ACC : k < sw_step ? with_alpha(ACC, 120) : SURF2);
+    if (hit(x0 + k * 56, 10, 46, 40) && k < sw_step) { sw_step = k; sfx(SFX_TICK); }
+  }
+  char st[64];
+  snprintf(st, sizeof st, "Step %d of 4", sw_step + 1);
+  text(x0, 64, FAINT, 14, st);
+  // save now, top right (steps before the overview)
+  if (sw_step < 3) {
+    int bw = text_w(16, "Save now") + 40;
+    rrect(xr - bw, 14, bw, 40, 20, SURF2);
+    text(xr - bw + 20, 40, TEXT, 16, "Save now");
+    if (hit(xr - bw, 10, bw, 48) || (in.pressed & SCE_CTRL_TRIANGLE)) { sw_do_save(); in.pressed = 0; in.tap = 0; return; }
+  }
+  int y = 110;
+  int dx = (int)((1 - sw_anim) * 40); // (each step slides in a little)
+  x0 += dx;
+  switch (sw_step) {
+    case 0: { // the level
+      text(x0, y, TEXT, 28, "How explicit is it?");
+      text(x0, y + 30, DIM, 15, "0 is safe for anyone, 10 is as explicit as it gets");
+      const int bw = 72, bh = 64;
+      for (int k = 0; k <= 10; k++) {
+        int bx = x0 + (k % 6) * (bw + 12), by = y + 60 + (k / 6) * (bh + 14);
+        int on = k == sw_nsfw;
+        rrect(bx, by, bw, bh, 18, on ? ACC : SURF2);
+        char n[4];
+        snprintf(n, sizeof n, "%d", k);
+        text_center(bx + bw / 2, by + bh / 2 + 10, on ? RGBA(20, 12, 16, 255) : TEXT, 28, n);
+        if (hit(bx, by, bw, bh)) { sw_nsfw = k; sfx(SFX_TICK); }
+      }
+      static const char *words[] = {"Safe", "Safe", "Mild", "Mild", "Suggestive", "Suggestive", "Lewd", "Lewd", "Explicit", "Explicit", "Extreme"};
+      char m[80];
+      snprintf(m, sizeof m, "%s  ·  the site rates it %s", words[sw_nsfw < 0 ? 0 : sw_nsfw > 10 ? 10 : sw_nsfw],
+               RATING_NAMES[p->rating == LV_R_EXPLICIT ? 3 : p->rating == LV_R_QUESTIONABLE ? 2 : p->rating == LV_R_SENSITIVE ? 1 : 0]);
+      text(x0, y + 230, DIM, 16, m);
+      if (in.pressed & SCE_CTRL_RIGHT) { if (sw_nsfw < 10) sw_nsfw++; sfx(SFX_TICK); }
+      if (in.pressed & SCE_CTRL_LEFT) { if (sw_nsfw > 0) sw_nsfw--; sfx(SFX_TICK); }
+      if (in.pressed & SCE_CTRL_DOWN) { sw_nsfw = sw_nsfw + 6 > 10 ? 10 : sw_nsfw + 6; sfx(SFX_TICK); }
+      if (in.pressed & SCE_CTRL_UP) { sw_nsfw = sw_nsfw - 6 < 0 ? 0 : sw_nsfw - 6; sfx(SFX_TICK); }
+      break;
+    }
+    case 1: { // the category
+      text(x0, y, TEXT, 28, "Which category?");
+      text(x0, y + 30, DIM, 15, "Where it shows in the Library");
+      int n = sw_ncats(), cx = x0, cy = y + 56;
+      if (sw_catsel >= n) sw_catsel = n - 1;
+      for (int k = 0; k < n; k++) {
+        const char *nm = sw_cat_name(k);
+        if (k > 0 && k < n - 1 && !strcmp(nm, save_category())) continue; // (the usual one is first already)
+        char lb[80];
+        snprintf(lb, sizeof lb, "%s%s", nm, k == 0 ? "  (usual)" : "");
+        int w = text_w(17, lb) + 44;
+        if (w > xr - x0) w = xr - x0;
+        if (cx + w > xr) { cx = x0; cy += 58; }
+        if (cy > H - 140) break;
+        int on = k == sw_catsel;
+        rrect(cx, cy, w, 48, 24, on ? ACC : k == n - 1 ? with_alpha(SURF2, 160) : SURF2);
+        text_fit(cx + 22, cy + 31, on ? RGBA(20, 12, 16, 255) : TEXT, 17, lb, w - 34);
+        if (hit(cx, cy, w, 48)) { sw_catsel = k; sfx(SFX_TICK); if (k == n - 1 && !ime_open) ime_start(16, "The new category's name", "", 0); }
+        cx += w + 10;
+      }
+      if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_LEFT)) {
+        int d = (in.pressed & SCE_CTRL_RIGHT) ? 1 : n - 1;
+        sw_catsel = (sw_catsel + d) % n;
+        if (sw_catsel > 0 && sw_catsel < n - 1 && !strcmp(sw_cat_name(sw_catsel), save_category())) sw_catsel = (sw_catsel + d) % n;
+        sfx(SFX_TICK);
+      }
+      if (sw_catsel == n - 1 && (in.pressed & SCE_CTRL_CROSS) && !ime_open) { ime_start(16, "The new category's name", "", 0); in.pressed &= ~SCE_CTRL_CROSS; }
+      if (sw_catsel > 0 && sw_catsel < n - 1) snprintf(sw_cat, sizeof sw_cat, "%s", vault.cats[sw_catsel - 1]);
+      else if (sw_catsel == 0) sw_cat[0] = 0;
+      break;
+    }
+    case 2: { // stars and tags
+      text(x0, y, TEXT, 28, "How good is it?");
+      for (int k = 1; k <= 5; k++) {
+        int bx = x0 + (k - 1) * 84, by = y + 44;
+        unsigned c = k <= sw_stars ? ACC : SURF2;
+        rrect(bx, by, 72, 72, 20, k <= sw_stars ? with_alpha(ACC, 50) : SURF2);
+        text_center(bx + 36, by + 50, c, 36, "★");
+        if (hit(bx, by, 72, 72)) { sw_stars = k; sfx(SFX_TICK); }
+      }
+      if (in.pressed & SCE_CTRL_RIGHT) { if (sw_stars < 5) sw_stars++; sfx(SFX_TICK); }
+      if (in.pressed & SCE_CTRL_LEFT) { if (sw_stars > 1) sw_stars--; sfx(SFX_TICK); }
+      // the site's tags: kept or not
+      int ty = y + 150;
+      int ntags = 0;
+      for (const char *c = p->tags; *c; c++) if (*c != ' ' && (c == p->tags || c[-1] == ' ')) ntags++;
+      rrect(x0, ty, xr - x0, 56, 18, SURF2);
+      text(x0 + 20, ty + 35, TEXT, 18, "Keep the site's tags");
+      char tn[32];
+      snprintf(tn, sizeof tn, "%d tags", ntags);
+      text(x0 + 220, ty + 35, FAINT, 14, tn);
+      int sw_x = xr - 80;
+      rrect(sw_x, ty + 12, 60, 32, 16, sw_notags ? SURF : ACC);
+      circle(sw_notags ? sw_x + 16 : sw_x + 44, ty + 28, 12, TEXT);
+      if (hit(x0, ty, xr - x0, 56) || (in.pressed & (SCE_CTRL_UP | SCE_CTRL_DOWN))) { sw_notags = !sw_notags; sfx(SFX_TOGGLE); }
+      if (!sw_notags) {
+        char tl[260];
+        snprintf(tl, sizeof tl, "%.250s", p->tags);
+        for (char *c = tl; *c; c++) if (*c == '_') *c = ' ';
+        text_fit(x0 + 4, ty + 84, FAINT, 13, tl, xr - x0 - 8);
+      }
+      break;
+    }
+    default: { // the overview
+      text(x0, y, TEXT, 28, "Ready to save");
+      const char *labels[3] = {"Level", "Category", "Stars and tags"};
+      char vals[3][120];
+      snprintf(vals[0], sizeof vals[0], "%d of 10", sw_nsfw);
+      snprintf(vals[1], sizeof vals[1], "%s", sw_cat[0] ? sw_cat : save_category());
+      snprintf(vals[2], sizeof vals[2], "%d ★  ·  %s", sw_stars, sw_notags ? "no tags" : "the site's tags");
+      for (int k = 0; k < 3; k++) {
+        int ry = y + 36 + k * 64;
+        rrect(x0, ry, xr - x0, 56, 18, SURF2);
+        text(x0 + 20, ry + 35, DIM, 16, labels[k]);
+        text_fit(x0 + 190, ry + 35, TEXT, 18, vals[k], xr - x0 - 260);
+        icon("chev_r", xr - 26, ry + 28, FAINT);
+        if (hit(x0, ry, xr - x0, 56)) { sw_step = k; sw_anim = 0; sfx(SFX_TICK); }
+      }
+      char sz[80];
+      snprintf(sz, sizeof sz, "%s  ·  %s", lv_post_is_video(p) ? "Video, as it is" : cfg.wfull ? "Full size" : "Vita size (Filter → Saves)", LV_SITES[cfg.site].name);
+      text(x0, y + 250, FAINT, 14, sz);
+      break;
+    }
+  }
+  x0 -= dx;
+  // the foot: back and next (or save)
+  int fy = H - 76;
+  int bk = big_btn(x0, fy, 150, 56, sw_step ? "Back" : "Cancel", SURF2, TEXT);
+  int nx = big_btn(xr - 200, fy, 200, 56, sw_step == 3 ? "Save" : "Next", ACC, RGBA(20, 12, 16, 255));
+  text(x0, fy - 14, FAINT, 13, sw_step == 3 ? "✕ save   ○ back" : "←→ change   ✕ next   ○ back   △ save now");
+  if (bk || (in.pressed & SCE_CTRL_CIRCLE)) { sfx(SFX_BACK); if (sw_step) { sw_step--; sw_anim = 0; } else sw_on = 0; }
+  else if (nx || (in.pressed & SCE_CTRL_CROSS)) {
+    if (sw_step == 3) { sfx(SFX_SELECT); sw_do_save(); }
+    else { sfx(SFX_TICK); sw_step++; sw_anim = 0; }
+  }
+  in.pressed = 0; in.tap = 0;
+}
 static void draw_webview(void) {
   if (!nposts) { screen = wv_back; return; }
+  if (sw_on && wv < nposts) { draw_save_wizard(); return; }
   LvPost *p = &posts[wv];
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 255));
   vita2d_texture *t = NULL;
@@ -1920,7 +2120,7 @@ static void draw_webview(void) {
   else if (in.tap && wdetails_y < 0.5f) {
     if (frame_no < wchrome_until && in.tap_x < 70 && in.tap_y < 60) { sfx(SFX_BACK); wv_drop(); screen = wv_back; return; }
     else if (frame_no < wchrome_until && in.tap_x > W - 70 && in.tap_y < 60) wdetails = 1;
-    else if (frame_no < wchrome_until && in.tap_x > W - 170 && in.tap_x < W - 70 && in.tap_y < 60) wv_save();
+    else if (frame_no < wchrome_until && in.tap_x > W - 170 && in.tap_x < W - 70 && in.tap_y < 60) sw_open();
     else wchrome_until = frame_no < wchrome_until ? frame_no : frame_no + 240;
   }
 
@@ -1929,7 +2129,7 @@ static void draw_webview(void) {
   if (in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER)) { sfx(SFX_TICK); wv_show(wv - 1); return; }
   if (in.pressed & SCE_CTRL_CIRCLE) { if (wdetails) { sfx(SFX_CLOSE); wdetails = 0; } else { sfx(SFX_BACK); wv_drop(); wsel = wv; screen = wv_back; return; } }
   if (in.pressed & SCE_CTRL_TRIANGLE) { sfx(wdetails ? SFX_CLOSE : SFX_OPEN); wdetails = !wdetails; }
-  if (in.pressed & SCE_CTRL_SQUARE) { wv_save(); wchrome_until = frame_no + 120; }
+  if (in.pressed & SCE_CTRL_SQUARE) { sw_open(); wchrome_until = frame_no + 120; }
   if (in.pressed & SCE_CTRL_CROSS) {
     if (wv_vid) lv_video_pause(wv_vid, !lv_video_paused(wv_vid));
     else { wzoom = wzoom > 1.5f ? 1 : 2.5f; wpan_x = wpan_y = 0; }

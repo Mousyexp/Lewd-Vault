@@ -6,6 +6,8 @@
 // Each card's preview is decoded straight to the card's own pixels (190 x 107, the picture covered and
 // cropped), and the banner's to the banner's: nothing larger is ever made or drawn.
 
+static pthread_mutex_t vbmx = PTHREAD_MUTEX_INITIALIZER; // (the video browser's thread and its list of sources)
+static int vb_src = -1;
 typedef struct { const char *name, *site, *tags, *icon, *about; int blocked; } VSource;
 static const VSource VSRC_BUILTIN[] = {
   {"Rule34Video", "Rule34Video", "hentai", "rule34video", "Hentai animations", 0},
@@ -28,6 +30,8 @@ static VSource VSRC[VSRC_MAX];
 static int NVSRC, vsrc_built, nvs_added;
 static char vs_name[VSRC_MAX][48], vs_tags[VSRC_MAX][64];
 static void vsrc_build(void) {
+  // (the video browser's thread reads the list, under its lock: rebuilt under it too)
+  pthread_mutex_lock(&vbmx);
   vsrc_built = 1;
   // (the switcher's icons are kept by place: the places may have moved)
   for (int k = 32; k < 48; k++) { if (site_tex[k]) release_tex(site_tex[k]); site_tex[k] = NULL; site_tex_tried[k] = 0; }
@@ -41,6 +45,8 @@ static void vsrc_build(void) {
     VSRC[NVSRC++] = (VSource){vs_name[k], vs_name[k], vs_tags[k], ic, "Added: videos", 0};
   }
   for (int k = 0; k < NVSRC_BUILTIN; k++) if (VSRC_BUILTIN[k].blocked && NVSRC < VSRC_MAX) VSRC[NVSRC++] = VSRC_BUILTIN[k];
+  if (vb_src >= NVSRC) vb_src = -1; // (a source removed under the thread: it stops asking)
+  pthread_mutex_unlock(&vbmx);
 }
 static void vsrc_load(void) {
   FILE *f = fopen(DATA "/video_sources.txt", "r");
@@ -75,9 +81,11 @@ static int vsrc_has_site(const char *site) {
 static int vsrc_add(const char *site, const char *tags) {
   if (!vsrc_built) vsrc_load();
   if (nvs_added >= VSRC_MAX - NVSRC_BUILTIN || vsrc_has_site(site)) return -1;
+  pthread_mutex_lock(&vbmx);
   snprintf(vs_name[nvs_added], sizeof vs_name[0], "%s", site);
   snprintf(vs_tags[nvs_added], sizeof vs_tags[0], "%s", tags);
   nvs_added++;
+  pthread_mutex_unlock(&vbmx);
   vsrc_save();
   vsrc_build();
   return 0;
@@ -85,12 +93,14 @@ static int vsrc_add(const char *site, const char *tags) {
 // (□ on an added one in the switcher: gone)
 static int vsrc_is_added(int k) { return k >= 0 && k < NVSRC && !strcmp(VSRC[k].about, "Added: videos"); }
 static void vsrc_remove(int k) {
+  pthread_mutex_lock(&vbmx);
   for (int j = 0; j < nvs_added; j++)
     if (!strcmp(vs_name[j], VSRC[k].name)) {
       for (int m = j; m < nvs_added - 1; m++) { memcpy(vs_name[m], vs_name[m + 1], sizeof vs_name[0]); memcpy(vs_tags[m], vs_tags[m + 1], sizeof vs_tags[0]); }
       nvs_added--;
       break;
     }
+  pthread_mutex_unlock(&vbmx);
   vsrc_save();
   vsrc_build();
 }
@@ -127,7 +137,6 @@ static vita2d_texture *vb_hero;
 static int vb_hero_state;
 static int vb_row, vb_col[VB_ROWS];
 static float vb_y, vb_x[VB_ROWS]; // (the view: how far down; each row: how far along)
-static pthread_mutex_t vbmx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t vbcv = PTHREAD_COND_INITIALIZER;
 static volatile int vb_gen;
 static int vb_thread_on;
@@ -139,7 +148,6 @@ static struct { int row, card; } vb_want[24];
 static int nvb_want;
 static struct { int row, gen; LvPost *p; int n; char err[96]; int ready; } vb_list;
 
-static int vb_src = -1;
 static void *vb_main(void *arg) {
   pin_to_core(2); // (off the drawing thread's core)
   (void)arg;

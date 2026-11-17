@@ -28,6 +28,7 @@
 #include <psp2/kernel/processmgr.h>
 #include <psp2/power.h>
 #include <pthread.h>
+#include <malloc.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <math.h>
@@ -71,7 +72,22 @@ static uint64_t pt_last;
 static void pin_to_core(int core) {
   sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << (core < 0 ? 0 : core > 2 ? 2 : core));
 }
-int _newlib_heap_size_user = 200 * 1024 * 1024;
+// The C heap: 128 MB. Measured in use: a few MB browsing, ~30 MB at most while a big picture is
+// decoded (a vault of 10,000 items adds a few MB of strings). What it doesn't take is left to the
+// textures that don't fit in video memory (tex_new), the video player and the system: a Vita app has
+// about 256 MB in all, and a heap that asked for most of it left them short.
+int _newlib_heap_size_user = 128 * 1024 * 1024;
+// A texture: in video memory (vita2d's default) and, when that's full, in main memory instead of
+// failing (the GPU reads either; video memory is only 128 MB, shared with the screen's buffers).
+vita2d_texture *tex_new(unsigned w, unsigned h) {
+  vita2d_texture *t = vita2d_create_empty_texture(w, h);
+  if (t) return t;
+  SceKernelMemBlockType was = vita2d_texture_get_alloc_memblock_type();
+  vita2d_texture_set_alloc_memblock_type(SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE);
+  t = vita2d_create_empty_texture(w, h);
+  vita2d_texture_set_alloc_memblock_type(was);
+  return t;
+}
 
 #define W 960
 #define H 544
@@ -623,7 +639,7 @@ static void free_later(vita2d_texture *t) {
   pthread_mutex_unlock(&fmx);
 }
 static vita2d_texture *upload(const LvPixels *px) {
-  vita2d_texture *t = vita2d_create_empty_texture(px->w, px->h);
+  vita2d_texture *t = tex_new(px->w, px->h);
   if (!t) return NULL;
   uint8_t *d = vita2d_texture_get_datap(t);
   unsigned stride = vita2d_texture_get_stride(t);
@@ -644,7 +660,7 @@ static vita2d_texture *atlas[ATLASES];
 static vita2d_texture cells[ATLASES * CELLS_PER_ATLAS];
 static void atlas_init(void) {
   for (int a = 0; a < ATLASES; a++) {
-    atlas[a] = vita2d_create_empty_texture(1024, 1024);
+    atlas[a] = tex_new(1024, 1024);
     if (!atlas[a]) continue;
     uint8_t *d = vita2d_texture_get_datap(atlas[a]);
     unsigned stride = vita2d_texture_get_stride(atlas[a]);
@@ -708,7 +724,7 @@ static vita2d_texture *screen_upload(int set, const LvPixels *px) {
   int k = set * 3 + scr_next[set];
   scr_next[set] = (scr_next[set] + 1) % 3;
   if (!scr_buf[k]) {
-    scr_buf[k] = vita2d_create_empty_texture(W, H);
+    scr_buf[k] = tex_new(W, H);
     if (!scr_buf[k]) return upload(px);
   }
   unsigned stride = vita2d_texture_get_stride(scr_buf[k]);
@@ -736,7 +752,7 @@ static vita2d_texture *thumb_of(int i) {
 static void take_results(void) {
   pthread_mutex_lock(&mx);
   // (at most six a frame, two while the grid is flung fast: the rest the next, so a flood of them
-  //  never holds a frame up; and none more once this frame has spent 5 ms on them)
+  //  never holds a frame up; and none more once this frame has spent 3 ms on them)
   int cap = fabsf(scroll_v) > 30 ? 2 : 6;
   int n = ndone < cap ? ndone : cap;
   Done got[16];
@@ -747,7 +763,7 @@ static void take_results(void) {
   uint64_t t0 = sceKernelGetProcessTimeWide();
   for (int k = 0; k < n; k++) {
     Done *d = &got[k];
-    if (k > 0 && !d->big && sceKernelGetProcessTimeWide() - t0 > 5000) {
+    if (k > 0 && !d->big && sceKernelGetProcessTimeWide() - t0 > 3000) {
       // (out of time: back to the front of the queue for the next frame)
       pthread_mutex_lock(&mx);
       int rest = n - k;
@@ -1551,8 +1567,8 @@ static void draw_library(void) {
   // (a soft tick each time a row of pictures passes the top, as the Vita's own lists do)
   if (first < lgrid.n && lgrid.row[first] != last_top_row) { if (last_top_row >= 0 && (in.touching || scroll_v != 0 || in.ly)) sfx(SFX_TICK); last_top_row = lgrid.row[first]; }
   int wanted[64], nw = 0, last = first;
-  // (flung fast: nothing new asked for and no spinners, the cards in passing aren't decoded for
-  //  nothing; what's in view is asked for as it slows)
+  // (flung fast: nothing new asked for, the cards in passing aren't decoded for nothing, they show
+  //  their loading rings; what's in view is asked for as it slows)
   int flinging = fabsf(scroll_v) > 30 || fast;
   for (int k = first; k < nshown && k < lgrid.n; k++) {
     int i = shown[k];
@@ -1570,9 +1586,11 @@ static void draw_library(void) {
     else {
       rrect(x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, 8, SURF);
       if (tstate[i] == 3) text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No picture");
-      else if (flinging) {}
-      else if (tstate[i] == 1) spinner(x + cw / 2, y + ch / 2, 10);
-      else if (nw < 64) { want_size(i, cw, ch); wanted[nw++] = i; }
+      else {
+        // (still coming: a loading ring; the grid never waits for it, the picture appears when ready)
+        spinner(x + cw / 2, y + ch / 2, 10);
+        if (!flinging && nw < 64) { want_size(i, cw, ch); wanted[nw++] = i; }
+      }
     }
     if (is_video(it) || is_gif(it)) {
       char d[24];
@@ -2590,6 +2608,7 @@ int main(void) {
       if (r == 1 && ime_for == 7 && got[0]) { snprintf(drive_new_id, sizeof drive_new_id, "%s", got); drive_ask_secret = 1; }
       if (r == 1 && ime_for == 14 && got[0]) add_site_start(got);
       if (r == 1 && ime_for == 15) { snprintf(mg.query, sizeof mg.query, "%s", got); mg_search(); }
+      if (r == 1 && ime_for == 16 && got[0]) { for (char *c = got; *c; c++) if (*c == ',' || *c == '"') *c = ' '; snprintf(sw_cat, sizeof sw_cat, "%.63s", got); sw_catsel = sw_ncats() - 1; }
       if (r == 1 && ime_for == 9) { snprintf(whidden, sizeof whidden, "%s", got); hidden_save(); web_search(); }
       if (r == 1 && ime_for == 10 && got[0]) { snprintf(wkey_user, sizeof wkey_user, "%s", got); wkey_ask = 1; }
       if (r == 1 && ime_for == 11 && got[0]) { snprintf(wkeys[cfg.site], sizeof wkeys[cfg.site], "%s %s", wkey_user, got); wkeys_save(); sfx(SFX_DONE); web_search(); }
@@ -2667,7 +2686,11 @@ int main(void) {
       static unsigned n, slow, last_screen = 999;
       uint64_t dt = sceKernelGetProcessTimeWide() - perf_t0;
       if ((unsigned)screen != last_screen || n >= 300) {
-        if (n && last_screen != 999) LOG("perf screen=%u frames=%u avg=%.2fms worst=%.2fms over16ms=%u\n", last_screen, n, sum / 1000.0 / n, worst / 1000.0, slow);
+        if (n && last_screen != 999) {
+          struct mallinfo mi = mallinfo(); // (the heap: in use now, and the most it has grown to)
+          LOG("perf screen=%u frames=%u avg=%.2fms worst=%.2fms over16ms=%u heap=%.1fMB arena=%.1fMB\n", last_screen, n, sum / 1000.0 / n, worst / 1000.0, slow,
+              mi.uordblks / 1048576.0, mi.arena / 1048576.0);
+        }
         sum = worst = 0; n = slow = 0; last_screen = (unsigned)screen;
       }
       sum += dt; n++;

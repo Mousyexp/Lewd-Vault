@@ -18,6 +18,7 @@
 // Either way the file is read through our own reader (lvcrypt.h), so an Untraceable vault's videos
 // are decrypted as they play and never written out plain.
 #include "video.h"
+vita2d_texture *tex_new(unsigned w, unsigned h);
 #include "lvcrypt.h"
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -553,7 +554,7 @@ static vita2d_texture *sw_frame(LvVideo *v) {
     vita2d_texture **tex = &v->rgb2[t];
     if (!*tex || (int)vita2d_texture_get_width(*tex) != v->pix_w || (int)vita2d_texture_get_height(*tex) != v->pix_h) {
       if (*tex) lv_video_release_texture(*tex);
-      *tex = vita2d_create_empty_texture(v->pix_w, v->pix_h);
+      *tex = tex_new(v->pix_w, v->pix_h); // (main.c: video memory, else main memory)
       if (*tex) vita2d_texture_set_filters(*tex, SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
     }
     if (*tex) {
