@@ -608,7 +608,8 @@ static void draw_manga(void) {
       if (mg.cstate && mg.cstate[i] == 3) text_center(x + MG_CW / 2, y + MG_CH / 2, FAINT, 13, "No cover");
       else {
         spinner(x + MG_CW / 2, y + MG_CH / 2, 12);
-        if (mg.cstate && mg.cstate[i] == 0 && mg.books[i].cover[0]) { mg.cstate[i] = 1; mg_push(MJ_COVER, i, 0, mg.books[i].cover); }
+        // (asked for once the list isn't moving fast: covers flown past aren't fetched for nothing)
+        if (mg.cstate && mg.cstate[i] == 0 && mg.books[i].cover[0] && !(in.touching && abs(in.drag_dy) > 25)) { mg.cstate[i] = 1; mg_push(MJ_COVER, i, 0, mg.books[i].cover); }
       }
     }
     if (i < MG_MAX && md_official[i]) {

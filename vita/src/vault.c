@@ -374,19 +374,23 @@ static unsigned long hash(const char *s) {
   return h;
 }
 static void map_put(Map *m, const char *k, const char *val) {
-  size_t i = hash(k) & (m->cap - 1);
+  if (!m->keys || !m->vals) return; // (no memory for the table: nothing found later, nothing crashes)
+  size_t i = hash(k) & (m->cap - 1), probes = 0;
   while (m->keys[i]) {
     if (!strcmp(m->keys[i], k)) return; // (the first one found wins)
     i = (i + 1) & (m->cap - 1);
+    if (++probes >= m->cap) return; // (full: never round and round)
   }
   m->keys[i] = sdup(k);
   m->vals[i] = sdup(val);
 }
 static const char *map_get(const Map *m, const char *k) {
-  size_t i = hash(k) & (m->cap - 1);
+  if (!m->keys || !m->vals) return NULL;
+  size_t i = hash(k) & (m->cap - 1), probes = 0;
   while (m->keys[i]) {
     if (!strcmp(m->keys[i], k)) return m->vals[i];
     i = (i + 1) & (m->cap - 1);
+    if (++probes >= m->cap) break;
   }
   return NULL;
 }
@@ -444,6 +448,7 @@ static int cmp_cats(const void *a, const void *b) {
   return d ? d : strcmp(sort_ctx->cats[ia], sort_ctx->cats[ib]);
 }
 
+static int grow_cats(LvVault *v, const char *name); // (below)
 int lv_vault_load(LvVault *v, const char **why) {
   static const char *msg;
   lv_oom = 0;
@@ -533,25 +538,23 @@ int lv_vault_load(LvVault *v, const char **why) {
   for (int i = 0; i < v->n; i++) {
     int k;
     for (k = 0; k < v->ncats; k++) if (!strcmp(v->cats[k], v->items[i].category)) break;
-    if (k == v->ncats) {
-      v->cats = realloc(v->cats, (v->ncats + 1) * sizeof *v->cats);
-      v->cat_counts = realloc(v->cat_counts, (v->ncats + 1) * sizeof *v->cat_counts);
-      v->cats[k] = sdup(v->items[i].category);
-      v->cat_counts[k] = 0;
-      v->ncats++;
-    }
+    if (k == v->ncats && !grow_cats(v, v->items[i].category)) { lv_oom = 1; continue; }
     v->cat_counts[k]++;
   }
   if (v->ncats > 1) {
     int *order = malloc(v->ncats * sizeof *order);
-    for (int k = 0; k < v->ncats; k++) order[k] = k;
-    sort_ctx = v;
-    qsort(order, v->ncats, sizeof *order, cmp_cats);
     char **cats = malloc(v->ncats * sizeof *cats);
     int *counts = malloc(v->ncats * sizeof *counts);
-    for (int k = 0; k < v->ncats; k++) { cats[k] = v->cats[order[k]]; counts[k] = v->cat_counts[order[k]]; }
-    free(v->cats); free(v->cat_counts); free(order);
-    v->cats = cats; v->cat_counts = counts;
+    if (order && cats && counts) { // (no memory: they stay in the order found)
+      for (int k = 0; k < v->ncats; k++) order[k] = k;
+      sort_ctx = v;
+      qsort(order, v->ncats, sizeof *order, cmp_cats);
+      for (int k = 0; k < v->ncats; k++) { cats[k] = v->cats[order[k]]; counts[k] = v->cat_counts[order[k]]; }
+      free(v->cats); free(v->cat_counts);
+      v->cats = cats; v->cat_counts = counts;
+      cats = NULL; counts = NULL;
+    }
+    free(order); free(cats); free(counts);
   }
 
   // views.csv
@@ -567,7 +570,8 @@ int lv_vault_load(LvVault *v, const char **why) {
           k_ll = col(vh, vn, "last_appreciated"), k_secs = col(vh, vn, "seconds_viewed");
       v->capviews = c.nrows + 64;
       v->views = calloc(v->capviews, sizeof(LvView));
-      for (int r = 1; r < c.nrows; r++) {
+      if (!v->views) { v->capviews = 0; lv_oom = 1; }
+      for (int r = 1; r < c.nrows && v->views; r++) {
         char **row = c.rows[r];
         int n = c.ncells[r];
         if (n == 0 || !row[0][0]) continue;
@@ -700,12 +704,31 @@ int lv_clip_path(LvVault *v, const LvItem *it, char *out, size_t cap) {
   return exists(out);
 }
 
+// One more category (its name copied, its count 0): 1, or 0 with nothing changed when there's no memory.
+static int grow_cats(LvVault *v, const char *name) {
+  char **nc = realloc(v->cats, (v->ncats + 1) * sizeof *nc);
+  if (!nc) return 0;
+  v->cats = nc;
+  int *nn = realloc(v->cat_counts, (v->ncats + 1) * sizeof *nn);
+  if (!nn) return 0;
+  v->cat_counts = nn;
+  char *d = sdup(name);
+  if (!d) return 0;
+  v->cats[v->ncats] = d;
+  v->cat_counts[v->ncats] = 0;
+  v->ncats++;
+  return 1;
+}
+
 // ---------- views ----------
+static LvView scratch_view; // (out of memory: a row that's counted in nowhere, rather than a crash)
 static LvView *row_for(LvVault *v, LvItem *it) {
   if (it->view >= 0) return &v->views[it->view];
   if (v->nviews == v->capviews) {
-    v->capviews = v->capviews ? v->capviews * 2 : 64;
-    v->views = realloc(v->views, v->capviews * sizeof *v->views);
+    int cap = v->capviews ? v->capviews * 2 : 64;
+    LvView *nv = realloc(v->views, cap * sizeof *nv);
+    if (!nv) { lv_oom = 1; memset(&scratch_view, 0, sizeof scratch_view); scratch_view.id = scratch_view.uid = scratch_view.last = scratch_view.last_like = sdup(""); return &scratch_view; }
+    v->views = nv; v->capviews = cap;
   }
   LvView *w = &v->views[v->nviews];
   memset(w, 0, sizeof *w);
@@ -742,15 +765,24 @@ char *lv_views_csv(const LvVault *v) {
   char ***rows = malloc(nrows * sizeof *rows);
   int *ncells = malloc(nrows * sizeof *ncells);
   static char *head[] = {"id", "uid", "views", "last_viewed", "appreciations", "last_appreciated", "seconds_viewed"};
-  rows[0] = head;
-  ncells[0] = 7;
   char (*nums)[3][32] = malloc(v->nviews * sizeof *nums + 1);
   char **cells = malloc((size_t)v->nviews * 7 * sizeof *cells + 1);
+  if (!rows || !ncells || !nums || !cells) { free(rows); free(ncells); free(nums); free(cells); lv_oom = 1; return NULL; }
+  rows[0] = head;
+  ncells[0] = 7;
   for (int k = 0; k < v->nviews; k++) {
     const LvView *w = &v->views[k];
     snprintf(nums[k][0], 32, "%lld", w->views);
     snprintf(nums[k][1], 32, "%lld", w->likes);
-    lv_num_or_empty(round(w->seconds * 10.0) / 10.0, nums[k][2], 32);
+    // (the seconds to a tenth, as JavaScript prints them: whole tenths written straight, not found
+    //  by printing and reading back as lv_num_or_empty does for any number)
+    double t = round(w->seconds * 10.0);
+    if (isfinite(t) && fabs(t) < 9e15) {
+      long long tt = (long long)t;
+      if (!tt) nums[k][2][0] = 0;
+      else if (tt % 10 == 0) snprintf(nums[k][2], 32, "%lld", tt / 10);
+      else snprintf(nums[k][2], 32, "%s%lld.%lld", tt < 0 ? "-" : "", llabs(tt) / 10, llabs(tt) % 10);
+    } else lv_num_or_empty(t / 10.0, nums[k][2], 32);
     char **r = cells + k * 7;
     r[0] = w->id; r[1] = w->uid; r[2] = nums[k][0]; r[3] = w->last; r[4] = nums[k][1]; r[5] = w->last_like; r[6] = nums[k][2];
     rows[k + 1] = r;
@@ -765,6 +797,7 @@ int lv_vault_save_views(LvVault *v) {
   if (!v->views_dirty) return 0;
   backup_today(v);
   char *text = lv_views_csv(v);
+  if (!text) return -1;
   char p[700];
   snprintf(p, sizeof p, "%s/views.csv", v->root);
   int r = lv_write_all(p, lv_key(v), text, strlen(text));
@@ -929,14 +962,8 @@ int lv_vault_add_memory(LvVault *v, const LvNew *n, const LvAdded *a) {
   it->view = -1;
   int c;
   for (c = 0; c < v->ncats; c++) if (!strcmp(v->cats[c], n->category)) break;
-  if (c == v->ncats) {
-    v->cats = realloc(v->cats, (v->ncats + 1) * sizeof *v->cats);
-    v->cat_counts = realloc(v->cat_counts, (v->ncats + 1) * sizeof *v->cat_counts);
-    v->cats[c] = sdup(n->category);
-    v->cat_counts[c] = 0;
-    v->ncats++;
-  }
-  v->cat_counts[c]++;
+  if (c == v->ncats && !grow_cats(v, n->category)) c = 0; // (no memory for one more: counted with the first)
+  if (c < v->ncats) v->cat_counts[c]++;
   LvHot *hh = &v->hot[v->n];
   hh->added = time_key(n->added);
   hh->cat = (int16_t)c;

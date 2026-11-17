@@ -259,10 +259,12 @@ static void vb_take(void) {
     vb_list.ready = 0;
     pthread_cond_broadcast(&vbcv);
   }
-  int n = nvb_done;
+  // (four previews a frame at most: a row arriving at once is spread over a few frames, never one long one)
+  int n = nvb_done < 4 ? nvb_done : 4;
   VbDone got[16];
   memcpy(got, vb_done, n * sizeof *got);
-  nvb_done = 0;
+  memmove(vb_done, vb_done + n, (nvb_done - n) * sizeof *vb_done);
+  nvb_done -= n;
   pthread_mutex_unlock(&vbmx);
   for (int k = 0; k < n; k++) {
     VbDone *d = &got[k];

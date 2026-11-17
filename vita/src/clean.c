@@ -164,14 +164,26 @@ static void draw_clean(void) {
 
 // ---------- the health check ----------
 static struct { int done, missing, stale_views, dup_ids, orphans, no_size; } hc;
+static int cmp_strp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+static const char *base_of(const char *p) { const char *s = p ? strrchr(p, '/') : NULL; return s ? s + 1 : p; }
 static void health_scan(void) {
   memset(&hc, 0, sizeof hc);
+  // (the ids and the files' names, sorted once: a duplicate is next to its twin, and a file in Media/
+  //  is looked up by halving, not compared with every item)
+  const char **ids = malloc((vault.n + 1) * sizeof *ids), **files = malloc((vault.n + 1) * sizeof *files);
+  int nfiles = 0;
   for (int i = 0; i < vault.n; i++) {
     const LvItem *it = &vault.items[i];
     if (!it->path) hc.missing++;
     if (!it->width && vault.hot[i].kind == LV_IMAGE) hc.no_size++;
-    for (int j = i + 1; j < vault.n && j < i + 64; j++) if (!strcmp(it->id, vault.items[j].id)) { hc.dup_ids++; break; }
+    if (ids) ids[i] = it->id;
+    if (files && it->path) files[nfiles++] = base_of(it->path);
   }
+  if (ids) {
+    qsort(ids, vault.n, sizeof *ids, cmp_strp);
+    for (int i = 1; i < vault.n; i++) if (!strcmp(ids[i], ids[i - 1])) hc.dup_ids++;
+  }
+  if (files) qsort(files, nfiles, sizeof *files, cmp_strp);
   unsigned char *used = calloc(vault.nviews + 1, 1);
   for (int i = 0; used && i < vault.n; i++) if (vault.items[i].view >= 0 && vault.items[i].view < vault.nviews) used[vault.items[i].view] = 1;
   for (int k = 0; used && k < vault.nviews; k++) if (!used[k]) hc.stale_views++;
@@ -183,11 +195,13 @@ static void health_scan(void) {
   struct dirent *e;
   while (d && (e = readdir(d))) {
     if (e->d_name[0] == '.') continue;
-    int used = 0;
-    for (int i = 0; i < vault.n && !used; i++) { const char *p = vault.items[i].path; const char *s = p ? strrchr(p, '/') : NULL; if (s && !strcmp(s + 1, e->d_name)) used = 1; }
+    const char *nm = e->d_name;
+    int used = files && bsearch(&nm, files, nfiles, sizeof *files, cmp_strp) != NULL;
+    if (!files) for (int i = 0; i < vault.n && !used; i++) { const char *b = base_of(vault.items[i].path); if (b && !strcmp(b, nm)) used = 1; }
     if (!used) hc.orphans++;
   }
   if (d) closedir(d);
+  free(ids); free(files);
   hc.done = 1;
 }
 static int hc_sel;

@@ -115,9 +115,25 @@ static int has_wide(const char *s) {
   for (; *s; s++) if ((unsigned char)*s >= 0xE3) return 1;
   return 0;
 }
-static int text_w(int size, const char *s) {
+// Widths measured once: the same labels are measured every frame (the headers, the buttons, the
+// chips), and measuring walks the font's glyphs. A small table by the text and its size.
+#define TW_CACHE 512
+static struct { unsigned h; short size, w; char s[48]; } tw_cache[TW_CACHE];
+static int text_w_raw(int size, const char *s) {
   if (pgf && has_wide(s)) return vita2d_pgf_text_width(pgf, size / 17.0f, s);
   return vita2d_font_text_width(font, size, s);
+}
+static int text_w(int size, const char *s) {
+  size_t n = strlen(s);
+  if (n >= 48) return text_w_raw(size, s);
+  unsigned h = 2166136261u ^ (unsigned)size;
+  for (size_t k = 0; k < n; k++) h = (h ^ (unsigned char)s[k]) * 16777619u;
+  int at = h & (TW_CACHE - 1);
+  if (tw_cache[at].h == h && tw_cache[at].size == size && !strcmp(tw_cache[at].s, s)) return tw_cache[at].w;
+  int w = text_w_raw(size, s);
+  tw_cache[at].h = h; tw_cache[at].size = (short)size; tw_cache[at].w = (short)w;
+  memcpy(tw_cache[at].s, s, n + 1);
+  return w;
 }
 static void text(int x, int y, unsigned col, int size, const char *s) {
   if (pgf && has_wide(s)) vita2d_pgf_draw_text(pgf, x, y, col, size / 17.0f, s);
@@ -137,13 +153,19 @@ static void text_fit(int x, int y, unsigned col, int size, const char *s, int ma
   char b[512];
   size_t n = strlen(s);
   if (n > sizeof b - 4) n = sizeof b - 4;
-  memcpy(b, s, n);
-  while (n > 0) {
-    n--;
-    while (n > 0 && ((unsigned char)b[n] & 0xC0) == 0x80) n--; // (whole UTF-8 characters)
-    memcpy(b + n, "…", 4);
-    if (text_w(size, b) <= max_w) break;
+  // (the longest start that fits with "…" after it: found by halving, a few measures, not one per
+  //  letter; whole UTF-8 characters)
+  size_t lo = 0, hi = n;
+  while (lo < hi) {
+    size_t mid = (lo + hi + 1) / 2, m = mid;
+    while (m > 0 && ((unsigned char)s[m] & 0xC0) == 0x80) m--;
+    memcpy(b, s, m);
+    memcpy(b + m, "…", 4);
+    if (text_w_raw(size, b) <= max_w) lo = mid; else hi = mid - 1;
   }
+  while (lo > 0 && ((unsigned char)s[lo] & 0xC0) == 0x80) lo--;
+  memcpy(b, s, lo);
+  memcpy(b + lo, "…", 4);
   text(x, y, col, size, b);
 }
 static void text_center(int cx, int y, unsigned col, int size, const char *s) { text(cx - text_w(size, s) / 2, y, col, size, s); }
@@ -340,6 +362,7 @@ static void cfg_save(void) {
 static LvVault vault;
 static int loaded_vault;
 static int *shown, nshown;     // indices into vault.items
+static float scroll, scroll_v; // (the Library's)
 static int cat = -1;           // -1: every category
 static char query[128];
 static const char *SORTS[] = {"Newest", "Oldest", "Most viewed", "Top rated", "Most hearted", "Shuffle", "For you"};
@@ -386,9 +409,13 @@ static float lib_aspect(int k) {
   return a < 0.5f ? 0.5f : a; // (a webtoon's strip: a card, not a sliver; the card shows its top)
 }
 
+static int cap_shown;
 static void refilter(void) {
-  free(shown);
-  shown = malloc((vault.n + 1) * sizeof *shown);
+  // (the list's room kept from one filter to the next: grown only when the vault has grown)
+  if (!shown || cap_shown < vault.n + 1) {
+    int *ns = realloc(shown, (vault.n + 1) * sizeof *shown);
+    if (ns) { shown = ns; cap_shown = vault.n + 1; } else { free(shown); shown = NULL; cap_shown = 0; }
+  }
   nshown = 0;
   if (!shown) { grid_build(&lgrid, 0, NULL); return; }
   lib_prepare();
@@ -708,15 +735,27 @@ static vita2d_texture *thumb_of(int i) {
 }
 static void take_results(void) {
   pthread_mutex_lock(&mx);
-  // (at most six a frame: the rest the next, so a flood of them never holds a frame up)
-  int n = ndone < 6 ? ndone : 6;
+  // (at most six a frame, two while the grid is flung fast: the rest the next, so a flood of them
+  //  never holds a frame up; and none more once this frame has spent 5 ms on them)
+  int cap = fabsf(scroll_v) > 30 ? 2 : 6;
+  int n = ndone < cap ? ndone : cap;
   Done got[16];
   memcpy(got, done, n * sizeof *got);
   memmove(done, done + n, (ndone - n) * sizeof *done);
   ndone -= n;
   pthread_mutex_unlock(&mx);
+  uint64_t t0 = sceKernelGetProcessTimeWide();
   for (int k = 0; k < n; k++) {
     Done *d = &got[k];
+    if (k > 0 && !d->big && sceKernelGetProcessTimeWide() - t0 > 5000) {
+      // (out of time: back to the front of the queue for the next frame)
+      pthread_mutex_lock(&mx);
+      int rest = n - k;
+      if (ndone + rest <= 16) { memmove(done + rest, done, ndone * sizeof *done); memcpy(done, got + k, rest * sizeof *got); ndone += rest; }
+      else for (int j = k; j < n; j++) { if (got[j].item < vault.n && got[j].item >= 0 && !got[j].big) tstate[got[j].item] = 0; free(got[j].px.rgba); }
+      pthread_mutex_unlock(&mx);
+      break;
+    }
     if (d->vgen != vgen || d->item >= vault.n) { free(d->px.rgba); continue; }
     if (d->big) {
       if (d->gen == big_gen) {
@@ -974,7 +1013,6 @@ static void apply_theme(void) {
 }
 
 static int sel;
-static float scroll, scroll_v;
 
 // ---------- the writer: the vault's lists written to the card off the drawing thread ----------
 // The drawing thread only makes the text (fast, in memory); this thread makes the day's backup and
@@ -1507,11 +1545,15 @@ static void draw_library(void) {
     last = scroll;
   }
 
+  PT("lib: moving");
   // --- the grid ---
   int first = grid_first(&lgrid, scroll - 8);
   // (a soft tick each time a row of pictures passes the top, as the Vita's own lists do)
   if (first < lgrid.n && lgrid.row[first] != last_top_row) { if (last_top_row >= 0 && (in.touching || scroll_v != 0 || in.ly)) sfx(SFX_TICK); last_top_row = lgrid.row[first]; }
   int wanted[64], nw = 0, last = first;
+  // (flung fast: nothing new asked for and no spinners, the cards in passing aren't decoded for
+  //  nothing; what's in view is asked for as it slows)
+  int flinging = fabsf(scroll_v) > 30 || fast;
   for (int k = first; k < nshown && k < lgrid.n; k++) {
     int i = shown[k];
     Rect rc = lgrid.r[k];
@@ -1528,6 +1570,7 @@ static void draw_library(void) {
     else {
       rrect(x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, 8, SURF);
       if (tstate[i] == 3) text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No picture");
+      else if (flinging) {}
       else if (tstate[i] == 1) spinner(x + cw / 2, y + ch / 2, 10);
       else if (nw < 64) { want_size(i, cw, ch); wanted[nw++] = i; }
     }
@@ -1567,10 +1610,18 @@ static void draw_library(void) {
       else { sfx(SFX_SELECT); open_viewer(k, 0); in = saved_in; return; }
     }
   }
-  // (and the next screenful, ready before it's needed)
-  for (int k = last; k < last + 18 && k < nshown && nw < 64; k++)
-    if (!thumb_of(shown[k]) && tstate[shown[k]] != 3) { if (k < lgrid.n) want_size(shown[k], lgrid.r[k].w, lgrid.r[k].h); wanted[nw++] = shown[k]; }
-  ask_thumbs(wanted, nw);
+  // (and the next screenful the way it's going, ready before it's needed: below going down, above
+  //  going up)
+  if (!flinging) {
+    int up = scroll_v < -1 || in.ly < -0.2f || (in.touching && in.drag_dy > 2);
+    for (int j = 0; j < 18 && nw < 64; j++) {
+      int k = up ? first - 1 - j : last + j;
+      if (k < 0 || k >= nshown) break;
+      if (!thumb_of(shown[k]) && tstate[shown[k]] != 3) { if (k < lgrid.n) want_size(shown[k], lgrid.r[k].w, lgrid.r[k].h); wanted[nw++] = shown[k]; }
+    }
+  }
+  ask_thumbs(wanted, nw); // (flinging: none, and the ones asked for before are let go)
+  PT("lib: grid");
   if (!nshown) {
     if (cfg.lmode == 3 && !query[0]) {
       text_center(W / 2, TOP + 150, DIM, 20, "No comics yet");
@@ -1586,6 +1637,7 @@ static void draw_library(void) {
     rrect(W - 6, by, 4, bh, 2, with_alpha(TEXT, 70));
   }
 
+  PT("lib: empty+bar");
   // --- the top: one row of large buttons (tucked away while scrolling down) ---
   int hy = HDR_Y;
   vita2d_draw_rectangle(0, hy, W, TOP_FULL, with_alpha(BG, 250));
@@ -1634,6 +1686,7 @@ static void draw_library(void) {
     if (book_inside) text_fit(title_end, hy + 35, TEXT, 20, info, room);
     else if (room > text_w(14, info)) text(title_end, hy + 33, FAINT, 14, info);
   }
+  PT("lib: header");
   // the modes: L / R (in a book: back to the shelf first)
   if (in.pressed & (SCE_CTRL_RTRIGGER | SCE_CTRL_LTRIGGER)) {
     if (book_inside) close_book();

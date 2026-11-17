@@ -79,7 +79,7 @@ static void resume_set(const LvItem *it, int secs) {
 }
 static void resume_save(void) {
   if (!resume_dirty || !vault.root[0]) return;
-  size_t cap = 16 + (size_t)nresume * 120;
+  size_t cap = 16 + (size_t)nresume * 160; // (an id of up to 97 characters, escaped, and its numbers)
   char *s = malloc(cap);
   if (!s) return;
   size_t o = 0;

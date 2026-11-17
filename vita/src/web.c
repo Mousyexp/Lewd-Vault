@@ -191,6 +191,7 @@ static void saved_build(void) {
   capsaved = vault.n + 64;
   saved_src = malloc(capsaved * sizeof *saved_src);
   nsaved = 0;
+  if (!saved_src) { capsaved = 0; return; } // (no ✓ marks then, rather than a crash)
   for (int i = 0; i < vault.n; i++) if (vault.items[i].source[0]) saved_src[nsaved++] = fnv64(vault.items[i].source);
   qsort(saved_src, nsaved, sizeof *saved_src, cmp_u64);
 }
@@ -200,7 +201,11 @@ static int is_saved(const LvPost *p) {
   return bsearch(&h, saved_src, nsaved, sizeof h, cmp_u64) != NULL;
 }
 static void saved_add(const char *src) {
-  if (nsaved == capsaved) { capsaved = capsaved * 2 + 16; saved_src = realloc(saved_src, capsaved * sizeof *saved_src); }
+  if (nsaved == capsaved) {
+    unsigned long long *ns = realloc(saved_src, (capsaved * 2 + 16) * sizeof *ns);
+    if (!ns) return;
+    saved_src = ns; capsaved = capsaved * 2 + 16;
+  }
   saved_src[nsaved++] = fnv64(src);
   qsort(saved_src, nsaved, sizeof *saved_src, cmp_u64);
 }
@@ -707,8 +712,9 @@ static void web_take_results(void) {
       else resume_sel = -1;
     }
   }
-  // (at most six a frame: the rest the next)
-  int n = nwdone < 6 ? nwdone : 6;
+  // (at most six a frame, two while the grid is flung fast: the rest the next)
+  int wcap = fabsf(wscroll_v) > 30 ? 2 : 6;
+  int n = nwdone < wcap ? nwdone : wcap;
   WDone got[24];
   memcpy(got, wdone, n * sizeof *got);
   memmove(wdone, wdone + n, (nwdone - n) * sizeof *wdone);
@@ -924,6 +930,8 @@ static pthread_mutex_t fdmx = PTHREAD_MUTEX_INITIALIZER;
 static const char *video_tags_for(int kind) { return kind == BK_DANBOORU ? "filetype:mp4" : kind == BK_GELBOORU ? "video" : ""; }
 static void draw_letter_icon(int x, int y, int sz, const char *name);
 static const char *KIND_NAMES[] = {"Danbooru", "Gelbooru", "Moebooru", "e621"};
+static LvSite find_sites[LV_MAX_SITES];
+static int find_nsites;
 static void *find_main(void *arg) {
   (void)arg;
   pin_to_core(2); // (off the drawing thread's core)
@@ -969,19 +977,20 @@ static void *find_main(void *arg) {
       if (f) { size_t len = fread(buf, 1, sizeof buf - 1, f); buf[len] = 0; fclose(f); if (lv_disc_load(buf, c, &n, 160) > 0) find_cached = 1; }
     }
   }
-  // the rows: the sites found that aren't here; then the ones here, for their videos
+  // the rows: the sites found that aren't here; then the ones here, for their videos (from the copy
+  // of the sites made when the finder opened: the list can change on the drawing thread meanwhile)
   pthread_mutex_lock(&fdmx);
   nfrows = 0;
   for (int k = 0; k < n && nfrows < FROWS; k++) {
     int here = 0;
-    for (int s = 0; s < LV_NSITES && !here; s++) here = lv_disc_same_site(LV_SITES[s].base, c[k].base) && !LV_SITES[s].preset;
+    for (int s = 0; s < find_nsites && !here; s++) here = lv_disc_same_site(find_sites[s].base, c[k].base) && !find_sites[s].preset;
     if (here) continue;
     FRow *r = &frows[nfrows++];
     memset(r, 0, sizeof *r);
     r->c = c[k]; r->site = -1;
   }
-  for (int s = 0; s < LV_NSITES && nfrows < FROWS; s++) {
-    const LvSite *st = &LV_SITES[s];
+  for (int s = 0; s < find_nsites && nfrows < FROWS; s++) {
+    const LvSite *st = &find_sites[s];
     if (st->hidden || st->preset || st->kind == BK_E621 || vsrc_has_site(st->name)) continue;
     FRow *r = &frows[nfrows++];
     memset(r, 0, sizeof *r);
@@ -998,7 +1007,7 @@ static void *find_main(void *arg) {
     frows[k].state = 1;
     pthread_mutex_unlock(&fdmx);
     LvSite site = {.name = r.c.name, .kind = r.c.kind, .base = r.c.base};
-    if (r.site >= 0) site = LV_SITES[r.site];
+    if (r.site >= 0) site = find_sites[r.site];
     char url[600];
     int state = 3, videos = 0;
     char why[40] = "doesn't answer";
@@ -1037,6 +1046,7 @@ static void find_open(int tab) {
   sheet = SH_FIND;
   if (find_state == 1 || find_state == 2) return; // (still going)
   find_state = 1; find_lists = 0; find_cached = 0;
+  memcpy(find_sites, LV_SITES, sizeof find_sites); find_nsites = LV_NSITES;
   nvsources(); // (the video sources read here, on this thread: the finder's thread only looks at them)
   pthread_mutex_lock(&fdmx); nfrows = 0; pthread_mutex_unlock(&fdmx);
   lv_net_init();
@@ -1236,12 +1246,17 @@ static void srcstat_save(void) {
   pthread_mutex_unlock(&ssmx);
   if (f) fclose(f);
 }
-static int src_failing(int tab, const char *name) {
+// (read on the drawing thread while the checking thread writes: under its lock)
+static int src_state(int tab, const char *name) {
   if (!srcstat_loaded) srcstat_load();
+  pthread_mutex_lock(&ssmx);
   SrcStat *s = srcstat_of(tab, name, 0);
-  return s && s->st == 3;
+  int st = s ? s->st : 0;
+  pthread_mutex_unlock(&ssmx);
+  return st;
 }
-static int src_asking(int tab, const char *name) { SrcStat *s = srcstat_of(tab, name, 0); return s && s->st == 1; }
+static int src_failing(int tab, const char *name) { return src_state(tab, name) == 3; }
+static int src_asking(int tab, const char *name) { return src_state(tab, name) == 1; }
 typedef struct { int tab, kind, msrc; char name[48], url[1200]; LvSite site; } CheckJob;
 static CheckJob *check_jobs;
 static int ncheck_jobs;
@@ -1404,7 +1419,7 @@ static void draw_sites_sheet(void) {
     // (a source that didn't answer when checked: grey; one being asked: a small spinner)
     if (!add && src_failing(sites_tab, name)) { rrect(x, y, tw, th, 18, RGBA(20, 16, 22, 170)); rrect(x + tw - 76, y + 8, 68, 20, 10, RGBA(0, 0, 0, 190)); text_center(x + tw - 42, y + 23, ACC2, 12, "no answer"); }
     else if (!add && src_asking(sites_tab, name)) spinner(x + tw - 18, y + 18, 7);
-    else if (!add && srcstat_of(sites_tab, name, 0) && srcstat_of(sites_tab, name, 0)->st == 2) { circle(x + tw - 16, y + 95, 5, RGBA(90, 214, 120, 255)); }
+    else if (!add && src_state(sites_tab, name) == 2) { circle(x + tw - 16, y + 95, 5, RGBA(90, 214, 120, 255)); }
     k = kk;
     if (hit(x, y, tw, th)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
@@ -1712,6 +1727,7 @@ static void draw_web(void) {
   static int wlast_top_row = -1;
   if (first < wgrid.n && wgrid.row[first] != wlast_top_row) { if (wlast_top_row >= 0 && (in.touching || wscroll_v != 0 || in.ly)) sfx(SFX_TICK); wlast_top_row = wgrid.row[first]; }
   int wanted[48], nw = 0, last = first;
+  int flinging = fabsf(wscroll_v) > 30; // (flung fast: no previews asked for in passing, no spinners)
   for (int k = first; k < nposts && k < wgrid.n; k++) {
     Rect rc = wgrid.r[k];
     float x = rc.x, y = TOP + 6 + rc.y - wscroll, cw = rc.w, ch = rc.h;
@@ -1726,9 +1742,12 @@ static void draw_web(void) {
     if (t) draw_cover(t, x - g, y - g, cw + 2 * g, ch + 2 * g, RGBA(255, 255, 255, 255));
     else {
       rrect(x - g, y - g, cw + 2 * g, ch + 2 * g, 8, SURF);
-      if (wstate[k] == 1) spinner(x + cw / 2, y + ch / 2, 10);
       if (wstate[k] == 3) text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No preview");
-      else if (nw < 48) wanted[nw++] = k;
+      else if (flinging) {}
+      else {
+        if (wstate[k] == 1) spinner(x + cw / 2, y + ch / 2, 10);
+        if (nw < 48) wanted[nw++] = k;
+      }
     }
     const char *badge = lv_post_is_video(p) ? "VIDEO" : !strcmp(p->ext, "gif") ? "GIF" : NULL;
     if (badge) {
@@ -1739,7 +1758,15 @@ static void draw_web(void) {
     if (is_saved(p)) { circle(x + 17, y + 17, 11, ACC); text_center(x + 17, y + 23, RGBA(20, 12, 16, 255), 14, "\u2713"); }
     if (!sheet_open && hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR) { wsel = k; sfx(SFX_SELECT); wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; wv_back = S_WEB; screen = S_WEBVIEW; wv_show(k); return; }
   }
-  for (int k = last; k < last + 18 && k < nposts && nw < 48; k++) if (!preview_of(k) && wstate[k] != 3) wanted[nw++] = k;
+  // (the next screenful the way it's going)
+  if (!flinging) {
+    int up = wscroll_v < -1 || in.ly < -0.2f || (in.touching && in.drag_dy > 2);
+    for (int j = 0; j < 18 && nw < 48; j++) {
+      int k = up ? first - 1 - j : last + j;
+      if (k < 0 || k >= nposts) break;
+      if (!preview_of(k) && wstate[k] != 3) wanted[nw++] = k;
+    }
+  }
   ask_previews(wanted, nw);
   // the next page, before the end is reached
   if (last + 12 >= nposts) web_more();
