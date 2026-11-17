@@ -118,10 +118,10 @@ you leave the screen (`src/wifi.c`).
 
 ## The LiveArea
 
-The page behind the bubble (`sce_sys/livearea/contents`, drawn by `tools/make-livearea.mjs`, style
-a5): the heart is the gate that starts the app as usual; two slim launchers beside it open the
-**Google Drive vault** and the **vault on the card** straight away (past the PIN lock, if there is
-one); the panel under the heart shows the vault's numbers (items, hearts, time spent looking),
+The page behind the bubble (`sce_sys/livearea/contents`, drawn by `tools/make-livearea.mjs`): the
+gate in the middle starts the app as usual; the frame on its left opens the **Google Drive vault**
+and the one on its right the **vault on the card**, straight away (past the PIN lock, if there is
+one); the strip along the bottom shows the vault's numbers (items, hearts, time spent looking),
 written by the app whenever a vault opens (`src/livearea.c`). The Google Drive vault is the one
 "Get it from Drive" made (a vault of its own, its folder ending in "(Drive)") or one that has been
 synced; with none on the card yet, its frame opens Google Drive's screen to get it.
