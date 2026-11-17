@@ -185,7 +185,7 @@ static int coll_next(int d) {
 static void draw_filters_sheet(void) {
   if (!saved_loaded) saved_load();
   enum { F_SEARCH, F_KIND, F_NSFW, F_STARS, F_ALBUM, F_COLL, F_SIZE, F_TAGS, F_SAVED, F_SAVE, F_RESET, F_N };
-  int w = 460, x = W - w - 12, y = 12, rh = 40;
+  int w = 460, x = W - w - 12, y = 12, rh = 46;
   sheet_frame(x, y, w, F_N * rh + 16);
   char v[160];
   for (int k = 0; k < F_N; k++) {

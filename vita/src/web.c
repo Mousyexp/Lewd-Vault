@@ -804,7 +804,7 @@ static void draw_filter_sheet(void) {
   int needs_key = LV_SITES[cfg.site].needs_key;
   enum { R_SEARCH, R_G, R_S, R_Q, R_E, R_SPAN, R_CAT, R_FULL, R_HIDDEN, R_KEY, R_N };
   int nrows = needs_key ? R_N : R_N - 1;
-  int w = 440, x = W - w - 12, y = 46, rh = 42;
+  int w = 440, x = W - w - 12, y = 46, rh = 46;
   rrect(x, y, w, nrows * rh + 18, 16, SURF);
   for (int k = 0; k < nrows; k++) {
     int ry = y + 9 + k * rh;
@@ -812,14 +812,14 @@ static void draw_filter_sheet(void) {
     char v[160];
     const char *name = "", *val = "";
     if (k == R_SEARCH) {
-      text(x + 20, ry + 25, TEXT, 17, "Search");
-      text_fit(x + 120, ry + 25, cfg.wquery[0] ? ACC : FAINT, 16, cfg.wquery[0] ? cfg.wquery : "recent, bookmarks, tags here…", w - 140);
+      text(x + 20, ry + 28, TEXT, 17, "Search");
+      text_fit(x + 120, ry + 28, cfg.wquery[0] ? ACC : FAINT, 16, cfg.wquery[0] ? cfg.wquery : "recent, bookmarks, tags here…", w - 140);
     } else if (k <= R_E) {
       int bit = 1 << (k - R_G);
-      text(x + 20, ry + 25, TEXT, 17, RATING_NAMES[k - R_G]);
+      text(x + 20, ry + 28, TEXT, 17, RATING_NAMES[k - R_G]);
       int on = (cfg.ratings & bit) != 0;
-      rrect(x + w - 66, ry + 8, 44, 24, 12, on ? ACC : SURF2);
-      circle(on ? x + w - 34 : x + w - 54, ry + 20, 9, TEXT);
+      rrect(x + w - 66, ry + 10, 44, 24, 12, on ? ACC : SURF2);
+      circle(on ? x + w - 34 : x + w - 54, ry + 22, 9, TEXT);
     } else {
       switch (k) {
         case R_SPAN: name = "Top of"; val = lv_booru_has_spans(&LV_SITES[cfg.site]) ? LV_SPAN_NAMES[cfg.wspan] : "All time (this site)"; break;
@@ -835,8 +835,8 @@ static void draw_filter_sheet(void) {
         }
         case R_KEY: name = "API key"; val = wkeys[cfg.site][0] ? "set (✕ to change)" : "needed: ✕"; break;
       }
-      text(x + 20, ry + 25, TEXT, 17, name);
-      text(x + w - 22 - text_w(15, val), ry + 25, k == R_SPAN && cfg.wsort != LV_SORT_TOP ? FAINT : ACC, 15, val);
+      text(x + 20, ry + 28, TEXT, 17, name);
+      text(x + w - 22 - text_w(15, val), ry + 28, k == R_SPAN && cfg.wsort != LV_SORT_TOP ? FAINT : ACC, 15, val);
     }
     if (hit(x, ry, w, rh)) { sheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
@@ -935,7 +935,7 @@ static void draw_search_sheet(void) {
   if (nwmarks) { rows[n++] = (SRow){SR_HEAD, 2}; for (int k = 0; k < nwmarks && n < 64; k++) rows[n++] = (SRow){SR_BMARK, k}; }
   if (sheet_sel >= n) sheet_sel = n - 1;
   while (sheet_sel > 0 && rows[sheet_sel].kind == SR_HEAD) sheet_sel--;
-  int w = 520, x = W - w - 12, y = 46, rh = 34, view = H - BAR - y - 10;
+  int w = 520, x = W - w - 12, y = 46, rh = 44, view = H - BAR - y - 10;
   rrect(x, y, w, view, 16, SURF);
   // (the chosen row kept in sight)
   float want = sheet_sel * rh;
@@ -949,20 +949,20 @@ static void draw_search_sheet(void) {
     SRow r = rows[k];
     if (r.kind == SR_HEAD) {
       static const char *heads[] = {"Tags in these results  (✕ add, □ leave out)", "Recent  (□ forgets one)", "Bookmarks  (□ removes one)"};
-      text(x + 20, ry + 24, FAINT, 14, heads[r.i]);
+      text(x + 20, ry + 28, FAINT, 14, heads[r.i]);
       continue;
     }
     if (k == sheet_sel) rrect(x + 6, ry, w - 12, rh - 4, 10, SURF2);
     char b[200];
     switch (r.kind) {
-      case SR_TYPE: text(x + 20, ry + 22, TEXT, 16, "Search"); text_fit(x + 110, ry + 22, cfg.wquery[0] ? ACC : FAINT, 15, cfg.wquery[0] ? cfg.wquery : "type tags, like blue_hair smile", w - 130); break;
-      case SR_MARK: text(x + 20, ry + 22, TEXT, 16, marked ? "★ Bookmarked (✕ to remove)" : "☆ Bookmark this search"); break;
-      case SR_CLEAR: text(x + 20, ry + 22, TEXT, 16, "Clear the search"); break;
-      case SR_TAG: text(x + 30, ry + 22, TEXT, 16, wtags[r.i].t); snprintf(b, sizeof b, "%d", wtags[r.i].n); text(x + w - 26 - text_w(14, b), ry + 22, FAINT, 14, b); break;
+      case SR_TYPE: text(x + 20, ry + 27, TEXT, 17, "Search"); text_fit(x + 110, ry + 27, cfg.wquery[0] ? ACC : FAINT, 15, cfg.wquery[0] ? cfg.wquery : "type tags, like blue_hair smile", w - 130); break;
+      case SR_MARK: text(x + 20, ry + 27, TEXT, 17, marked ? "★ Bookmarked (✕ to remove)" : "☆ Bookmark this search"); break;
+      case SR_CLEAR: text(x + 20, ry + 27, TEXT, 17, "Clear the search"); break;
+      case SR_TAG: text(x + 30, ry + 27, TEXT, 17, wtags[r.i].t); snprintf(b, sizeof b, "%d", wtags[r.i].n); text(x + w - 26 - text_w(14, b), ry + 27, FAINT, 14, b); break;
       case SR_RECENT: case SR_BMARK: {
         const WSearch *s = r.kind == SR_RECENT ? &wrecent[r.i] : &wmarks[r.i];
-        text_fit(x + 30, ry + 22, TEXT, 16, s->q, w - 170);
-        text(x + w - 26 - text_w(13, LV_SITES[s->site].name), ry + 22, FAINT, 13, LV_SITES[s->site].name);
+        text_fit(x + 30, ry + 27, TEXT, 17, s->q, w - 170);
+        text(x + w - 26 - text_w(13, LV_SITES[s->site].name), ry + 27, FAINT, 13, LV_SITES[s->site].name);
         break;
       }
     }
@@ -1101,47 +1101,40 @@ static void draw_web(void) {
 
   // --- the top: the site (the tab button), the search, the filter and the sort ---
   vita2d_draw_rectangle(0, 0, W, TOP, with_alpha(BG, 250));
-  text(16, 28, TEXT, 22, "Browser");
+  text(18, 36, TEXT, 26, "Browser");
   char site[80];
   snprintf(site, sizeof site, "%s  ▾", LV_SITES[cfg.site].name);
-  int sx = 16 + text_w(22, "Browser") + 14;
-  int ws = text_w(16, site) + 28;
-  rrect(sx, 8, ws, 28, 14, ACC);
-  text(sx + 14, 28, RGBA(20, 12, 16, 255), 16, site);
-  if (!sheet_open && hit(sx, 0, ws, 40)) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = cfg.site; }
+  int sx = 18 + text_w(26, "Browser") + 14;
+  int ws = text_w(17, site) + 36;
+  rrect(sx, 8, ws, 36, 18, ACC);
+  text(sx + 18, 32, RGBA(20, 12, 16, 255), 17, site);
+  if (!sheet_open && hit(sx, 4, ws, 44)) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = cfg.site; }
   // filter and sort on the right
-  char sortl[40], filt[40];
-  snprintf(sortl, sizeof sortl, "⇅ %s", LV_SORT_NAMES[cfg.wsort]);
+  char filt[40];
   int nr = 0;
   for (int k = 0; k < 4; k++) nr += (cfg.ratings >> k) & 1;
-  if (nr == 4) snprintf(filt, sizeof filt, "Filter: all");
+  if (nr == 4) snprintf(filt, sizeof filt, "Filter");
   else { snprintf(filt, sizeof filt, "Filter:"); for (int k = 0; k < 4; k++) if (cfg.ratings & (1 << k)) { char c[3] = {' ', RATING_NAMES[k][0], 0}; strcat(filt, c); } }
-  int wsr = text_w(15, sortl) + 26, wf = text_w(15, filt) + 26;
-  int rx = W - 16 - wsr;
-  rrect(rx, 8, wsr, 26, 13, SURF2);
-  text(rx + 13, 26, TEXT, 15, sortl);
-  if (!sheet_open && (hit(rx, 0, wsr, 36) || (in.pressed & SCE_CTRL_TRIANGLE))) {
+  int rx = W - 16, hb;
+  rx -= head_button(rx, "sort", LV_SORT_NAMES[cfg.wsort], SURF2, &hb) + 10;
+  if (!sheet_open && (hb || (in.pressed & SCE_CTRL_TRIANGLE))) {
     sfx(SFX_TOGGLE);
     do cfg.wsort = (cfg.wsort + 1) % LV_NSORTS; while (cfg.wsort == LV_SORT_HOT && !LV_SITES[cfg.site].hot);
     web_search();
   }
-  rx -= wf + 8;
-  rrect(rx, 8, wf, 26, 13, nr == 4 ? SURF2 : with_alpha(ACC, 90));
-  text(rx + 13, 26, TEXT, 15, filt);
-  if (!sheet_open && (hit(rx, 0, wf, 36) || (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); sheet = SH_FILTER; sheet_sel = 0; in.pressed &= ~SCE_CTRL_SQUARE; }
-  // the search, under the title
-  char q[180];
-  snprintf(q, sizeof q, "%s", cfg.wquery[0] ? cfg.wquery : "Search tags…");
-  int wq = text_w(15, q) + 28;
-  if (wq > W - 32) wq = W - 32;
-  rrect(16, 38, wq, 24, 12, SURF2);
-  text_fit(30, 55, cfg.wquery[0] ? TEXT : FAINT, 15, q, wq - 28);
-  if (!sheet_open && hit(16, 36, wq, 30) && !ime_open) open_search_sheet();
+  rx -= head_button(rx, "sliders", filt, nr == 4 ? SURF2 : with_alpha(ACC, 110), &hb) + 10;
+  if (!sheet_open && (hb || (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); sheet = SH_FILTER; sheet_sel = 0; in.pressed &= ~SCE_CTRL_SQUARE; }
+  // the search field, the width of the screen, under the title
+  int wq = W - 32 - (cfg.wquery[0] ? 48 : 0);
+  rrect(16, 50, wq, 36, 18, SURF2);
+  icon("search", 38, 68, cfg.wquery[0] ? TEXT : FAINT);
+  text_fit(56, 74, cfg.wquery[0] ? TEXT : FAINT, 16, cfg.wquery[0] ? cfg.wquery : "Search tags, or pick from recent and bookmarks", wq - 60);
+  if (!sheet_open && hit(16, 50, wq, 36) && !ime_open) open_search_sheet();
   if (cfg.wquery[0]) {
-    int cx = 16 + wq + 6;
-    rrect(cx, 38, 26, 24, 12, SURF2);
-    text_center(cx + 13, 55, DIM, 14, "✕");
-    if (!sheet_open && hit(cx, 36, 30, 30)) { cfg.wquery[0] = 0; web_search(); }
+    int cx = 16 + wq + 8;
+    rrect(cx, 50, 40, 36, 18, SURF2);
+    icon("xmark", cx + 20, 68, DIM);
+    if (!sheet_open && hit(cx, 50, 40, 36)) { cfg.wquery[0] = 0; web_search(); }
   }
 
   if (!sheet_open) {

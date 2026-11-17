@@ -69,6 +69,26 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sounds/slideshow.wav sounds/slideshow.wav
   FILE sounds/more.wav sounds/more.wav
   FILE sounds/start.wav sounds/start.wav
+  FILE ui/back.png ui/back.png
+  FILE ui/compass.png ui/compass.png
+  FILE ui/compass_fill.png ui/compass_fill.png
+  FILE ui/film.png ui/film.png
+  FILE ui/gear.png ui/gear.png
+  FILE ui/gear_fill.png ui/gear_fill.png
+  FILE ui/heart.png ui/heart.png
+  FILE ui/heart_fill.png ui/heart_fill.png
+  FILE ui/image.png ui/image.png
+  FILE ui/info.png ui/info.png
+  FILE ui/more.png ui/more.png
+  FILE ui/photos.png ui/photos.png
+  FILE ui/photos_fill.png ui/photos_fill.png
+  FILE ui/play.png ui/play.png
+  FILE ui/play_fill.png ui/play_fill.png
+  FILE ui/plus.png ui/plus.png
+  FILE ui/search.png ui/search.png
+  FILE ui/sliders.png ui/sliders.png
+  FILE ui/sort.png ui/sort.png
+  FILE ui/xmark.png ui/xmark.png
   FILE sites/danbooru.png sites/danbooru.png
   FILE sites/yandere.png sites/yandere.png
   FILE sites/konachan.png sites/konachan.png

@@ -58,8 +58,8 @@ int _newlib_heap_size_user = 200 * 1024 * 1024;
 #define W 960
 #define H 544
 #define DATA "ux0:data/LWDV00001"
-#define TOP 66
-#define BAR 58
+#define TOP 92 // (the header: the title and its buttons, then the chips)
+#define BAR 80 // (the floating tab bar's room: it and its margin)
 #define COLS 6
 #define CARD_W 148
 #define CARD_H 197
@@ -765,7 +765,9 @@ static void read_input(void) {
     prev_touch = 0;
   }
 }
-static int hit(int x, int y, int w, int h) { return in.tap && in.tap_x >= x && in.tap_x < x + w && in.tap_y >= y && in.tap_y < y + h; }
+// (a few pixels of slack all round: a finger is wider than a cursor)
+#define SLACK 5
+static int hit(int x, int y, int w, int h) { return in.tap && in.tap_x >= x - SLACK && in.tap_x < x + w + SLACK && in.tap_y >= y - SLACK && in.tap_y < y + h + SLACK; }
 
 // ---------- the system keyboard ----------
 static uint16_t ime_title[64], ime_text[SCE_IME_DIALOG_MAX_TEXT_LENGTH + 1], ime_init[SCE_IME_DIALOG_MAX_TEXT_LENGTH + 1];
@@ -1063,44 +1065,95 @@ static int wf_return;      // (wifi.c: the screen to go back to,
 static char wf_last[160];  //  and the last file, or why it stopped)
 // ----- the library -----
 static void open_viewer(int k, int slideshow);
+// ---------- the app's icons (vita/ui/*.png, tools/make-ui-icons.mjs): white glyphs, tinted when drawn ----------
+static struct { const char *name; vita2d_texture *t; int tried; } ui_icons[24];
+static vita2d_texture *ui_icon(const char *name) {
+  int k = 0;
+  for (; k < 24 && ui_icons[k].name; k++) if (!strcmp(ui_icons[k].name, name)) break;
+  if (k == 24) return NULL;
+  if (!ui_icons[k].name) ui_icons[k].name = name;
+  if (!ui_icons[k].tried) {
+    ui_icons[k].tried = 1;
+    char p[96];
+    snprintf(p, sizeof p, "app0:ui/%s.png", name);
+    ui_icons[k].t = vita2d_load_PNG_file(p);
+  }
+  return ui_icons[k].t;
+}
+// an icon centred on (cx, cy), at its own size (they're made at the size they're drawn)
+static void icon(const char *name, float cx, float cy, unsigned col) {
+  vita2d_texture *t = ui_icon(name);
+  if (!t) return;
+  float w = vita2d_texture_get_width(t), h = vita2d_texture_get_height(t);
+  vita2d_draw_texture_tint(t, (int)(cx - w / 2), (int)(cy - h / 2), col);
+}
+
+// ---------- the tab bar: a pill floating over the bottom, as on iOS ----------
+// (the screens leave BAR at the bottom free when scrolled to the end; meanwhile they show through
+// around the pill)
+#define PILL_W 600
+#define PILL_H 62
+static float pill_sel_x = -1;
+static int tab_of_screen(void) {
+  switch (screen) {
+    case S_LIBRARY: return 0;
+    case S_WEB: return 1;
+    case S_SHOW: return 2;
+    case S_SETTINGS: case S_DRIVE: case S_WIFI: case S_STATS: case S_HEALTH: return 3;
+  }
+  return -1;
+}
 static void draw_bar(void) {
-  vita2d_draw_rectangle(0, H - BAR, W, BAR, with_alpha(SURF, 245));
-  vita2d_draw_line(0, H - BAR, W, H - BAR, with_alpha(TEXT, 20));
+  int px = (W - PILL_W) / 2, py = H - PILL_H - 10, tw = PILL_W / 4;
+  // a soft shadow, the glassy body, a light rim along its top
+  rrect(px - 4, py + 2, PILL_W + 8, PILL_H + 8, (PILL_H + 8) / 2, RGBA(0, 0, 0, 50));
+  rrect(px - 1, py + 3, PILL_W + 2, PILL_H + 2, (PILL_H + 2) / 2, RGBA(0, 0, 0, 70));
+  rrect(px, py, PILL_W, PILL_H, PILL_H / 2, with_alpha(SURF2, 238));
+  rrect(px + 2, py + 1, PILL_W - 4, PILL_H / 2, PILL_H / 2 - 2, with_alpha(TEXT, 12));
   static const char *labels[] = {"Library", "Browser", "Slideshow", "Settings"};
+  static const char *icons[][2] = {{"photos", "photos_fill"}, {"compass", "compass_fill"}, {"play", "play_fill"}, {"gear", "gear_fill"}};
+  int sel_tab = tab_of_screen();
+  // the selected tab's capsule slides to it
+  if (sel_tab >= 0) {
+    float tx = px + sel_tab * tw;
+    pill_sel_x = pill_sel_x < 0 ? tx : pill_sel_x + (tx - pill_sel_x) * 0.3f;
+    rrect(pill_sel_x + 6, py + 5, tw - 12, PILL_H - 10, (PILL_H - 10) / 2, with_alpha(TEXT, 26));
+  }
   for (int k = 0; k < 4; k++) {
-    int cx = W / 8 + k * W / 4;
-    int on = (k == 0 && screen == S_LIBRARY) || (k == 1 && screen == S_WEB) || (k == 2 && screen == S_SHOW) || (k == 3 && screen == S_SETTINGS);
-    unsigned c = on ? ACC : DIM;
-    int y = H - BAR + 20;
-    switch (k) {
-      case 0: for (int i = 0; i < 4; i++) rrect(cx - 11 + (i % 2) * 12, y - 10 + (i / 2) * 12, 10, 10, 2, c); break;
-      case 1: // a globe
-        circle(cx, y, 11, c); circle(cx, y, 9, with_alpha(SURF, 255));
-        vita2d_draw_rectangle(cx - 9, y - 1, 18, 2, c); vita2d_draw_rectangle(cx - 1, y - 9, 2, 18, c);
-        break;
-      case 2: rrect(cx - 13, y - 9, 26, 18, 3, c); vita2d_draw_rectangle(cx - 3, y - 4, 2, 8, BG); vita2d_draw_rectangle(cx + 1, y - 4, 2, 8, BG); break;
-      case 3: circle(cx, y, 10, c); circle(cx, y, 4, with_alpha(SURF, 255));
-              for (int i = 0; i < 6; i++) circle(cx + cosf(i * 1.047f) * 11, y + sinf(i * 1.047f) * 11, 3, c);
-              break;
-    }
-    text_center(cx, H - 10, c, 13, labels[k]);
+    int cx = px + k * tw + tw / 2;
+    int on = k == sel_tab;
+    unsigned c = on ? ACC : with_alpha(TEXT, 200);
+    icon(icons[k][on], cx, py + 23, c);
+    text_center(cx, py + PILL_H - 9, c, 12, labels[k]);
     // (the button that leads here: ○ goes round Library, Browser, Slideshow, Settings)
-    int next = (screen == S_LIBRARY && k == 1) || (screen == S_WEB && k == 2) || (screen == S_SHOW && k == 3) || (screen == S_SETTINGS && k == 0);
-    if (next) { circle(cx + 30, y - 6, 8, with_alpha(TEXT, 40)); text_center(cx + 30, y - 1, DIM, 12, "\u25cb"); }
-    if (hit(cx - W / 8, H - BAR, W / 4, BAR)) {
+    int next = sel_tab >= 0 && k == (sel_tab + 1) % 4 && screen != S_DRIVE && screen != S_WIFI && screen != S_STATS && screen != S_HEALTH;
+    if (next) { circle(cx + 26, py + 14, 8, with_alpha(TEXT, 36)); text_center(cx + 26, py + 19, DIM, 11, "○"); }
+    // (the whole quarter of the pill, and a little round it, is the tab's)
+    if (in.tap && in.tap_x >= px + k * tw - (k == 0 ? 20 : 0) && in.tap_x < px + (k + 1) * tw + (k == 3 ? 20 : 0) && in.tap_y >= py - 10) {
       sfx(SFX_TAB);
       if (k == 0) { screen = S_LIBRARY; if (query[0]) { query[0] = 0; refilter(); } }
       if (k == 1) screen = S_WEB;
       if (k == 2) { screen = S_SHOW; plan_sel = 0; }
       if (k == 3) screen = S_SETTINGS;
+      in.tap = 0;
     }
   }
 }
 
 static int chip(int x, int y, const char *label, int on) {
-  int w = text_w(16, label) + 28;
-  rrect(x, y, w, 30, 15, on ? ACC : SURF2);
-  text(x + 14, y + 21, on ? RGBA(20, 12, 16, 255) : TEXT, 16, label);
+  int w = text_w(17, label) + 36;
+  rrect(x, y, w, 38, 19, on ? ACC : SURF2);
+  text(x + 18, y + 26, on ? RGBA(20, 12, 16, 255) : TEXT, 17, label);
+  return w;
+}
+// A header button: a capsule 36 high with an icon (or none) and a label; its width. x is its right edge.
+static int head_button(int right, const char *ic, const char *label, unsigned bg, int *hit_out) {
+  int w = text_w(16, label) + (ic ? 50 : 32);
+  int x = right - w;
+  rrect(x, 8, w, 36, 18, bg);
+  if (ic) icon(ic, x + 22, 26, TEXT);
+  text(x + (ic ? 38 : 16), 32, TEXT, 16, label);
+  *hit_out = hit(x, 4, w, 44);
   return w;
 }
 
@@ -1216,52 +1269,45 @@ static void draw_library(void) {
 
   // --- the top: title, then the category chips ---
   vita2d_draw_rectangle(0, 0, W, TOP, with_alpha(BG, 250));
-  text(16, 28, TEXT, 22, "Library");
+  text(18, 36, TEXT, 26, "Library");
   char info[96];
   snprintf(info, sizeof info, "%d %s", nshown, nshown == 1 ? "item" : "items");
-  text(16 + text_w(22, "Library") + 12, 28, FAINT, 15, info);
+  text(18 + text_w(26, "Library") + 12, 34, FAINT, 15, info);
   int sx = W - 16;
   char kl[64];
   int nf = (cfg.kind != 0) + (lf.nsfw_max != 0) + (lf.stars_min != 0) + (lf.album != 0) + (lf.coll[0] != 0);
   if (nf) snprintf(kl, sizeof kl, "Filters \u00b7 %d", nf); else snprintf(kl, sizeof kl, "Filters");
-  int ws = text_w(15, SORTS[cfg.sort]) + 26, wk = text_w(15, kl) + 26;
-  sx -= ws;
-  rrect(sx, 8, ws, 26, 13, SURF2);
-  text(sx + 13, 26, TEXT, 15, SORTS[cfg.sort]);
-  if (hit(sx, 0, ws, 36) || (!selecting && (in.pressed & SCE_CTRL_TRIANGLE))) { sfx(SFX_TOGGLE); cfg.sort = (cfg.sort + 1) % NSORTS; refilter(); cfg_save(); sel = 0; scroll = 0; }
-  sx -= wk + 8;
-  rrect(sx, 8, wk, 26, 13, nf ? with_alpha(ACC, 90) : SURF2);
-  text(sx + 13, 26, TEXT, 15, kl);
-  if (hit(sx, 0, wk, 36) || (!selecting && (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); lsheet = LS_FILTERS; lsheet_sel = 0; }
+  int hb;
+  sx -= head_button(sx, "sort", SORTS[cfg.sort], SURF2, &hb) + 10;
+  if (hb || (!selecting && (in.pressed & SCE_CTRL_TRIANGLE))) { sfx(SFX_TOGGLE); cfg.sort = (cfg.sort + 1) % NSORTS; refilter(); cfg_save(); sel = 0; scroll = 0; }
+  sx -= head_button(sx, "sliders", kl, nf ? with_alpha(ACC, 110) : SURF2, &hb) + 10;
+  if (hb || (!selecting && (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); lsheet = LS_FILTERS; lsheet_sel = 0; }
   if (query[0]) {
     char q[160];
-    snprintf(q, sizeof q, "“%s”  ✕", query);
-    int wq = text_w(15, q) + 26;
-    sx -= wq + 8;
-    rrect(sx, 8, wq, 26, 13, with_alpha(ACC, 70));
-    text(sx + 13, 26, TEXT, 15, q);
-    if (hit(sx, 0, wq, 36)) { query[0] = 0; refilter(); }
+    snprintf(q, sizeof q, "\u201c%s\u201d", query);
+    sx -= head_button(sx, "xmark", q, with_alpha(ACC, 80), &hb) + 10;
+    if (hb) { query[0] = 0; refilter(); }
   }
   // categories: L / R, or tap
   if (in.pressed & (SCE_CTRL_RTRIGGER | SCE_CTRL_LTRIGGER)) sfx(SFX_TAB);
   if (in.pressed & SCE_CTRL_RTRIGGER) { cat = cat + 1 >= vault.ncats ? -1 : cat + 1; refilter(); sel = 0; scroll = 0; }
   if (in.pressed & SCE_CTRL_LTRIGGER) { cat = cat - 1 < -1 ? vault.ncats - 1 : cat - 1; refilter(); sel = 0; scroll = 0; }
-  if (in.touching && in.ty < TOP && in.ty > 36) chips_scroll -= in.drag_dx;
+  if (in.touching && in.ty < TOP && in.ty > 48) chips_scroll -= in.drag_dx;
   if (chips_scroll < 0) chips_scroll = 0;
   float cxp = 12 - chips_scroll;
   for (int k = -1; k < vault.ncats; k++) {
     const char *nm = k < 0 ? "All" : vault.cats[k];
-    int w = text_w(16, nm) + 28;
+    int w = text_w(17, nm) + 36;
     if (cxp + w > 0 && cxp < W) {
-      chip((int)cxp, 34, nm, k == cat);
-      if (hit((int)cxp, 34, w, 30)) { sfx(SFX_TAB); cat = k; refilter(); sel = 0; scroll = 0; }
+      chip((int)cxp, 50, nm, k == cat);
+      if (hit((int)cxp, 50, w, 38)) { sfx(SFX_TAB); cat = k; refilter(); sel = 0; scroll = 0; }
     }
     // keep the chosen chip in view
     if (k == cat && (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER))) {
       if (cxp < 0) chips_scroll += cxp - 12;
       if (cxp + w > W) chips_scroll += cxp + w - W + 12;
     }
-    cxp += w + 6;
+    cxp += w + 8;
   }
 
   if (selecting) {
@@ -1775,7 +1821,7 @@ static void draw_settings(void) {
     {"Open another vault", "", "The vaults on the memory card"},
     {"Clear the thumbnail cache", "", "They're made again as you scroll"},
   };
-  int n = ST_N, rh = 47, top = 58, room = H - BAR - top - 4;
+  int n = ST_N, rh = 58, top = 62, room = H - BAR - top + 8;
   // (the chosen row kept in sight)
   float want = set_sel * rh;
   if (want + rh - set_scroll > room) set_scroll = want + rh - room;
@@ -1783,12 +1829,12 @@ static void draw_settings(void) {
   for (int k = 0; k < n; k++) {
     int y = top + k * rh - (int)set_scroll;
     if (y + rh < top - 10 || y > H - BAR) continue;
-    rrect(30, y, W - 60, 43, 12, k == set_sel ? SURF2 : SURF);
-    if (k == set_sel) rrect(30, y, 5, 43, 3, ACC);
-    text(52, y + 19, TEXT, 17, rows[k].name);
-    text(52, y + 37, FAINT, 13, rows[k].hint);
-    if (rows[k].value[0]) text(W - 52 - text_w(17, rows[k].value), y + 28, ACC, 17, rows[k].value);
-    if (hit(30, y, W - 60, 43) && in.tap_y > top && in.tap_y < H - BAR) { set_sel = k; in.pressed |= SCE_CTRL_CROSS; }
+    rrect(30, y, W - 60, 54, 14, k == set_sel ? SURF2 : SURF);
+    if (k == set_sel) rrect(30, y, 5, 54, 3, ACC);
+    text(54, y + 24, TEXT, 18, rows[k].name);
+    text(54, y + 45, FAINT, 14, rows[k].hint);
+    if (rows[k].value[0]) text(W - 54 - text_w(18, rows[k].value), y + 34, ACC, 18, rows[k].value);
+    if (hit(30, y, W - 60, 54) && in.tap_y > top && in.tap_y < H - BAR) { set_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
   vita2d_draw_rectangle(0, 0, W, top - 4, BG);
   text(30, 44, TEXT, 26, "Settings");

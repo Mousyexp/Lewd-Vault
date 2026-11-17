@@ -323,7 +323,7 @@ static void draw_show_plan(void) {
   if (so.sleep) snprintf(v[6], 48, "after %d min", SLEEPS[so.sleep]); else snprintf(v[6], 48, "Off");
   rows[n++] = (typeof(rows[0])){"Sleep timer", v[6], R_SLEEP};
   if (plan_sel >= n + 1) plan_sel = n;
-  int top = levels ? 98 : 66, rh = levels ? 34 : 40;
+  int top = levels ? 98 : 66, rh = levels ? 36 : 44;
   for (int k = 0; k < n; k++) {
     int y = top + k * rh;
     rrect(30, y, W - 60, rh - 4, 10, k == plan_sel ? SURF2 : SURF);
