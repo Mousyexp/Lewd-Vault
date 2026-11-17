@@ -16,6 +16,7 @@ static char forgotten_key[16]; // ("forgotten": last seen before this, yyyymmdd.
 static unsigned edits_at;       // (an edit waiting to be written: when the last one was)
 
 static int comic_n = -1; // (the comics' flags are worked out again: an edit can make a page a comic's)
+static void side_set(int open);
 static void edited(void) { edits_at = frame_no ? frame_no : 1; comic_n = -1; }
 static void save_edits_now(void) {
   if (!vault.index_dirty) return;
@@ -432,7 +433,7 @@ static void draw_filters_sheet(void) {
       case F_ALBUM: lf.album = (lf.album + d + NALBUMS) % NALBUMS; break;
       case F_COLL: if (!coll_next(d)) { changed = 0; sfx(SFX_ERROR); say("No collections in this vault"); } break;
       case F_SIZE: lf.size = (lf.size + d + 3) % 3; break;
-      case F_TAGS: changed = 0; if (in.pressed & SCE_CTRL_CROSS) { sfx(SFX_OPEN); lsheet = LS_TAGS; lsheet_sel = 0; } break;
+      case F_TAGS: changed = 0; if (in.pressed & SCE_CTRL_CROSS) { lsheet = LS_NONE; side_set(1); in.pressed = 0; } break;
       case F_SAVED:
         if (!nsaved_f) { changed = 0; break; }
         saved_k = (saved_k + d + nsaved_f + 1) % (nsaved_f + 1) - 0;
@@ -483,7 +484,7 @@ static void count_tags(void) {
         int probes = 0;
         while (tab[at].t && !(tab[at].len == len && !memcmp(tab[at].t, p, len)) && probes++ < CAP) at = (at + 1) & (CAP - 1);
         if (!tab[at].t) { tab[at].t = p; tab[at].len = len; }
-        tab[at].count++;
+        if (tab[at].len == len && !memcmp(tab[at].t, p, len)) tab[at].count++; // (a full table: not someone else's count)
       }
       p = e;
     }
@@ -499,6 +500,158 @@ static void count_tags(void) {
       if (tcounts[b].count > tcounts[a].count) { TagCount t = tcounts[a]; tcounts[a] = tcounts[b]; tcounts[b] = t; }
   free(tab);
 }
+// ---------- the tags sidebar: the arrow at the right edge, or a swipe in from it ----------
+// The tags of what's shown, most found first, in big rows: a tap adds one to the search, a swipe left
+// on a row (or □) leaves it out; the search's words sit on top, a tap on one takes it away. A swipe
+// right on the panel, a tap beside it, ○ or the arrow close it. The tag pointers point into the
+// vault's strings: counted again whenever it opens or what's shown changes.
+static float side_t, side_scroll;
+static int side_open, side_sel, side_counted_n = -1;
+static void side_set(int open) {
+  if (open == side_open) return;
+  side_open = open;
+  sfx(open ? SFX_OPEN : SFX_CLOSE);
+  if (open) { count_tags(); side_counted_n = nshown; side_sel = 0; side_scroll = 0; chrome_target = 0; }
+}
+// (before the Library takes the touch: the arrow tab, or a swipe in from the edge)
+static int side_gesture(void) {
+  if (lsheet != LS_NONE || side_open || selecting) return 0;
+  if (hit(W - 30, H / 2 - 40, 30, 80)) { side_set(1); return 1; }
+  if (in.touching && in.down_x > W - 30 && in.down_y > TOP && in.down_y < H - BAR && in.down_x - in.tx > 46 && abs(in.down_x - in.tx) > 2 * abs(in.ty - in.down_y)) { side_set(1); return 1; }
+  return 0;
+}
+static void draw_side_tab(void) {
+  if (side_t > 0.01f) return;
+  rrect(W - 22, H / 2 - 36, 30, 72, 12, with_alpha(SURF2, 230));
+  icon("chev_l", W - 11, H / 2, DIM);
+}
+// the search's words: where the k-th starts and its length (-1: no such word)
+static int query_word(int k, int *len) {
+  const char *p = query;
+  for (int i = 0; *p; i++) {
+    while (*p == ' ') p++;
+    const char *e = p;
+    while (*e && *e != ' ') e++;
+    if (e == p) break;
+    if (i == k) { *len = (int)(e - p); return (int)(p - query); }
+    p = e;
+  }
+  return -1;
+}
+static void side_changed(void) {
+  lib_after_change();
+  sel = 0; scroll = 0;
+  count_tags(); side_counted_n = nshown; side_sel = 0; side_scroll = 0;
+}
+static void side_add(int k, int out) {
+  if (k < 0 || k >= ntcounts) return;
+  char add[100];
+  snprintf(add, sizeof add, "%s%.*s", out ? "-" : "", tcounts[k].len > 90 ? 90 : tcounts[k].len, tcounts[k].t);
+  size_t ql = strlen(query);
+  if (ql + strlen(add) + 2 >= sizeof query) { sfx(SFX_ERROR); return; }
+  if (ql) strcat(query, " ");
+  strcat(query, add);
+  sfx(out ? SFX_DELETE : SFX_TOGGLE);
+  side_changed();
+}
+static void draw_side(void) {
+  side_t += ((side_open ? 1.0f : 0.0f) - side_t) * 0.32f;
+  if (fabsf(side_t - side_open) < 0.01f) side_t = (float)side_open;
+  if (side_t <= 0) return;
+  if (side_open && side_counted_n != nshown) { count_tags(); side_counted_n = nshown; }
+  const int pw = 340;
+  int x = W - (int)(pw * side_t);
+  vita2d_draw_rectangle(0, 0, x, H, RGBA(0, 0, 0, (int)(120 * side_t)));
+  vita2d_draw_rectangle(x, 0, pw, H, SURF);
+  vita2d_draw_rectangle(x, 0, 2, H, with_alpha(TEXT, 20));
+  icon("tag", x + 28, 30, ACC);
+  text(x + 48, 37, TEXT, 20, "Tags");
+  // the close arrow
+  rrect(x + pw - 58, 10, 48, 40, 20, SURF2);
+  icon("chev_r", x + pw - 34, 30, TEXT);
+  int closing = hit(x + pw - 62, 6, 56, 48);
+  // the search's words, on top: a tap takes one away
+  int y = 60, wx = x + 14;
+  for (int k = 0; k < 12; k++) {
+    int len, at = query_word(k, &len);
+    if (at < 0) break;
+    char w[80];
+    snprintf(w, sizeof w, "%.*s", len > 60 ? 60 : len, query + at);
+    int cw = text_w(15, w) + 46;
+    if (cw > pw - 28) cw = pw - 28;
+    if (wx + cw > x + pw - 14) { wx = x + 14; y += 44; }
+    rrect(wx, y, cw, 38, 19, w[0] == '-' ? RGBA(150, 60, 70, 255) : with_alpha(ACC, 150));
+    text_fit(wx + 14, y + 25, TEXT, 15, w, cw - 40);
+    icon("xmark", wx + cw - 18, y + 19, TEXT);
+    if (hit(wx, y, cw, 38)) {
+      // (the search again without that word)
+      char nq[sizeof query] = "";
+      for (int j = 0; ; j++) {
+        int l2, a2 = query_word(j, &l2);
+        if (a2 < 0) break;
+        if (j == k) continue;
+        size_t o = strlen(nq);
+        if (o + l2 + 2 >= sizeof nq) break;
+        if (o) nq[o++] = ' ';
+        memcpy(nq + o, query + a2, l2);
+        nq[o + l2] = 0;
+      }
+      snprintf(query, sizeof query, "%s", nq);
+      sfx(SFX_CLOSE);
+      side_changed();
+      in.tap = 0;
+      break;
+    }
+    wx += cw + 8;
+  }
+  if (query[0]) y += 48;
+  else { text_fit(x + 20, y + 16, FAINT, 13, "Tap: search for it.  Swipe left: leave it out.", pw - 40); y += 30; }
+  // the rows
+  int top = y, rh = 50, vis = (H - top - 10) / rh;
+  float max_s = fmaxf(0, ntcounts - vis);
+  static int row_down = -1, was_touch;
+  if (in.touching && in.down_x >= x && in.down_y >= top) {
+    if (!was_touch) row_down = (int)((in.down_y - top) / rh + side_scroll);
+    if (abs(in.ty - in.down_y) > abs(in.tx - in.down_x)) side_scroll -= in.drag_dy / (float)rh;
+  }
+  // (a finger let go: a swipe left on a row leaves its tag out; a swipe right on the panel closes it)
+  if (!in.touching && was_touch) {
+    int dx = in.tx - in.down_x, dy = in.ty - in.down_y;
+    if (dx < -70 && abs(dx) > 2 * abs(dy) && row_down >= 0 && row_down < ntcounts) { side_add(row_down, 1); }
+    else if (dx > 90 && abs(dx) > 2 * abs(dy) && in.down_x >= x) closing = 1;
+    row_down = -1;
+  }
+  was_touch = in.touching;
+  if (side_scroll < 0) side_scroll = 0;
+  if (side_scroll > max_s) side_scroll = max_s;
+  if (side_sel < side_scroll) side_scroll = side_sel;
+  if (side_sel >= side_scroll + vis) side_scroll = side_sel - vis + 1;
+  int first = (int)side_scroll;
+  for (int k = first; k < ntcounts && k < first + vis; k++) {
+    int ry = top + (k - first) * rh;
+    int dragging = in.touching && row_down == k && in.tx - in.down_x < -10 && abs(in.tx - in.down_x) > abs(in.ty - in.down_y);
+    int off = dragging ? in.tx - in.down_x : 0;
+    if (off < 0) { rrect(x + 10, ry + 3, pw - 20, rh - 6, 14, RGBA(150, 60, 70, (int)fminf(255, -off * 2.5f))); text(x + pw - 110, ry + 31, TEXT, 14, "leave out"); }
+    if (k == side_sel && !dragging) rrect(x + 10, ry + 3, pw - 20, rh - 6, 14, SURF2);
+    char t[100];
+    snprintf(t, sizeof t, "%.*s", tcounts[k].len > 90 ? 90 : tcounts[k].len, tcounts[k].t);
+    for (char *c = t; *c; c++) if (*c == '_') *c = ' ';
+    char cn[16];
+    snprintf(cn, sizeof cn, "%d", tcounts[k].count);
+    text_fit(x + 24 + off, ry + 32, TEXT, 17, t, pw - 100);
+    text(x + pw - 24 - text_w(14, cn) + off, ry + 31, FAINT, 14, cn);
+    if (hit(x + 10, ry, pw - 20, rh)) { side_sel = k; side_add(k, 0); break; }
+  }
+  if (!ntcounts) text(x + 24, top + 30, DIM, 15, "No tags on what's shown");
+  // buttons: ↑↓ choose, ✕ add, □ leave out, ○ (or the arrow, or a tap beside) close
+  if (in.pressed & SCE_CTRL_DOWN) { if (side_sel + 1 < ntcounts) { side_sel++; sfx(SFX_TICK); } }
+  if (in.pressed & SCE_CTRL_UP) { if (side_sel > 0) { side_sel--; sfx(SFX_TICK); } }
+  if (in.pressed & SCE_CTRL_CROSS) side_add(side_sel, 0);
+  else if (in.pressed & SCE_CTRL_SQUARE) side_add(side_sel, 1);
+  if (closing || (in.pressed & SCE_CTRL_CIRCLE) || (in.tap && in.tap_x < x)) side_set(0);
+  in.pressed = 0; in.tap = 0;
+}
+
 static void draw_tags_sheet(void) {
   static unsigned counted_at;
   if (counted_at + 1 < frame_no || !ntcounts) count_tags();
@@ -783,7 +936,14 @@ static void month_of(const char *added, char *out, size_t cap) {
 }
 // dragging along the right edge flings through everything; a bubble says which month
 static int fast_scroll(float max_scroll, float view_h) {
-  if (!(in.touching && in.down_x > W - 36 && in.down_y > TOP && in.down_y < H - BAR) || max_scroll <= 0) return 0;
+  // (a drag down the right edge: up or down, not in from the side, which opens the tags)
+  static int engaged;
+  if (!(in.touching && in.down_x > W - 36 && in.down_y > TOP && in.down_y < H - BAR) || max_scroll <= 0) { engaged = 0; return 0; }
+  if (!engaged) {
+    int dx = abs(in.tx - in.down_x), dy = abs(in.ty - in.down_y);
+    if (dy > 12 && dy > dx) engaged = 1;
+    else return dx > 8 ? 0 : 1; // (still deciding: the grid doesn't move meanwhile)
+  }
   float f = (in.ty - TOP) / view_h;
   f = f < 0 ? 0 : f > 1 ? 1 : f;
   scroll = f * max_scroll;

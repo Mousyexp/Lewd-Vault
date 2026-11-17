@@ -1467,8 +1467,9 @@ static void draw_library(void) {
   float view_h = H - TOP - BAR;
   float max_scroll = fmaxf(0, content - view_h);
   // a sheet open: the grid stays drawn but doesn't take the buttons or touch
+  if (side_gesture()) { in.tap = 0; in.touching = 0; in.flicked = 0; }
   Input saved_in = in;
-  int sheet_up = lsheet != LS_NONE;
+  int sheet_up = lsheet != LS_NONE || side_open || side_t > 0;
   if (sheet_up) { in.pressed = 0; in.tap = 0; in.touching = 0; in.flicked = 0; in.ly = 0; in.dbl = 0; }
   int open_now = sheet_up ? 0 : lib_cross();
   int fast = sheet_up ? 0 : fast_scroll(max_scroll, view_h);
@@ -1654,7 +1655,11 @@ static void draw_library(void) {
     if ((in.pressed & SCE_CTRL_START) && nshown && !book_shelf) { sfx(SFX_SLIDESHOW); open_viewer(sel, 1); }
     if ((in.pressed & SCE_CTRL_CIRCLE) && book_inside) { sfx(SFX_BACK); close_book(); }
     else if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_WEB; } // (○ goes round the tabs: Library, Browser, Settings)
+    // a flick across the grid (sideways, not from the right edge): the next or previous mode
+    if (in.flicked && in.down_y > TOP && in.down_x < W - 40 && fabsf(in.fvx) > 16 && fabsf(in.fvx) > 2.5f * fabsf(in.fvy) && !book_inside && !fast)
+      set_mode((cfg.lmode + (in.fvx < 0 ? 1 : 3)) % 4);
   }
+  draw_side_tab();
   draw_bar();
   in = saved_in;
   // (a sheet opened this frame doesn't also take the press that opened it: □ would close it again)
@@ -1664,6 +1669,7 @@ static void draw_library(void) {
   else if (lsheet == LS_QUICK) draw_quick_sheet();
   else if (lsheet == LS_BATCH) draw_batch_sheet();
   else if (lsheet == LS_CATS) draw_cats_sheet();
+  draw_side();
 }
 
 // ----- the full view -----

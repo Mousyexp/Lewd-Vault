@@ -6,8 +6,11 @@ static int *cl_order, cl_n, cl_k;   // the items to look at (never opened first,
 static unsigned char *cl_gone;      // per item: let go
 static int cl_ngone, cl_kept;
 static int cl_hist[64], cl_nhist;   // (for undo)
-static float cl_swipe;
+static float cl_swipe, cl_swipe_y;
 static int cl_confirm;
+// (the card on its way off the screen after a decision: which way, how far along, which item)
+static float cl_fly_x, cl_fly_y, cl_fly_t;
+static int cl_fly_item = -1;
 
 static float *cl_score;
 static int cmp_clean(const void *a, const void *b) {
@@ -34,9 +37,15 @@ static void clean_open(void) {
   screen = S_CLEAN;
   if (cl_n) ask_big(cl_order[0]);
 }
+// gone: 1 let go, 0 keep, 2 keep and heart it (it sorts to Most loved)
 static void clean_next(int gone) {
   int i = cl_order[cl_k];
-  if (gone) { cl_gone[i] = 1; cl_ngone++; sfx(SFX_DELETE); } else { cl_kept++; sfx(SFX_TICK); }
+  cl_fly_item = i; cl_fly_t = 0;
+  cl_fly_x = gone == 1 ? -1 : gone == 0 ? 1 : 0; cl_fly_y = gone == 2 ? -1 : 0;
+  if (gone == 1) { cl_gone[i] = 1; cl_ngone++; sfx(SFX_DELETE); }
+  else if (gone == 2) { char now[40]; now_iso(now, sizeof now); lv_liked(&vault, &vault.items[i], now); cl_kept++; sfx(SFX_DONE); }
+  else { cl_kept++; sfx(SFX_TICK); }
+  cl_swipe_y = 0;
   if (cl_nhist < 64) cl_hist[cl_nhist++] = cl_k; else { memmove(cl_hist, cl_hist + 1, 63 * sizeof *cl_hist); cl_hist[63] = cl_k; }
   cl_k++;
   cl_swipe = 0;
@@ -81,25 +90,67 @@ static void draw_clean(void) {
     int i = cl_order[cl_k];
     vita2d_texture *t = big_item == i ? big_tex : thumb_of(i);
     if (!t) { int w[1] = {i}; ask_thumbs(w, 1); }
-    // the card, tilting with the swipe; red as it goes left, green as it goes right
-    if (in.touching) cl_swipe += in.drag_dx; else cl_swipe *= 0.75f;
+    // the next one, waiting under it (its thumbnail asked for now, so it's there when it comes up)
+    if (cl_k + 1 < cl_n) {
+      int j = cl_order[cl_k + 1];
+      vita2d_texture *tn = thumb_of(j);
+      if (!tn) { int w[1] = {j}; ask_thumbs(w, 1); }
+      else { float tw = vita2d_texture_get_width(tn), th = vita2d_texture_get_height(tn), s = fminf((W - 220) / tw, (H - 160) / th); vita2d_draw_texture_tint_scale(tn, W / 2 - tw * s / 2, H / 2 - 10 - th * s / 2, s, s, RGBA(255, 255, 255, 70)); }
+    }
+    // the card follows the finger; let go of it far enough, or flicked, and it's decided (the
+    // distance is read before it springs back)
+    int decided = -1;
+    if (in.touching) { cl_swipe += in.drag_dx; cl_swipe_y += in.drag_dy; }
+    else {
+      float vx = in.flicked ? in.fvx : 0, vy = in.flicked ? in.fvy : 0;
+      if (cl_swipe < -140 || vx < -14) decided = 1;
+      else if (cl_swipe > 140 || vx > 14) decided = 0;
+      else if (cl_swipe_y < -120 || vy < -14) decided = 2;
+      cl_swipe *= 0.7f; cl_swipe_y *= 0.7f;
+    }
     float f = cl_swipe / 300.0f;
     if (t) {
       float tw = vita2d_texture_get_width(t), th = vita2d_texture_get_height(t);
-      float s = fminf((W - 160) / tw, (H - 110) / th);
-      vita2d_draw_texture_scale_rotate(t, W / 2 + cl_swipe, H / 2 - 10 + fabsf(cl_swipe) * 0.1f, s, s, f * 0.25f);
+      float s = fminf((W - 160) / tw, (H - 130) / th);
+      vita2d_draw_texture_scale_rotate(t, W / 2 + cl_swipe, H / 2 - 20 + fminf(0, cl_swipe_y) + fabsf(cl_swipe) * 0.1f, s, s, f * 0.25f);
     } else spinner(W / 2 + cl_swipe, H / 2, 22);
-    if (cl_swipe < -20) { int a = (int)fminf(200, -cl_swipe); text_center(W / 2 - 300, H / 2, RGBA(240, 80, 90, a), 30, "LET GO"); }
-    if (cl_swipe > 20) { int a = (int)fminf(200, cl_swipe); text_center(W / 2 + 300, H / 2, RGBA(90, 220, 140, a), 30, "KEEP"); }
+    if (cl_swipe < -20) { int a = (int)fminf(220, -cl_swipe * 1.4f); text_center(W / 2 - 300, H / 2, RGBA(240, 80, 90, a), 30, "LET GO"); }
+    if (cl_swipe > 20) { int a = (int)fminf(220, cl_swipe * 1.4f); text_center(W / 2 + 300, H / 2, RGBA(90, 220, 140, a), 30, "KEEP"); }
+    if (cl_swipe_y < -20 && fabsf(cl_swipe) < 60) { int a = (int)fminf(220, -cl_swipe_y * 1.6f); heart(W / 2, 70, 16, with_alpha(ACC, a)); }
+    // three big round buttons along the foot, for a tap instead of a swipe
+    {
+      static const int bx[3] = {W / 2 - 150, W / 2, W / 2 + 150};
+      static const char *bl[3] = {"Let go", "Heart", "Keep"};
+      unsigned bc[3] = {RGBA(220, 70, 80, 255), ACC, RGBA(70, 190, 120, 255)};
+      for (int b = 0; b < 3; b++) {
+        circle(bx[b], H - 52, 30, with_alpha(SURF2, 230));
+        circle(bx[b], H - 52, 27, with_alpha(bc[b], 60));
+        if (b == 0) icon("xmark", bx[b], H - 52, bc[b]);
+        else if (b == 1) heart(bx[b], H - 52, 9, bc[b]);
+        else icon("chev_r", bx[b], H - 52, bc[b]);
+        text_center(bx[b], H - 8, FAINT, 12, bl[b]);
+        if (hit(bx[b] - 34, H - 86, 68, 68)) decided = b == 0 ? 1 : b == 1 ? 2 : 0;
+      }
+    }
     const LvItem *it = &vault.items[i];
     char m[200];
     snprintf(m, sizeof m, "%d of %d  ·  seen %lld  ·  %d★  ·  %s", cl_k + 1, cl_n, lv_views_of(&vault, it), it->quality, it->category);
     text_center(W / 2, 30, DIM, 15, m);
-    text_center(W / 2, H - 16, FAINT, 14, "← or swipe left: let go  ·  → or swipe right: keep  ·  △ undo  ·  ○ finish");
-    if (!in.touching && cl_swipe < -160) { clean_next(1); return; }
-    if (!in.touching && cl_swipe > 160) { clean_next(0); return; }
+    text(16, H - 12, FAINT, 12, "\u2190 let go  \u2192 keep  \u2191 heart  \u25b3 undo  \u25cb finish");
+    if (decided >= 0) { clean_next(decided); return; }
     if (in.pressed & SCE_CTRL_LEFT) { clean_next(1); return; }
     if (in.pressed & SCE_CTRL_RIGHT) { clean_next(0); return; }
+    if (in.pressed & SCE_CTRL_UP) { clean_next(2); return; }
+  }
+  // the one just decided, flying off the way it went
+  if (cl_fly_item >= 0 && cl_fly_t < 1) {
+    vita2d_texture *ft = thumb_of(cl_fly_item);
+    cl_fly_t += 0.12f;
+    if (ft) {
+      float tw = vita2d_texture_get_width(ft), th = vita2d_texture_get_height(ft), s = fminf((W - 160) / tw, (H - 130) / th);
+      float e = cl_fly_t * cl_fly_t;
+      vita2d_draw_texture_tint_scale_rotate(ft, W / 2 + cl_fly_x * e * 900, H / 2 - 20 + cl_fly_y * e * 600, s, s, cl_fly_x * e * 0.5f, RGBA(255, 255, 255, (int)(255 * (1 - cl_fly_t))));
+    }
   }
   if ((in.pressed & SCE_CTRL_TRIANGLE) && cl_nhist) {
     cl_k = cl_hist[--cl_nhist];

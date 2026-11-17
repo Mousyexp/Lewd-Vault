@@ -1623,6 +1623,9 @@ static void draw_web(void) {
   }
 
   if (!sheet_open) {
+    // a flick sideways across the grid: the next or previous site, as L / R
+    if (in.flicked && in.down_y > TOP && fabsf(in.fvx) > 16 && fabsf(in.fvx) > 2.5f * fabsf(in.fvy))
+      in.pressed |= in.fvx < 0 ? SCE_CTRL_RTRIGGER : SCE_CTRL_LTRIGGER;
     // the sites are tabs: L / R go through them
     if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
       sfx(SFX_TAB);
