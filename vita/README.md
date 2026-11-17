@@ -78,9 +78,13 @@ their JSON APIs (the same four kinds of site as the desktop's Discover: `src/boo
 loads. The grid is the Library's; the site button is the tab bar (L/R step through it), Filter picks
 the ratings (General, Sensitive, Questionable, Explicit), the search and which category saves go into,
 and the sort is Latest, Hot (where the site has it), Top or Random. More results load as you scroll.
-The site button opens a window of the sites, each with its own icon (or, where a site's is too
-small, the app's mascot holding up its name: `tools/make-site-icons.mjs`). Sakugabooru brings anime
-animation clips. Gelbooru and Rule34 are there too, with your account's API key (Filter → API key: the user ID and the
+The site button opens the sites window (`tools/make-site-icons.mjs` draws its icons). It has two
+tabs (L / R): **Pictures**, the sites, ending in **+** to add any booru by its address (the Vita works
+out which of the four kinds it is; □ removes one you added), and **Videos**, the video sources, which
+open the **video browser**: a banner with what's trending, then rows (Trending, New, Top this month,
+Top of all time, Something random) of cards, as the TV apps have them; a video plays in the
+Browser's own full view. hanime.tv and MissAV are listed but locked: both only answer after a
+Cloudflare browser check, which an app can't pass. Sakugabooru brings anime animation clips. Gelbooru and Rule34 are there too, with your account's API key (Filter → API key: the user ID and the
 key from the site's My Account → Options). As on the desktop, posts tagged as sexual content involving
 minors are never shown or searched for.
 
@@ -114,10 +118,10 @@ you leave the screen (`src/wifi.c`).
 
 ## The LiveArea
 
-The page behind the bubble (`sce_sys/livearea/contents`, drawn by `tools/make-livearea.mjs`): the
-gate in the middle starts the app as usual; the frame on its left opens the **Google Drive vault**
-and the one on its right the **vault on the card**, straight away (past the PIN lock, if there is
-one); the strip along the bottom shows the vault's numbers (items, hearts, time spent looking),
+The page behind the bubble (`sce_sys/livearea/contents`, drawn by `tools/make-livearea.mjs`, style
+a5): the heart is the gate that starts the app as usual; two slim launchers beside it open the
+**Google Drive vault** and the **vault on the card** straight away (past the PIN lock, if there is
+one); the panel under the heart shows the vault's numbers (items, hearts, time spent looking),
 written by the app whenever a vault opens (`src/livearea.c`). The Google Drive vault is the one
 "Get it from Drive" made (a vault of its own, its folder ending in "(Drive)") or one that has been
 synced; with none on the card yet, its frame opens Google Drive's screen to get it.
@@ -189,6 +193,20 @@ then on. Neither should happen on a Vita.
 
 ## Speed
 
+The tab bar is a pill floating over the bottom, with icons in the manner of iOS's symbols
+(`tools/make-ui-icons.mjs`, drawn at exactly their size); buttons, chips and rows are at least 36 px
+high and every touch target has a few pixels of slack.
+
+Nothing slow happens on the drawing thread: `index.csv` and `views.csv` are written by a writer
+thread (the drawing thread only makes the text), videos are opened and closed on a thread of their
+own, textures are freed three frames after they're let go instead of waiting for the GPU, and at
+most six thumbnails a frame become textures. Every picture is decoded to exactly the pixels it's
+shown at: a card's thumbnail to the card's size (covered and cropped, cached at that size), the full
+view's picture to the screen (copied into one of three buffers made once), and to 1920 px only when
+zoomed in. Gradients are one stretched ramp, not a rectangle per line. Debug builds log each
+screen's frame times (`perf ...` in `log.txt`); they were checked in Vita3K pinned to one core and
+throttled to a quarter of it with a cgroup.
+
 Tuned for the Cortex-A9 (and checked against the optimisation guide the port was given):
 `-O3 -mcpu=cortex-a9 -mfpu=neon`, unused code dropped at link time; sorting and filtering read a
 16-byte record per item instead of its strings; the index's strings live in a few large blocks, not
@@ -208,6 +226,8 @@ the compiler inlines across them); textures are only freed after the frame that 
 | `src/wifi.c` | Wi-Fi transfer: the upload page and its server |
 | `src/privacy.c`, `src/clean.c` | The calculator disguise and touch lock; clean up and the health check |
 | `src/livearea.c` | The LiveArea's frames (which vault they open) and its numbers |
+| `src/vbrowse.c` | The video browser |
+| `tools/make-ui-icons.mjs` | The tab bar's and buttons' icons (`ui/`) |
 | `src/drive.c`, `src/drive_ui.c` | Google Drive: the sign-in, the sync, its screen |
 | `src/third_party/qrcodegen.*` | Project Nayuki's QR code generator (MIT, its notice in the file) |
 | `src/vault.c` | `index.csv` / `views.csv`, finding files, thumbnails (packs too) |
@@ -220,7 +240,7 @@ the compiler inlines across them); textures are only freed after the frame that 
 | `tests/drive_mock.py` | A stand-in for Google's sign-in and Drive, for trying the sync in Vita3K |
 | `tests/` | The core against the golden vaults and the site readers against saved answers (`tests/booru/`, from the sites' all-ages halves), on a PC |
 | `tools/make-livearea.py`, `tools/make-livearea.mjs` | The bubble, cover art and splash; the LiveArea page (Chromium via Playwright) |
-| `tools/make-site-icons.mjs` | The site switcher's tiles, from `art/favicons/` |
+| `tools/make-site-icons.mjs` | The sites window's icons (`sites/`) |
 | `font.ttf` | DejaVu Sans (see `FONT-LICENSE.txt`); the Vita's own font is used for Japanese |
 | `cacert.pem` | Mozilla's certificate authorities (certifi, MPL-2.0) |
 
