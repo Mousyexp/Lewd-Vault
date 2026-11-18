@@ -468,7 +468,10 @@ static struct {
   int conv;              // offline copies made 480p by a conversion service: 0 off (as it starts), 1 on
   int acc_h, acc_s, acc_v; // the custom accent (theme 11): hue 0-359, saturation and value 0-100
   int onboarded;           // the three cards of the first start seen (an install from before them: yes)
-} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0};
+  // reading comics (reader.c): pages or a strip, landscape or portrait, the page turn, the direction,
+  // what taps do, what a double tap does, the rear touchpad
+  int cmode, corient, canim, cdir, ctap, cdbl, cback;
+} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
 static void cfg_load(void) {
   FILE *f = fopen(DATA "/config.txt", "r");
   if (!f) return;
@@ -509,6 +512,7 @@ static void cfg_load(void) {
     else if (!strcmp(line, "acc_s")) cfg.acc_s = atoi(eq);
     else if (!strcmp(line, "acc_v")) cfg.acc_v = atoi(eq);
     else if (!strcmp(line, "onboarded")) cfg.onboarded = atoi(eq) != 0;
+    else if (!strcmp(line, "comic")) sscanf(eq, "%d,%d,%d,%d,%d,%d,%d", &cfg.cmode, &cfg.corient, &cfg.canim, &cfg.cdir, &cfg.ctap, &cfg.cdbl, &cfg.cback);
   }
   fclose(f);
   if (cfg.interval < 2 || cfg.interval > 60) cfg.interval = 5;
@@ -521,6 +525,8 @@ static void cfg_load(void) {
   if (cfg.lmode < 0 || cfg.lmode > 3) cfg.lmode = 0;
   if (cfg.theme < 0 || cfg.theme > NTHEMES + 1) cfg.theme = 0;
   cfg.acc_h = ((cfg.acc_h % 360) + 360) % 360;
+  { int *c[] = {&cfg.cmode, &cfg.corient, &cfg.canim, &cfg.cdir, &cfg.ctap, &cfg.cdbl, &cfg.cback}; static const int top[] = {1, 1, 3, 1, 2, 1, 1};
+    for (int k = 0; k < 7; k++) if (*c[k] < 0 || *c[k] > top[k]) *c[k] = 0; }
   if (cfg.acc_s < 0 || cfg.acc_s > 100) cfg.acc_s = 65;
   if (cfg.acc_v < 25 || cfg.acc_v > 100) cfg.acc_v = 100;
   if (cfg.bgstyle < 0 || cfg.bgstyle > 3) cfg.bgstyle = 0;
@@ -539,9 +545,10 @@ static void cfg_write(void) {
   cfg_dirty_at = 0;
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
-          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v, cfg.onboarded);
+          cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v, cfg.onboarded,
+          cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -2661,8 +2668,10 @@ static void close_viewer(void) {
 static void fmt_time(uint64_t ms, char *o, size_t n) { int s = (int)(ms / 1000); snprintf(o, n, "%d:%02d", s / 60, s % 60); }
 
 static int tall_fit; static float tall_my;
+#include "reader.c"
 static void draw_viewer(void) {
   if (nshown == 0) { screen = S_LIBRARY; return; }
+  if (lib_reading_comic()) { draw_lib_comic(); return; } // (a comic's page: the comic reader)
   tall_fit = 0;
   LvItem *it = &vault.items[shown[vk]];
   // the player opened on the other thread, for this picture
@@ -3208,13 +3217,14 @@ static void draw_settings(void) {
   snprintf(vtheme, sizeof vtheme, "%s", cfg.theme == NTHEMES + 1 ? "Custom (\u2715 colour)" : cfg.theme > 0 ? THEMES[cfg.theme - 1].name : "The vault's own");
   if (cfg.theme > 0) vtheme[0] = (char)toupper((unsigned char)vtheme[0]);
   if (wheel_open) { draw_wheel(); return; }
+  if (ro_open) { draw_reading_options(); return; } // (Reading comics: the reader's own panel)
   char v3[64];
   snprintf(v3, sizeof v3, "%d%%", cfg.volume);
   char v4[16];
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change"},
@@ -3236,19 +3246,21 @@ static void draw_settings(void) {
     {"Video conversion", vconv, cfg.conv ? "Big booru videos made 480p by a service for offline (your key; it sees the address) \u00b7 \u2190\u2192 Off or which \u00b7 \u2715 key \u00b7 \u25a1 remove" : "Off: \u2190\u2192 to turn it on (big booru videos made 480p by a service, for offline)"},
     {"Open another vault", "", "The vaults on the memory card"},
     {"Clear the thumbnail cache", "", "They're made again as you scroll"},
+    {"Reading comics", cfg.cmode ? "Strip" : "Pages", "Pages or a strip, portrait, page turns, direction, taps, the rear touchpad"},
   };
   // In sections, each with a header: the rows in the order shown (set_sel stays a row's ST_ id)
   static const signed char ORDER[] = {
     -1, ST_THEME, ST_BGS, ST_SNDPACK, ST_SOUNDS, ST_GLOW, ST_DBL,
     -2, ST_VOL,
+    -6, ST_COMICS,
     -3, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK,
     -4, ST_DRIVE, ST_WIFI, ST_CONV,
     -5, ST_SEARCH, ST_STATS, ST_CLEAN, ST_HEALTH, ST_VAULT, ST_CACHE,
   };
   static int set_init;
   if (!set_init) { set_init = 1; set_sel = ST_THEME; } // (the first row shown)
-  static const char *const SECT[] = {"Appearance", "Playback", "Privacy", "Sync and sources", "Library"};
-  static const char *const SECT_ICON[] = {"sliders", "play", "info", "wifi", "photos"};
+  static const char *const SECT[] = {"Appearance", "Playback", "Privacy", "Sync and sources", "Library", "Comics"};
+  static const char *const SECT_ICON[] = {"sliders", "play", "info", "wifi", "photos", "book"};
   enum { NORD = sizeof ORDER / sizeof *ORDER };
   const int rh = 58, hh = 40, top = 62, room = H - BAR - top + 8;
   float ypos[NORD], total = 0;
@@ -3357,6 +3369,7 @@ static void draw_settings(void) {
           sfx(SFX_TOGGLE);
         }
         break;
+      case ST_COMICS: if (cross || d) { sfx(SFX_OPEN); ro_open = 1; ro_sel = 0; } break;
       case ST_CACHE:
         if (cross) {
           DIR *dd = opendir(cache_dir);

@@ -588,7 +588,9 @@ static void mg_take(void) {
           int slot = d->a - mg.page;
           // (the slots follow the page shown: 0 it, 1-2 the next ones)
           release_tex(mg.ptex[slot]);
-          mg.ptex[slot] = slot == 0 && !d->b ? screen_upload(0, &d->px) : upload(&d->px);
+          // (a texture of its own each: one in the screen's shared buffers could be drawn over once
+          //  it moved to another slot as the pages turn)
+          mg.ptex[slot] = upload(&d->px);
           mg.ptex_page[slot] = d->a;
         }
         free(d->px.rgba);
@@ -802,14 +804,23 @@ static void mg_turn(int d) {
   sfx(SFX_TICK);
   // the slots slide along: what was next is now shown
   if (d == 1) { release_tex(mg.ptex[0]); mg.ptex[0] = mg.ptex[1]; mg.ptex[1] = mg.ptex[2]; mg.ptex[2] = NULL; mg.ptex_page[0] = mg.ptex_page[1]; mg.ptex_page[1] = mg.ptex_page[2]; mg.ptex_page[2] = -1; }
+  else if (d == -1) { // (the one before: what was shown is now the next, nothing thrown away)
+    release_tex(mg.ptex[2]); mg.ptex[2] = mg.ptex[1]; mg.ptex[1] = mg.ptex[0]; mg.ptex[0] = NULL;
+    mg.ptex_page[2] = mg.ptex_page[1]; mg.ptex_page[1] = mg.ptex_page[0]; mg.ptex_page[0] = -1;
+  }
   else { for (int k = 0; k < 3; k++) { release_tex(mg.ptex[k]); mg.ptex[k] = NULL; mg.ptex_page[k] = -1; } }
   mg.page = np;
   mg.zoom = 1; mg.pan_x = mg.pan_y = 0;
   mg.tall_top = 1;
 }
+// The Comics tab's chapter, as the reader's pages: the page shown and the next two are kept (ptex)
+static vita2d_texture *mg_rd_tex(int k) { for (int i = 0; i < 3; i++) if (mg.ptex_page[i] == k && mg.ptex[i]) return mg.ptex[i]; return NULL; }
+static float mg_rd_aspect(int k) { (void)k; return 1.45f; }
+static void mg_rd_go(int k) { int d = k - mg.page; if (d) mg_turn(d); }
+static int mg_rd_now(void) { return mg.page; }
+static void mg_rd_close(void) { mg_free_pages(); screen = S_BOOK; }
 static void draw_reader(void) {
   mg_take();
-  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 255));
   // (E-Hentai: the next gallery page of picture pages, before they run out)
   if (mg.src == MS_EHENTAI && !mg.pages_loading && mg.npages && mg.npages < mg.pages_total && mg.page + 6 >= mg.npages) {
     char url[600];
@@ -832,71 +843,29 @@ static void draw_reader(void) {
       if (p < mg.npages && mg.ptex_page[k] != p && asked[k] != p + mg.chapter * 100000) { asked[k] = p + mg.chapter * 100000; mg_want_page(p, 0); }
     }
   }
-  vita2d_texture *t = mg.ptex_page[0] == mg.page ? mg.ptex[0] : NULL;
-  int tall = 0;
-  static float tall_my, tall_v;
-  if (t) {
-    float tw = vita2d_texture_get_width(t), th = vita2d_texture_get_height(t);
-    // (a tall page, a webtoon's: the screen's width, from its top, scrolled down)
-    tall = th > tw * 2.2f;
-    float s = (tall ? W / tw : fminf(W / tw, H / th)) * mg.zoom;
-    float dw = tw * s, dh = th * s;
-    float mx = fmaxf(0, (dw - W) / 2), my = fmaxf(0, (dh - H) / 2);
-    if (tall && mg.tall_top) { mg.pan_y = my; mg.tall_top = 0; tall_v = 0; }
-    if (tall) { mg.pan_y += tall_v; tall_v *= 0.93f; if (fabsf(tall_v) < 0.3f) tall_v = 0; tall_my = my; }
-    mg.pan_x = fminf(mx, fmaxf(-mx, mg.pan_x));
-    mg.pan_y = fminf(my, fmaxf(-my, mg.pan_y));
-    vita2d_draw_texture_scale(t, (W - dw) / 2 + mg.pan_x + mg.swipe, (H - dh) / 2 + mg.pan_y, s, s);
-  } else if (mg.err[0] && !mg.npages) text_center(W / 2, H / 2, ACC2, 16, mg.err);
-  else spinner(W / 2, H / 2, 24);
-  // the page number, faint along the bottom
-  char pn[64];
-  snprintf(pn, sizeof pn, "%d / %d", mg.page + 1, mg.pages_total ? mg.pages_total : mg.npages);
-  int pw = text_w(14, pn) + 24;
-  rrect(W / 2 - pw / 2, H - 34, pw, 26, 13, RGBA(0, 0, 0, 150));
-  text_center(W / 2, H - 16, DIM, 14, pn);
-  // touch: swipe to turn, pinch to zoom, drag when zoomed
-  static float pd0, z0;
-  if (in.touching) {
-    if (in.tcount >= 2) { float d = hypotf(in.t2x - in.tx, in.t2y - in.ty); if (pd0 == 0) { pd0 = d; z0 = mg.zoom; } else mg.zoom = fminf(4, fmaxf(1, z0 * d / pd0)); }
-    else if (mg.zoom > 1.01f) { pd0 = 0; mg.pan_x += in.drag_dx; mg.pan_y += in.drag_dy; }
-    else if (tall && fabsf((float)(in.ty - in.down_y)) >= fabsf((float)(in.tx - in.down_x))) { pd0 = 0; mg.pan_y += in.drag_dy; tall_v = 0; }
-    else { pd0 = 0; mg.swipe += in.drag_dx; }
-  } else {
-    pd0 = 0;
-    if (in.flicked && tall && mg.zoom < 1.01f && fabsf(in.fvy) > fabsf(in.fvx)) tall_v = in.fvy * 1.4f;
-    if (mg.swipe < -120) { mg.swipe = 0; mg_turn(1); }
-    else if (mg.swipe > 120) { mg.swipe = 0; mg_turn(-1); }
-    mg.swipe *= 0.6f;
-  }
-  // buttons: ←/→ (or a tap on either side) turn, L/R the chapters, ✕ zoom, ○ back
-  // the save button, top right (or △)
-  {
-    char sl[64];
-    if (msave_on) snprintf(sl, sizeof sl, "Saving %d / %d", msave_done, msave_total);
-    else snprintf(sl, sizeof sl, "Save %s", mg.src == MS_MANGADEX ? "chapter" : "gallery");
-    int bw = text_w(15, sl) + 48;
-    rrect(W - bw - 12, 10, bw, 36, 18, RGBA(0, 0, 0, 170));
-    if (msave_on) spinner(W - bw + 10, 28, 8); else icon("plus", W - bw + 10, 28, TEXT);
-    text(W - bw + 26, 34, TEXT, 15, sl);
-    if (hit(W - bw - 12, 6, bw, 44) || (in.pressed & SCE_CTRL_TRIANGLE)) { in.tap = 0; if (!msave_on) msave_start(); }
-  }
-  if (in.tap && mg.zoom < 1.01f) { if (in.tap_x > W * 2 / 3) mg_turn(1); else if (in.tap_x < W / 3) mg_turn(-1); }
-  if (in.pressed & SCE_CTRL_RIGHT) mg_turn(1);
-  if (in.pressed & SCE_CTRL_LEFT) mg_turn(-1);
-  if (mg.src == MS_MANGADEX && (in.pressed & SCE_CTRL_RTRIGGER) && mg.chapter + 1 < mg.nch) { sfx(SFX_MORE); mg_read(mg.chapter + 1); return; }
-  if (mg.src == MS_MANGADEX && (in.pressed & SCE_CTRL_LTRIGGER) && mg.chapter > 0) { sfx(SFX_MORE); mg_read(mg.chapter - 1); return; }
-  if (in.pressed & SCE_CTRL_CROSS) { mg.zoom = mg.zoom > 1.5f ? 1 : 2; mg.pan_x = mg.pan_y = 0; }
-  if (mg.zoom > 1.01f) { mg.pan_x -= in.lx * 12; mg.pan_y -= in.ly * 12; }
-  else if (tall) {
-    // a tall page: the stick scrolls, ↑↓ a screenful (↓ at its foot: the next page)
-    mg.pan_y -= in.ly * 16;
-    if (in.pressed & SCE_CTRL_UP) tall_v = 22;
-    if (in.pressed & SCE_CTRL_DOWN) { if (mg.pan_y <= -tall_my + 2) mg_turn(1); else tall_v = -22; }
-  }
+  // the pages, read as the reading options say (reader.c): this chapter's, as they come
+  static ComicSrc src;
+  src.n = mg.pages_total > mg.npages ? mg.pages_total : mg.npages;
+  if (src.n < 1) src.n = 1;
+  src.cur = mg.page; src.tex = mg_rd_tex; src.aspect = mg_rd_aspect; src.go = mg_rd_go; src.now = mg_rd_now; src.close = mg_rd_close;
+  src.title = mg.book >= 0 && mg.book < mg.nbooks ? mg.books[mg.book].title : "";
+  if (!mg.npages && mg.err[0]) { text_center(W / 2, H / 2, ACC2, 16, mg.err); if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); mg_rd_close(); } return; }
+  if (comic_reader(&src)) return;
   // (zoomed in: the page again at twice the screen, once)
   static int hi_page = -1;
-  if (mg.zoom > 1.25f && hi_page != mg.page && t && vita2d_texture_get_width(t) <= W) { hi_page = mg.page; mg_want_page(mg.page, 1); }
-  if (mg.zoom < 1.01f) hi_page = -1;
-  if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); mg_free_pages(); screen = S_BOOK; }
+  vita2d_texture *t = mg.ptex_page[0] == mg.page ? mg.ptex[0] : NULL;
+  if (rd.zoom > 1.25f && hi_page != mg.page && t && vita2d_texture_get_width(t) <= W) { hi_page = mg.page; mg_want_page(mg.page, 1); }
+  if (rd.zoom < 1.01f) hi_page = -1;
+  // the save button, with the controls (or □)
+  if (!ro_open && (frame_no < rd.chrome_until || msave_on)) {
+    char sl[64];
+    if (msave_on) snprintf(sl, sizeof sl, "Saving %d / %d", msave_done, msave_total);
+    else snprintf(sl, sizeof sl, "Save %s  □", mg.src == MS_MANGADEX ? "chapter" : "gallery");
+    int bw = text_w(15, sl) + 48, bx = W - 124 - bw;
+    rrect(bx, 10, bw, 40, 20, RGBA(0, 0, 0, 170));
+    if (msave_on) spinner(bx + 22, 30, 8); else icon("plus", bx + 22, 30, TEXT);
+    text(bx + 38, 36, TEXT, 15, sl);
+    if (hit(bx, 6, bw, 48)) { in.tap = 0; if (!msave_on) msave_start(); }
+  }
+  if ((in.pressed & SCE_CTRL_SQUARE) && !msave_on && !ro_open) msave_start();
 }

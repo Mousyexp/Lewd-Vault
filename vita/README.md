@@ -97,6 +97,16 @@ screen: a card on the left (a few of the pictures, the kind as a four-way switch
 levels as a bar, Start), the settings as tiles on the right, two across, each value big with ‹ ›.
 ↑↓ go through them, ←→ change one (tap a tile's left or right half), ✕ or START starts.
 
+**Reading comics** (`src/reader.c`): a book from the Library and a chapter from the Comics tab are read
+the same way, as the reading options say. They're in Settings (Comics) and in the reader (△, or Options
+at the top): **Reading** pages one at a time, or a continuous strip scrolled down; **Orientation**
+landscape, or portrait with the Vita on its side (right edge up: the D-pad turns with it); **Page turn**
+slide, fade, zoom or none; **Direction** left to right, or right to left for manga; **Taps** the sides
+turn pages, anywhere turns to the next, or taps only show the controls; **Double tap** zoom or nothing;
+**Rear touchpad** a swipe turns pages, or nothing. In the Comics tab, □ saves the chapter.
+
+The Filters and Order lists have an icon for each row.
+
 **Order** (△ or its button: a list): newest, oldest, most viewed, least viewed, recently viewed, most
 time spent, top rated (the stars), most appreciated (♥), shuffle, for you.
 
