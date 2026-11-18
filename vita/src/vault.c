@@ -250,6 +250,32 @@ int lv_is_vault(const char *dir) {
   snprintf(p, sizeof p, "%s/index.csv", dir);
   return exists(p);
 }
+// A new, empty vault at dir (its parents made): index.csv and views.csv with only their header rows,
+// as the PC writes them (a BOM, CRLF; lib.rs HEADERS, VIEW_HEADERS), and _app/. The PC and the phones
+// open it as it is. 0, or -1 (*why says).
+int lv_vault_create(const char *dir, const char **why) {
+  static const char IDX[] = "\xEF\xBB\xBFid,uid,file,original_name,category,kind,nsfw,quality,added,width,height,duration,"
+                            "preview_id,thumb,thumbhash,stream_id,thumb_size,collection,collection_cover,tags,source\r\n";
+  static const char VIEWS[] = "\xEF\xBB\xBFid,uid,views,last_viewed,appreciations,last_appreciated,seconds_viewed\r\n";
+  char p[600];
+  if (lv_is_vault(dir)) { *why = "There's a vault there already"; return -1; }
+  // (each folder on the way)
+  snprintf(p, sizeof p, "%s", dir);
+  for (char *c = strchr(p, '/'); c; c = strchr(c + 1, '/')) { *c = 0; mkdir(p, 0777); *c = '/'; }
+  mkdir(p, 0777);
+  snprintf(p, sizeof p, "%s/_app", dir);
+  mkdir(p, 0777);
+  snprintf(p, sizeof p, "%s/views.csv", dir);
+  FILE *f = fopen(p, "wb");
+  if (!f || fwrite(VIEWS, 1, sizeof VIEWS - 1, f) != sizeof VIEWS - 1) { if (f) fclose(f); *why = "The memory card couldn't be written"; return -1; }
+  fclose(f);
+  // (index.csv last: the folder is a vault once it's there)
+  snprintf(p, sizeof p, "%s/index.csv", dir);
+  f = fopen(p, "wb");
+  if (!f || fwrite(IDX, 1, sizeof IDX - 1, f) != sizeof IDX - 1) { if (f) fclose(f); remove(p); *why = "The memory card couldn't be written"; return -1; }
+  fclose(f);
+  return 0;
+}
 int lv_is_untraceable(const char *dir) {
   char p[600];
   snprintf(p, sizeof p, "%s/_app/key.check", dir);

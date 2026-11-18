@@ -56,6 +56,8 @@ typedef struct {
 } LvVault;
 
 int lv_is_vault(const char *dir);
+// A new, empty vault at dir (see vault.c). 0, or -1 (*why says).
+int lv_vault_create(const char *dir, const char **why);
 int lv_is_untraceable(const char *dir);
 // 1: the password is right (the key is kept), 0: wrong, -1: no check file.
 int lv_vault_unlock(LvVault *v, const char *password);

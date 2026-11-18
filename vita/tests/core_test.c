@@ -353,6 +353,44 @@ int main(int argc, char **argv) {
     CHECK(system(cmd) == 0, "clean up");
   }
 
+  // ---- a new, empty vault made on the Vita: its header rows exactly; it opens; an item goes in ----
+  {
+    char nd[300], cmd[400];
+    snprintf(nd, sizeof nd, "%s/lv-new-%d/LewdVault/My Vault", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", (int)getpid());
+    const char *why2 = NULL;
+    CHECK(lv_vault_create(nd, &why2) == 0, "create: %s", why2 ? why2 : "");
+    CHECK(lv_vault_create(nd, &why2) != 0, "not over a vault");
+    // (the header rows byte for byte as the golden vault's)
+    char a[600], b[600];
+    snprintf(a, sizeof a, "%s/index.csv", nd);
+    snprintf(b, sizeof b, "%s/golden-vault/index.csv", fx);
+    FILE *fa = fopen(a, "rb"), *fb = fopen(b, "rb");
+    char la[400] = "", lb[400] = "";
+    if (fa) { if (!fgets(la, sizeof la, fa)) la[0] = 0; fclose(fa); }
+    if (fb) { if (!fgets(lb, sizeof lb, fb)) lb[0] = 0; fclose(fb); }
+    CHECK(la[0] && !strcmp(la, lb), "index.csv's header as the PC's");
+    snprintf(a, sizeof a, "%s/views.csv", nd);
+    snprintf(b, sizeof b, "%s/golden-vault/views.csv", fx);
+    fa = fopen(a, "rb"); fb = fopen(b, "rb");
+    la[0] = lb[0] = 0;
+    if (fa) { if (!fgets(la, sizeof la, fa)) la[0] = 0; fclose(fa); }
+    if (fb) { if (!fgets(lb, sizeof lb, fb)) lb[0] = 0; fclose(fb); }
+    CHECK(la[0] && !strcmp(la, lb), "views.csv's header as the PC's");
+    LvVault e2;
+    lv_vault_init(&e2, nd);
+    CHECK(lv_vault_load(&e2, &why2) == 0 && e2.n == 0, "the new vault opens, empty: %s", why2 ? why2 : "");
+    LvNew nw = {.name = "First", .category = "Saved", .kind = "image", .tags = "", .source = "", .added = "2026-11-18T10:00:00.000Z", .nsfw = 1, .quality = 5, .width = 2, .height = 2};
+    LvAdded ad;
+    static const uint8_t px[] = "not really a picture";
+    CHECK(lv_vault_add_files(&e2, &nw, px, sizeof px, "jpg", NULL, 0, 0, 0, &ad, &why2) == 0, "an item into it: %s", why2 ? why2 : "");
+    lv_vault_free(&e2);
+    lv_vault_init(&e2, nd);
+    CHECK(lv_vault_load(&e2, &why2) == 0 && e2.n == 1, "and it's there after: %d", e2.n);
+    lv_vault_free(&e2);
+    snprintf(cmd, sizeof cmd, "rm -rf \"%s/lv-new-%d\"", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", (int)getpid());
+    CHECK(system(cmd) == 0, "clean up");
+  }
+
   printf(fails ? "%d FAILED\n" : "core: all passed\n", fails);
   return fails != 0;
 }

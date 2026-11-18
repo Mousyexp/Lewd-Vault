@@ -17,10 +17,14 @@ Needs a Vita (or PS TV) with HENkaku/Ensō, and VitaShell.
 1. Get `Lewd.Vault.Vita.vpk` (Actions → Build PS Vita → the run's **LewdVault-vpk** artifact, or a
    release).
 2. Copy it to the Vita (VitaShell: SELECT starts its FTP server; or USB) and install it from VitaShell.
-3. Copy your vault folder into **`ux0:data/LewdVault/`**. That's the `Image Vault data` folder from
-   the PC (or `data.temp` for an Untraceable vault), so it ends up as, for example,
-   `ux0:data/LewdVault/Image Vault data/index.csv`. `uma0:` and `imc0:` work too. Several vaults side
-   by side give a picker.
+3. Open it. With no vault on the card yet, **✕ Start a new vault on this Vita** makes an empty one
+   (`ux0:data/LewdVault/My Vault`, in the same format as the PC's, so the PC and the phones can open it
+   later); fill it from the Browser and Comics. No PC needed.
+4. Or, to use the PC app's vault: copy its folder into **`ux0:data/LewdVault/`**. That's the
+   `Image Vault data` folder from the PC (or `data.temp` for an Untraceable vault), so it ends up as,
+   for example, `ux0:data/LewdVault/Image Vault data/index.csv`; □ on the first screen looks again.
+   `uma0:` and `imc0:` work too. Several vaults side by side give a picker. △ gets one from Google
+   Drive instead.
 
 The app keeps its own settings and a thumbnail cache in `ux0:data/LWDV00001/` (the Title ID). An
 Untraceable vault's cached thumbnails are encrypted with its key, like everything else of it.

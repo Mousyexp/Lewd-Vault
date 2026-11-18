@@ -1708,23 +1708,40 @@ static void finish_open(void) {
 
 // ----- the picker: which vault, or how to put one on the Vita -----
 static void open_drive(int from); // (drive_ui.c)
+static void icon(const char *name, float cx, float cy, unsigned col);
 static void draw_pick(void) {
   text(40, 70, TEXT, 34, "Lewd Vault");
   text(40, 100, DIM, 18, "for PS Vita");
   if (nfound == 0) {
-    rrect(40, 140, W - 80, 300, 18, SURF);
-    text(70, 190, TEXT, 22, "No vault on this Vita yet");
-    const char *lines[] = {
-      "1. On your PC, find the vault folder (\"Image Vault data\", or data.temp for Untraceable).",
-      "2. Copy it to the memory card, into  ux0:data/LewdVault/",
-      "    (USB with Content Manager's file mode, or VitaShell: SELECT starts its FTP).",
-      "3. Come back here and press ✕ to look again.",
-      "An Untraceable vault stays encrypted on the card and opens with its password."};
-    for (int k = 0; k < 5; k++) text(70, 232 + k * 34, k == 4 ? FAINT : DIM, 17, lines[k]);
-    rrect(40, H - 80, 320, 46, 23, SURF2);
-    text_center(200, H - 50, TEXT, 18, "\u25b3  Or from Google Drive");
-    if ((in.pressed & SCE_CTRL_TRIANGLE) || hit(40, H - 80, 320, 46)) { sfx(SFX_OPEN); open_drive(S_PICK); return; }
-    if (in.pressed & SCE_CTRL_CROSS || hit(40, 140, W - 80, 300)) find_vaults();
+    // the first start: a new vault here (nothing else needed), or the PC's copied over, or Drive's
+    text(40, 160, TEXT, 22, "No vault on this Vita yet");
+    text(40, 190, DIM, 16, "A vault is where your saved pictures, videos and comics go.");
+    int bx = 40, by = 214, bw = W - 80;
+    rrect(bx, by, bw, 72, 20, ACC);
+    icon("plus", bx + 34, by + 36, RGBA(20, 12, 16, 255));
+    text(bx + 60, by + 32, RGBA(20, 12, 16, 255), 20, "Start a new vault on this Vita");
+    text(bx + 60, by + 56, RGBA(20, 12, 16, 200), 14, "Empty, in ux0:data/LewdVault/My Vault  ·  fill it from the Browser and Comics");
+    text(bx + bw - 40, by + 44, RGBA(20, 12, 16, 255), 18, "✕");
+    int y2 = by + 86;
+    rrect(bx, y2, bw, 112, 20, SURF);
+    text(bx + 24, y2 + 30, TEXT, 17, "Or use the vault from the PC app (optional)");
+    text(bx + 24, y2 + 56, DIM, 14, "Copy its folder (\"Image Vault data\", or data.temp for Untraceable) into  ux0:data/LewdVault/");
+    text(bx + 24, y2 + 78, DIM, 14, "with VitaShell (SELECT starts its FTP) or Content Manager, then press □ to look again.");
+    text(bx + 24, y2 + 100, FAINT, 13, "An Untraceable vault stays encrypted on the card and opens with its password.");
+    rrect(40, H - 62, 300, 44, 22, SURF2);
+    text_center(190, H - 34, TEXT, 16, "△  From Google Drive");
+    if ((in.pressed & SCE_CTRL_TRIANGLE) || hit(40, H - 62, 300, 44)) { sfx(SFX_OPEN); open_drive(S_PICK); return; }
+    if ((in.pressed & SCE_CTRL_SQUARE) || hit(bx, y2, bw, 112)) { sfx(SFX_TICK); find_vaults(); if (!nfound) say("Still no vault in ux0:data/LewdVault/"); return; }
+    if ((in.pressed & SCE_CTRL_CROSS) || hit(bx, by, bw, 72)) {
+      const char *why = NULL;
+      static const char NEWV[] = "ux0:data/LewdVault/My Vault";
+      if (lv_vault_create(NEWV, &why) != 0) { sfx(SFX_ERROR); say(why ? why : "It couldn't be made"); find_vaults(); return; }
+      sfx(SFX_SELECT);
+      say("Your vault is ready: save things into it from the Browser and Comics");
+      find_vaults();
+      open_vault(NEWV);
+      return;
+    }
     return;
   }
   text(40, 150, DIM, 18, "Choose a vault");
@@ -2461,6 +2478,11 @@ static void draw_library(void) {
     if (cfg.lmode == 3 && !query[0]) {
       text_center(W / 2, TOP + 150, DIM, 20, "No comics yet");
       text_center(W / 2, TOP + 180, FAINT, 16, "Save a chapter from the Comics tab, or give a collection the category Comics");
+    } else if (vault.n == 0 && !query[0]) {
+      // (a new vault: where things come from)
+      text_center(W / 2, TOP + 140, TEXT, 22, "Your vault is empty");
+      text_center(W / 2, TOP + 172, DIM, 16, "Find pictures and videos in the Browser and save them here,");
+      text_center(W / 2, TOP + 196, DIM, 16, "or save comics from the Comics tab.");
     } else
     text_center(W / 2, TOP + 150, DIM, 20, query[0] ? "Nothing matches that search" : "Nothing here");
     if (query[0]) text_center(W / 2, TOP + 180, FAINT, 16, "Tap Library below to see everything again");
