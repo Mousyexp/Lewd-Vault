@@ -3845,10 +3845,12 @@ static volatile int woke, going_away;
 static pthread_mutex_t settings_mx = PTHREAD_MUTEX_INITIALIZER;
 // (the settings and the slideshow's plan written now if they're waiting: the app may be frozen, or
 //  closed from the LiveArea, any moment after the PS button)
+static void prog_flush(int now); // (manga_ui.c: where each comic was left)
 static void flush_settings(void) {
   pthread_mutex_lock(&settings_mx);
   if (cfg_dirty_at) cfg_write();
   if (show_dirty_at) show_write();
+  prog_flush(1);
   pthread_mutex_unlock(&settings_mx);
 }
 static int power_cb(int notify_id, int count, int arg, void *user) {

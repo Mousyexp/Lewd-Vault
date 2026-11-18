@@ -347,13 +347,27 @@ static void *mg_main(void *arg) {
 // Its pages as pictures, as they come (not made smaller: they're pages to read), in the category
 // Comics, tagged comic and with the book's tags, one collection for the chapter: the Library's Comics
 // mode shows it as a book. On a thread of its own, so reading goes on meanwhile.
+typedef struct { char id[200], label[80]; } SChap; // (a whole series: its chapters, each saved in turn)
 typedef struct {
   int src, vgen, total;
   char **urls; int n;
   LvBook book;
   char coll[200], tags[1400];
+  SChap *chaps; int nchaps; // (a series: chapter after chapter; else the pages above, one chapter)
 } MSave;
-typedef struct { LvNew nw; LvAdded added; char name[240], when[40], kind[8]; int vgen; } MSaved;
+typedef struct { LvNew nw; LvAdded added; char name[240], when[40], kind[8], coll[200]; int vgen; } MSaved;
+static volatile int msave_series_at, msave_series_n; // (a series: the chapter being saved, of how many)
+// (no characters a file name can't have, no doubled or trailing spaces)
+static void coll_clean(char *s) {
+  char *o = s;
+  for (const char *c = s; *c; c++) {
+    char ch = strchr("/\\:\"*?<>|", *c) ? ' ' : *c;
+    if (ch == ' ' && (o == s || o[-1] == ' ')) continue;
+    *o++ = ch;
+  }
+  while (o > s && o[-1] == ' ') o--;
+  *o = 0;
+}
 static volatile int msave_on, msave_done, msave_total, msave_failed, msave_gen = 1;
 static char msave_title[200];
 static MSaved *msaved; // (pages written, waiting for the drawing thread)
@@ -397,6 +411,24 @@ static void *msave_main(void *arg) {
     }
     msave_total = j->n;
   }
+  int nch = j->nchaps ? j->nchaps : 1, stop = 0;
+  for (int c = 0; c < nch && h && msave_gen == gen && !stop; c++) {
+  if (j->nchaps) {
+    // (a series: this chapter's pages, then they're saved as one comic of their own)
+    lv_strings_free(j->urls, j->n);
+    j->urls = NULL; j->n = 0;
+    char url[600];
+    if (j->src == MS_MANGADEX) lv_md_pages_url(j->chaps[c].id, url, sizeof url); else lv_ms_url(j->src, j->chaps[c].id, url, sizeof url);
+    uint8_t *b = NULL; size_t n = 0;
+    if (mg_get(h, url, &b, &n, 8u << 20, &err) == 200)
+      j->n = j->src == MS_MANGADEX ? lv_md_parse_pages((char *)b, n, &j->urls) : LV_MSRC[j->src].family == MF_HHAND ? lv_hh_parse_images((char *)b, n, &j->urls) : lv_ms_parse_pages(j->src, (char *)b, &j->urls);
+    free(b);
+    msave_series_at = c + 1;
+    if (j->n <= 0) { j->n = 0; j->urls = NULL; continue; }
+    snprintf(j->coll, sizeof j->coll, "%.150s \u2013 %.40s", j->book.title, j->chaps[c].label);
+    coll_clean(j->coll);
+    msave_done = msave_failed = 0; msave_total = j->n;
+  }
   for (int k = 0; k < j->n && h && msave_gen == gen; k++) {
     uint8_t *b = NULL; size_t n = 0;
     int ok = mg_fetch_page(h, j->src, j->urls[k], &msave_gen, gen, &b, &n, &err);
@@ -435,18 +467,22 @@ static void *msave_main(void *arg) {
     if (r != 0) {
       msave_failed += j->n - k; msave_done = j->n;
       snprintf(msave_title, sizeof msave_title, "%s", why ? why : "It couldn't be saved");
+      stop = 1; // (no room, another vault: the rest of a series too)
       break;
     }
     d.nw = nw; d.vgen = j->vgen;
+    snprintf(d.coll, sizeof d.coll, "%s", j->coll);
     pthread_mutex_lock(&msmx);
     if (nmsaved == capmsaved) { MSaved *nm = realloc(msaved, (capmsaved + 16) * sizeof *nm); if (nm) { msaved = nm; capmsaved += 16; } }
     if (nmsaved < capmsaved) msaved[nmsaved++] = d;
     pthread_mutex_unlock(&msmx);
     msave_done++;
   }
+  } // (the chapters)
   if (!h) msave_failed = msave_total;
   lv_http_free(h);
   lv_strings_free(j->urls, j->n);
+  free(j->chaps);
   free(j);
   msave_on = 0;
   return NULL;
@@ -464,7 +500,7 @@ static void msave_take(void) {
     MSaved *d = &got[k];
     if (d->vgen != vgen || !loaded_vault) continue;
     d->nw.name = d->name; d->nw.kind = d->kind; d->nw.added = d->when; d->nw.category = "Comics";
-    d->nw.tags = msave_tags; d->nw.source = ""; d->nw.collection = msave_coll;
+    d->nw.tags = msave_tags; d->nw.source = ""; d->nw.collection = d->coll;
     int before = vault.n;
     pthread_mutex_lock(&vmx);
     int ok = lv_vault_add_memory(&vault, &d->nw, &d->added) == 0;
@@ -475,7 +511,8 @@ static void msave_take(void) {
   if (was_on && !msave_on) {
     char m[300];
     int okn = msave_done - msave_failed;
-    if (okn <= 0) { sfx(SFX_ERROR); snprintf(m, sizeof m, "Not saved: %s", msave_title[0] ? msave_title : "the pages didn't come"); }
+    if (msave_series_n) { sfx(SFX_SAVED); snprintf(m, sizeof m, "%d chapters saved: Library \u203a Comics%s", msave_series_at, msave_title[0] ? " (it stopped: no room)" : ""); msave_series_n = 0; }
+    else if (okn <= 0) { sfx(SFX_ERROR); snprintf(m, sizeof m, "Not saved: %s", msave_title[0] ? msave_title : "the pages didn't come"); }
     else { sfx(SFX_SAVED); snprintf(m, sizeof m, "%d pages saved: Library \u203a Comics%s", okn, msave_failed ? " (some pages didn't come)" : ""); }
     say(m);
   }
@@ -505,17 +542,7 @@ static void msave_start(void) {
   for (int k = 0; k < mg.npages; k++) { j->urls[k] = strdup(mg.pages[k]); if (j->urls[k]) j->n++; else break; }
   if (mg_chapters(mg.src) && mg.ch && mg.chapter < mg.nch) snprintf(j->coll, sizeof j->coll, "%.150s \u2013 %.40s", j->book.title, mg.ch[mg.chapter].label);
   else snprintf(j->coll, sizeof j->coll, "%.190s", j->book.title);
-  // (no characters a file name can't have, no doubled or trailing spaces)
-  {
-    char *o = j->coll;
-    for (const char *c = j->coll; *c; c++) {
-      char ch = strchr("/\\:\"*?<>|", *c) ? ' ' : *c;
-      if (ch == ' ' && (o == j->coll || o[-1] == ' ')) continue;
-      *o++ = ch;
-    }
-    while (o > j->coll && o[-1] == ' ') o--;
-    *o = 0;
-  }
+  coll_clean(j->coll);
   for (int i = 0; i < vault.n; i++)
     if (vault.items[i].collection && !strcmp(vault.items[i].collection, j->coll)) {
       lv_strings_free(j->urls, j->n); free(j);
@@ -540,6 +567,43 @@ static void msave_start(void) {
   say(m);
 }
 
+// A whole series: every chapter of the book open that isn't in the vault yet, one after another, each a
+// comic of its own ("Title – Chapter 3"), on the same thread as a chapter's save
+static void msave_series_start(void) {
+  if (msave_on) { say("Something's being saved already"); return; }
+  if (!loaded_vault) { sfx(SFX_ERROR); say("Open a vault first: the pages go into it"); return; }
+  if (mg.book < 0 || !mg.nch || !mg.ch) { sfx(SFX_ERROR); say("The chapters are still coming"); return; }
+  MSave *j = calloc(1, sizeof *j);
+  if (!j || !(j->chaps = calloc(mg.nch, sizeof *j->chaps))) { if (j) free(j); return; }
+  j->src = mg.src; j->vgen = vgen; j->book = mg.books[mg.book];
+  for (int c = 0; c < mg.nch; c++) {
+    char coll[200];
+    snprintf(coll, sizeof coll, "%.150s \u2013 %.40s", j->book.title, mg.ch[c].label);
+    coll_clean(coll);
+    int have = 0;
+    for (int i = 0; i < vault.n && !have; i++) have = vault.items[i].collection && !strcmp(vault.items[i].collection, coll);
+    if (have) continue;
+    snprintf(j->chaps[j->nchaps].id, sizeof j->chaps[0].id, "%s", mg.ch[c].id);
+    snprintf(j->chaps[j->nchaps].label, sizeof j->chaps[0].label, "%s", mg.ch[c].label);
+    j->nchaps++;
+  }
+  if (!j->nchaps) { free(j->chaps); free(j); sfx(SFX_ERROR); say("Every chapter is in the vault already"); return; }
+  book_tags(j->book.tags, j->tags, sizeof j->tags);
+  snprintf(msave_tags, sizeof msave_tags, "%s", j->tags);
+  msave_done = msave_failed = 0; msave_total = 0; msave_title[0] = 0;
+  msave_series_n = j->nchaps; msave_series_at = 0;
+  pthread_t t;
+  pthread_attr_t at;
+  pthread_attr_init(&at);
+  pthread_attr_setstacksize(&at, 512 * 1024);
+  msave_on = 1;
+  if (pthread_create(&t, &at, msave_main, j) != 0) { msave_on = 0; msave_series_n = 0; free(j->chaps); free(j); sfx(SFX_ERROR); say("It couldn't start"); return; }
+  pthread_detach(t);
+  sfx(SFX_OPEN);
+  char m[260];
+  snprintf(m, sizeof m, "Saving %d chapters of \u201c%.150s\u201d into the vault", j->nchaps, j->book.title);
+  say(m);
+}
 static void mg_start_thread(void) {
   if (mg_thread_on) return;
   pthread_t t;
@@ -859,34 +923,172 @@ static vita2d_texture *mg_cover(int i) {
   for (int s = 0; s < MG_TEX; s++) if (mg.tex[s] && mg.tex_book[s] == i) { mg.tex_used[s] = frame_no; return mg.tex[s]; }
   return NULL;
 }
+// ---------- where each book was left: picked up again (ux0:data/LWDV00001/comic_progress.tsv) ----------
+// A line each, the most recent first: the source, the book (its address, title, cover), the chapter
+// (its address and label) and the page. Kept as reading goes, written a second after the last change.
+typedef struct { char src[32], id[200], title[160], cover[400], chid[200], chlabel[80]; int page; long long at; } Prog;
+#define PROG_MAX 60
+static Prog *prog;
+static int nprog, prog_loaded;
+static unsigned prog_dirty_at;
+static int mg_resume_page = -1; // (a chapter opened to pick up from here: its page, once its pages are in)
+static void prog_field(char *dst, size_t cap, const char *src) { snprintf(dst, cap, "%s", src); for (char *p = dst; *p; p++) if (*p == '\t' || *p == '\n' || *p == '\r') *p = ' '; }
+static void prog_load(void) {
+  if (prog_loaded) return;
+  prog_loaded = 1;
+  prog = calloc(PROG_MAX, sizeof *prog);
+  FILE *f = fopen(DATA "/comic_progress.tsv", "r");
+  if (!f || !prog) { if (f) fclose(f); return; }
+  char line[1400];
+  while (nprog < PROG_MAX && fgets(line, sizeof line, f)) {
+    line[strcspn(line, "\r\n")] = 0;
+    char *c[8] = {0};
+    int k = 0;
+    for (char *p = line; k < 8; k++) { c[k] = p; p = strchr(p, '\t'); if (!p) { k++; break; } *p++ = 0; }
+    if (k < 8) continue;
+    Prog *g = &prog[nprog++];
+    snprintf(g->src, sizeof g->src, "%s", c[0]); snprintf(g->id, sizeof g->id, "%s", c[1]); snprintf(g->title, sizeof g->title, "%s", c[2]);
+    snprintf(g->cover, sizeof g->cover, "%s", c[3]); snprintf(g->chid, sizeof g->chid, "%s", c[4]); snprintf(g->chlabel, sizeof g->chlabel, "%s", c[5]);
+    g->page = atoi(c[6]); g->at = atoll(c[7]);
+  }
+  fclose(f);
+}
+static void prog_write(void) {
+  prog_dirty_at = 0;
+  FILE *f = fopen(DATA "/comic_progress.tsv.part", "w");
+  if (!f) return;
+  for (int k = 0; k < nprog; k++) fprintf(f, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%lld\n", prog[k].src, prog[k].id, prog[k].title, prog[k].cover, prog[k].chid, prog[k].chlabel, prog[k].page, prog[k].at);
+  fclose(f);
+  sceIoRemove(DATA "/comic_progress.tsv");
+  sceIoRename(DATA "/comic_progress.tsv.part", DATA "/comic_progress.tsv");
+}
+static int prog_find(const char *src, const char *id) {
+  prog_load();
+  for (int k = 0; k < nprog; k++) if (!strcmp(prog[k].src, src) && !strcmp(prog[k].id, id)) return k;
+  return -1;
+}
+// (the reader's page: noted for its book, which goes to the front)
+static void prog_note(void) {
+  if (mg.book < 0 || mg.book >= mg.nbooks || !prog_loaded && (prog_load(), !prog)) return;
+  if (!prog) return;
+  LvBook *b = &mg.books[mg.book];
+  int k = prog_find(LV_MSRC[mg.src].name, b->id);
+  Prog g;
+  memset(&g, 0, sizeof g);
+  if (k >= 0) g = prog[k];
+  prog_field(g.src, sizeof g.src, LV_MSRC[mg.src].name); prog_field(g.id, sizeof g.id, b->id);
+  prog_field(g.title, sizeof g.title, b->title); prog_field(g.cover, sizeof g.cover, b->cover);
+  if (mg_chapters(mg.src) && mg.ch && mg.chapter < mg.nch) { prog_field(g.chid, sizeof g.chid, mg.ch[mg.chapter].id); prog_field(g.chlabel, sizeof g.chlabel, mg.ch[mg.chapter].label); }
+  else { g.chid[0] = 0; g.chlabel[0] = 0; }
+  g.page = mg.page; g.at = (long long)time(NULL);
+  if (k < 0) { k = nprog < PROG_MAX ? nprog++ : PROG_MAX - 1; }
+  memmove(prog + 1, prog, k * sizeof *prog); // (to the front)
+  prog[0] = g;
+  prog_dirty_at = frame_no ? frame_no : 1;
+}
+// (a second after the last change, or at once when the app is put away: main.c's flush_settings)
+static void prog_flush(int now) { if (prog_dirty_at && (now || frame_no - prog_dirty_at > 60)) prog_write(); }
+// A book picked up from the Continue row: its source opened, the book put first in its list and opened
+static void prog_open(int k) {
+  if (k < 0 || k >= nprog) return;
+  Prog g = prog[k];
+  int src = -1;
+  for (int i = 0; i < MS_N && src < 0; i++) if (!strcmp(LV_MSRC[i].name, g.src)) src = i;
+  if (src < 0) { say("That source isn't here any more"); return; }
+  if (src != mg.src || !mg.books) { mg.src = src; mg_search(); }
+  if (!mg.books) { mg.books = calloc(MG_MAX, sizeof *mg.books); mg.cstate = calloc(MG_MAX, 1); }
+  if (!mg.books || !mg.cstate || mg.nbooks >= MG_MAX) return;
+  memmove(mg.books + 1, mg.books, mg.nbooks * sizeof *mg.books);
+  memmove(mg.cstate + 1, mg.cstate, mg.nbooks);
+  memset(&mg.books[0], 0, sizeof mg.books[0]);
+  snprintf(mg.books[0].id, sizeof mg.books[0].id, "%s", g.id);
+  snprintf(mg.books[0].title, sizeof mg.books[0].title, "%s", g.title);
+  snprintf(mg.books[0].cover, sizeof mg.books[0].cover, "%s", g.cover);
+  mg.cstate[0] = 0; mg.nbooks++;
+  for (int t = 0; t < MG_TEX; t++) if (mg.tex[t] && mg.tex_book[t] >= 0) mg.tex_book[t]++; // (the covers follow their books)
+  mg.sel = 0;
+  sfx(SFX_SELECT);
+  mg_book_back = S_MANGA;
+  mg_open_book(0);
+}
+// From the book screen: its chapter (once the chapters are in), from its page
+static int prog_continue(int k) {
+  if (k < 0) return 0;
+  if (mg_chapters(mg.src)) {
+    if (!mg.nch) return 0;
+    int c = -1;
+    for (int i = 0; i < mg.nch && c < 0; i++) if (!strcmp(mg.ch[i].id, prog[k].chid)) c = i;
+    if (c < 0) return 0;
+    mg.ch_sel = c;
+    mg_resume_page = prog[k].page;
+    mg_read(c);
+  } else { mg_resume_page = prog[k].page; mg_read(0); }
+  return 1;
+}
+
 static void draw_manga(void) {
   mg_take();
   // (the background: the frame is cleared to it already)
   const int cols = 6, gap = 12, x0 = (W - cols * MG_CW - (cols - 1) * gap) / 2;
   int rows = (mg.nbooks + cols - 1) / cols;
-  float content = rows * (MG_CH + 52) + 20, view_h = H - TOP - BAR + 40;
+  // the Continue row: the books left part way, from any source (not while searching)
+  prog_load();
+  int ncont = !mg.query[0] ? (nprog < 8 ? nprog : 8) : 0, cont_h = ncont ? 52 : 0;
+  float content = rows * (MG_CH + 52) + 20 + cont_h, view_h = H - TOP - BAR + 40;
   float max_scroll = fmaxf(0, content - view_h);
   // moving: touch, the stick, the D-pad
   if (in.touching && in.ty > TOP) mg.scroll -= in.drag_dy;
   mg.scroll += in.ly * 14 * ft - in.bdy * 1.5f;
   int before = mg.sel;
-  if (in.pressed & SCE_CTRL_RIGHT) mg.sel++;
-  if (in.pressed & SCE_CTRL_LEFT) mg.sel--;
-  if (in.pressed & SCE_CTRL_DOWN) mg.sel += cols;
-  if (in.pressed & SCE_CTRL_UP) mg.sel -= cols;
-  if (mg.sel >= mg.nbooks) mg.sel = mg.nbooks - 1;
-  if (mg.sel < 0) mg.sel = 0;
-  if (mg.sel != before) {
+  if (mg.sel < 0) { // (in the Continue row: -1 its first)
+    int c = -1 - mg.sel;
+    if (in.pressed & SCE_CTRL_RIGHT) c = c + 1 < ncont ? c + 1 : c;
+    if (in.pressed & SCE_CTRL_LEFT) c = c > 0 ? c - 1 : 0;
+    mg.sel = -1 - c;
+    if (in.pressed & SCE_CTRL_DOWN) mg.sel = 0;
+    if (!ncont) mg.sel = 0;
+  } else {
+    if (in.pressed & SCE_CTRL_RIGHT) mg.sel++;
+    if (in.pressed & SCE_CTRL_LEFT) mg.sel--;
+    if (in.pressed & SCE_CTRL_DOWN) mg.sel += cols;
+    if ((in.pressed & SCE_CTRL_UP) && mg.sel < cols && ncont) mg.sel = -1;
+    else if (in.pressed & SCE_CTRL_UP) mg.sel -= cols;
+    if (mg.sel >= mg.nbooks) mg.sel = mg.nbooks - 1;
+    if (mg.sel < 0 && !(ncont && mg.sel == -1 && (in.pressed & SCE_CTRL_UP))) mg.sel = 0;
+  }
+  if (mg.sel != before && mg.sel < 0) { sfx(SFX_TICK); mg.scroll = 0; }
+  else if (mg.sel != before) {
     sfx(SFX_TICK);
-    float y = (mg.sel / cols) * (MG_CH + 52);
+    float y = (mg.sel / cols) * (MG_CH + 52) + cont_h;
     if (y < mg.scroll) mg.scroll = y;
     if (y + MG_CH + 52 > mg.scroll + view_h) mg.scroll = y + MG_CH + 52 - view_h;
   }
   if (mg.scroll > max_scroll) mg.scroll = max_scroll;
   if (mg.scroll < 0) mg.scroll = 0;
   int last = 0;
+  if (ncont) {
+    float cy = TOP + 8 - mg.scroll, cx = x0;
+    if (cy > TOP - 48) {
+      text(x0, cy + 14, FAINT, 13, "Continue reading");
+      cx = x0 + text_w(13, "Continue reading") + 14;
+    }
+    for (int k = 0; k < ncont && cy > TOP - 48; k++) {
+      char l[200];
+      if (prog[k].chlabel[0]) snprintf(l, sizeof l, "%.60s \u00b7 %.30s", prog[k].title, prog[k].chlabel);
+      else snprintf(l, sizeof l, "%.60s \u00b7 page %d", prog[k].title, prog[k].page + 1);
+      int cw = text_w(14, l) + 30;
+      if (cw > 280) cw = 280;
+      if (cx + cw > W - 10) break;
+      int on = mg.sel == -1 - k;
+      if (on) glass(cx, cy, cw, 34, 0); else rrect(cx, cy, cw, 34, 12, SURF2);
+      text_fit(cx + 14, cy + 23, on ? TEXT : DIM, 14, l, cw - 24);
+      if (on) focus_ring(cx, cy, cw, 34);
+      if (hit((int)cx, (int)cy, cw, 34) && in.tap_y > TOP) { prog_open(k); return; }
+      cx += cw + 8;
+    }
+  }
   for (int i = 0; i < mg.nbooks; i++) {
-    float x = x0 + (i % cols) * (MG_CW + gap), y = TOP + 10 + (i / cols) * (MG_CH + 52) - mg.scroll;
+    float x = x0 + (i % cols) * (MG_CW + gap), y = TOP + 10 + cont_h + (i / cols) * (MG_CH + 52) - mg.scroll;
     if (y > H) break;
     if (y + MG_CH + 52 < TOP) continue;
     last = i;
@@ -939,6 +1141,7 @@ static void draw_manga(void) {
   icon("search", 38, 68, mg.query[0] ? TEXT : FAINT);
   text_fit(56, 74, mg.query[0] ? TEXT : FAINT, 16, mg.query[0] ? mg.query : "Search titles", W - 100);
   if (hit(16, 50, W - 32, 36) && !ime_open) ime_start(15, "Search", mg.query, 0);
+  if ((in.pressed & SCE_CTRL_CROSS) && mg.sel < 0) { prog_open(-1 - mg.sel); return; }
   if ((in.pressed & SCE_CTRL_CROSS) && mg.nbooks) { sfx(SFX_SELECT); mg_open_book(mg.sel); return; }
   if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = manga_back; return; }
   draw_bar();
@@ -959,6 +1162,21 @@ static void draw_book(void) {
   for (char *p = tags; *p; p++) if (*p == '|') *p = ',';
   text_fit(276, 122, FAINT, 13, tags, W - 300);
   int listy = 146;
+  // (left part way: picked up again)
+  int pk = prog_find(LV_MSRC[mg.src].name, b->id);
+  if (pk >= 0 && (prog[pk].page > 0 || prog[pk].chid[0]) && !mg.ch_loading) {
+    char cl[160];
+    if (prog[pk].chid[0]) snprintf(cl, sizeof cl, "\u25b6  Continue \u00b7 %.60s, page %d", prog[pk].chlabel, prog[pk].page + 1);
+    else snprintf(cl, sizeof cl, "\u25b6  Continue from page %d", prog[pk].page + 1);
+    int cw = text_w(16, cl) + 40;
+    if (cw > W - 306) cw = W - 306;
+    glass(276, listy - 4, cw, 42, 0);
+    text_fit(296, listy + 22, TEXT, 16, cl, cw - 30);
+    if (hit(276, listy - 4, cw, 42) && prog_continue(pk)) { sfx(SFX_SELECT); return; }
+    if ((in.pressed & SCE_CTRL_RTRIGGER) && prog_continue(pk)) { sfx(SFX_SELECT); return; }
+    text(276 + cw + 12, listy + 22, FAINT, 13, "R");
+    listy += 50;
+  }
   if (!mg_chapters(mg.src)) {
     char m[64];
     if (b->pages) snprintf(m, sizeof m, "%d pages", b->pages); else snprintf(m, sizeof m, "%s", LV_MK_NAME[LV_MSRC[mg.src].kind]);
@@ -1018,8 +1236,19 @@ static void draw_book(void) {
   // ♥ Favorite (its link kept) and ↓ Offline (its pages into the vault), at the top right
   {
     int fav = fav_find(1, b->id) >= 0;
-    const char *fl = fav ? "\u2665 Favorite" : "\u2661 Favorite", *ol = msave_on ? "Saving\u2026" : "\u2193 Offline";
-    int fw = text_w(16, fl) + 36, ow = text_w(16, ol) + 36, x2 = W - 16 - ow, x1 = x2 - 10 - fw;
+    char sl[48];
+    if (msave_on && msave_series_n) snprintf(sl, sizeof sl, "Chapter %d/%d\u2026", msave_series_at ? msave_series_at : 1, msave_series_n);
+    const char *fl = fav ? "\u2665 Favorite" : "\u2661 Favorite", *ol = msave_on ? (msave_series_n ? sl : "Saving\u2026") : "\u2193 Offline";
+    // (a book with chapters: all of them, one after another)
+    const char *al = "\u2193 All";
+    int series = mg_chapters(mg.src) && mg.nch > 1 && !mg.ch_loading && !msave_on;
+    int aw = series ? text_w(16, al) + 36 : 0;
+    int fw = text_w(16, fl) + 36, ow = text_w(16, ol) + 36, x3 = W - 16 - aw, x2 = (series ? x3 - 10 : W - 16) - ow, x1 = x2 - 10 - fw;
+    if (series) {
+      rrect(x3, 12, aw, 40, 20, SURF2);
+      text(x3 + 18, 38, TEXT, 16, al);
+      if (hit(x3, 8, aw, 48) || (in.pressed & SCE_CTRL_START)) { msave_series_start(); return; }
+    }
     rrect(x1, 12, fw, 40, 20, fav ? ACC : SURF2);
     text(x1 + 18, 38, fav ? RGBA(20, 12, 16, 255) : TEXT, 16, fl);
     rrect(x2, 12, ow, 40, 20, SURF2);
@@ -1068,6 +1297,18 @@ static int mg_rd_now(void) { return mg.page; }
 static void mg_rd_close(void) { mg_free_pages(); screen = S_BOOK; }
 static void draw_reader(void) {
   mg_take();
+  // (picked up where it was left: its page, once the pages are in)
+  if (mg_resume_page >= 0 && mg.npages > mg_resume_page) { if (mg_resume_page > 0) mg_rd_go(mg_resume_page); mg_resume_page = -1; }
+  else if (mg_resume_page >= 0 && !mg.pages_loading && mg.npages && mg.npages >= mg.pages_total) mg_resume_page = -1; // (fewer pages now)
+  // (where it is, noted for the book: on each turn of a page)
+  {
+    static int last_page = -1, last_ch = -1, last_book = -1;
+    if (mg.npages && (mg.page != last_page || mg.chapter != last_ch || mg.book != last_book) && mg_resume_page < 0) {
+      last_page = mg.page; last_ch = mg.chapter; last_book = mg.book;
+      prog_note();
+    }
+    prog_flush(0);
+  }
   // (E-Hentai: the next gallery page of picture pages, before they run out)
   if (mg.src == MS_EHENTAI && !mg.pages_loading && mg.npages && mg.npages < mg.pages_total && mg.page + 6 >= mg.npages) {
     char url[600];

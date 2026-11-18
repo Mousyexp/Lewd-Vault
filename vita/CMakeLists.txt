@@ -207,6 +207,11 @@ vita_create_vpk(${LV_VPK_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sites/mangadistrict.png sites/mangadistrict.png
   FILE sites/multporn.png sites/multporn.png
   FILE sites/freeadultcomix.png sites/freeadultcomix.png
+  FILE sites/hentairox.png sites/hentairox.png
+  FILE sites/pururin.png sites/pururin.png
+  FILE sites/hentaimanga.png sites/hentaimanga.png
+  FILE sites/manga18fx.png sites/manga18fx.png
+  FILE sites/manhwaden.png sites/manhwaden.png
   FILE sites/booruio.png sites/booruio.png
   FILE sites/r34anime.png sites/r34anime.png
   FILE sites/safebooru.png sites/safebooru.png

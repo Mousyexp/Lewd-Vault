@@ -310,6 +310,11 @@ const LvMSrc LV_MSRC[MS_N] = {
   {"MangaDistrict", "mangadistrict", "Adult manhwa and manga", MF_SERIES, MK_HWEBTOON, "https://mangadistrict.com", "/page/%d/", "/page/%d/?s=%s&post_type=wp-manga", "/series/", NULL, "/publication/manga_", 0, 1},
   {"Multporn", "multporn", "Short hentai and western comics", MF_SERIES, MK_SHORT, "https://multporn.net", "/updated_comics?page=%d", "/search?search_api_views_fulltext=%s&page=%d", "/comics/", "/hentai_manga/", "/juicebox_medium/", 1, 0, 1},
   {"FreeAdultComix", "freeadultcomix", "Short adult comics", MF_SERIES, MK_SHORT, "https://freeadultcomix.com", "/page/%d/", "/page/%d/?s=%s", "*", NULL, "/wp-content/uploads/", 1},
+  {"HentaiRox", "hentairox", "Hentai manga and doujinshi", MF_GALLERY, MK_HMANGA, "https://hentairox.com", "/?page=%d", "/search/?q=%s&page=%d", "/gallery/"},
+  {"Pururin", "pururin", "Doujinshi, English and Japanese", MF_GALLERY, MK_HMANGA, "https://pururin.me", "/?page=%d", "/search?q=%s&page=%d", "/gallery/+"},
+  {"HentaiManga", "hentaimanga", "Hentai manga, in chapters", MF_SERIES, MK_HMANGA, "https://hentaimanga.me", NULL, "/manga/?q=%s", "/manga/", NULL, "/assets/images/chapters/"},
+  {"Manga18fx", "manga18fx", "Adult webtoons, some raw (Korean)", MF_SERIES, MK_HWEBTOON, "https://manga18fx.com", "/page/%d", "/search?q=%s&page=%d", "/manga/", NULL, "/chapters/|/uploads/"},
+  {"ManhwaDen", "manhwaden", "Adult manhwa", MF_SERIES, MK_HWEBTOON, "https://www.manhwaden.com", "/page/%d/", "/page/%d/?s=%s&post_type=wp-manga", "/manga/", NULL, "-Chapter-|/WP-manga/data/|/manga_", 0, 1},
 };
 
 void lv_ms_url(int src, const char *path, char *out, size_t cap) {
@@ -431,6 +436,14 @@ static int book_path(int src, const char *path, char *out, size_t cap) {
       rest = path + 1;
     } else {
       size_t l = strlen(it);
+      // ("/gallery/+": the whole path is the book's, a name after its number too: Pururin's)
+      if (l > 1 && it[l - 1] == '+') {
+        if (strncmp(path, it, l - 1) || !path[l - 1]) continue;
+        size_t all = strcspn(path, "?#\"");
+        if (all <= l) continue;
+        snprintf(out, cap, "%.*s", (int)all, path);
+        return 1;
+      }
       if (strncmp(path, it, l) || !path[l]) continue;
       rest = path + l;
     }
