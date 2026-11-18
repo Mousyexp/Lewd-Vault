@@ -12,6 +12,16 @@ set(VITA_APP_NAME "Lewd Vault")
 # (the Title ID is where the Vita keeps the app and its data: never change it, or a new install
 # loses its settings and thumbnail cache)
 set(VITA_TITLEID "LWDV00001")
+# The test kit (src/test.c): a separate app beside this one, "Lewd Vault Test" (LWDT00001), the same
+# vault and data folder, a menu of tests first, everything logged, reports in ux0:data/LWDV00001/reports.
+#   cmake -S vita -B vita/build-test -DLV_TESTKIT=ON ... && cmake --build vita/build-test   (LewdVaultTest.vpk)
+option(LV_TESTKIT "Build the test kit (LewdVaultTest.vpk) instead of the app" OFF)
+set(LV_VPK_NAME ${PROJECT_NAME})
+if(LV_TESTKIT)
+  set(VITA_APP_NAME "Lewd Vault Test")
+  set(VITA_TITLEID "LWDT00001")
+  set(LV_VPK_NAME "${PROJECT_NAME}Test")
+endif()
 set(VITA_VERSION "01.00")
 set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
 
@@ -44,7 +54,10 @@ target_link_libraries(${PROJECT_NAME}
 )
 
 vita_create_self(eboot.bin ${PROJECT_NAME} UNSAFE)
-vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
+if(LV_TESTKIT)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE LV_DEBUG LV_TESTKIT)
+endif()
+vita_create_vpk(${LV_VPK_NAME}.vpk ${VITA_TITLEID} eboot.bin
   VERSION ${VITA_VERSION}
   NAME ${VITA_APP_NAME}
   FILE sce_sys/icon0.png sce_sys/icon0.png

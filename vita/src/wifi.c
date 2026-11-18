@@ -183,6 +183,40 @@ static void wf_serve(int c) {
   long long len = -1;
   for (char *l = strstr(req, "\r\n"); l; l = strstr(l + 2, "\r\n"))
     if (!strncasecmp(l + 2, "Content-Length:", 15)) len = atoll(l + 17);
+#ifdef LV_TESTKIT
+  // (the test kit's reports: a list, and each one to download; only names in the reports folder)
+  if (!strcmp(method, "GET") && (!strcmp(path, "/reports") || !strcmp(path, "/reports/"))) {
+    static char list[16384];
+    size_t n = (size_t)snprintf(list, sizeof list, "<!doctype html><meta charset=utf-8><title>Test kit reports</title><body style=\"font:15px system-ui;background:#141014;color:#eee\"><h2>Lewd Vault test kit reports</h2>");
+    SceUID d = sceIoDopen(DATA "/reports");
+    if (d >= 0) {
+      SceIoDirent e;
+      memset(&e, 0, sizeof e);
+      while (sceIoDread(d, &e) > 0 && n < sizeof list - 300)
+        if (strstr(e.d_name, ".txt")) n += (size_t)snprintf(list + n, sizeof list - n, "<p><a style=\"color:#7fd\" href=\"/reports/%s\">%s</a> (%lld bytes)</p>", e.d_name, e.d_name, (long long)e.d_stat.st_size);
+      sceIoDclose(d);
+    }
+    wf_reply(c, 200, "text/html; charset=utf-8", list, n);
+    return;
+  }
+  if (!strcmp(method, "GET") && !strncmp(path, "/reports/", 9)) {
+    const char *name = path + 9;
+    if (!*name || strchr(name, '/') || strstr(name, "..") || !strstr(name, ".txt")) { wf_text(c, 404, "No such report"); return; }
+    char p[300];
+    snprintf(p, sizeof p, DATA "/reports/%s", name);
+    FILE *f = fopen(p, "rb");
+    if (!f) { wf_text(c, 404, "No such report"); return; }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *b = sz > 0 && sz < (8 << 20) ? malloc((size_t)sz) : NULL;
+    size_t got = b ? fread(b, 1, (size_t)sz, f) : 0;
+    fclose(f);
+    if (b) wf_reply(c, 200, "text/plain; charset=utf-8", b, got); else wf_text(c, 500, "It couldn't be read");
+    free(b);
+    return;
+  }
+#endif
   if (!strcmp(method, "GET") && (!strcmp(path, "/") || !strncmp(path, "/?", 2))) wf_reply(c, 200, "text/html; charset=utf-8", WF_PAGE, sizeof WF_PAGE - 1);
   else if (!strcmp(method, "POST") && !strncmp(path, "/upload", 7)) wf_upload(c, path, len, body, body_n);
   else if (!strcmp(method, "POST") && !strncmp(path, "/key?svc=", 9)) {

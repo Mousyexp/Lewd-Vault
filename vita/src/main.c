@@ -24,6 +24,7 @@
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/cpu.h>
 #include <psp2/kernel/sysmem.h>
+#include <psp2/kernel/modulemgr.h>
 #include <psp2/power.h>
 #include <psp2/sysmodule.h>
 #include <psp2/touch.h>
@@ -391,6 +392,7 @@ static unsigned frame_no;
 // motion goes by the clock, not by frames, so a slow frame moves things as far as two quick ones
 // would, never a stutter backwards or a slowed animation.
 static float ft = 1;
+static float frame_len_ms = 16.667f; // (the last frame's length, uncapped)
 static uint64_t frame_t0; // (when this frame's work began)
 // Whether this frame has done enough: pictures that came in wait for the next one, so a batch of
 // them never makes one frame late (the first each frame always goes in: they keep coming)
@@ -1365,7 +1367,7 @@ static int ime_poll(char *out, int cap) {
 }
 
 // ---------- screens ----------
-enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI, S_CALC, S_CLEAN, S_HEALTH, S_VIDEOS, S_MANGA, S_BOOK, S_READER, S_FAVS };
+enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI, S_CALC, S_CLEAN, S_HEALTH, S_VIDEOS, S_MANGA, S_BOOK, S_READER, S_FAVS, S_TEST };
 static int screen = S_PICK, cover_return = S_LIBRARY;
 static int screen_now(void) { return screen; }
 static char found[16][512];
@@ -3892,17 +3894,23 @@ static void area_release(int a) {
         release_tex(mg.tex[k]); mg.tex[k] = NULL; mg.tex_book[k] = -1;
       }
       for (int k = 0; k < 3; k++) { release_tex(mg.ptex[k]); mg.ptex[k] = NULL; mg.ptex_page[k] = -1; }
-      pthread_mutex_lock(&strip_cut_mx); // (the strips' bands: a few MB of the heap)
-      pthread_mutex_lock(&strip_mx);
-      for (int k = 0; k < 2; k++) strip_free(&strips[k]);
-      pthread_mutex_unlock(&strip_mx);
-      pthread_mutex_unlock(&strip_cut_mx);
+      // (the strips' bands: a few MB of the heap; not while one's being cut: never a wait for it here)
+      if (pthread_mutex_trylock(&strip_cut_mx) == 0) {
+        pthread_mutex_lock(&strip_mx);
+        for (int k = 0; k < 2; k++) strip_free(&strips[k]);
+        pthread_mutex_unlock(&strip_mx);
+        pthread_mutex_unlock(&strip_cut_mx);
+      }
       break;
     case A_FAVS: fav_drop_textures(); break;
     case A_SETTINGS: if (wheel_tex) { free_later(wheel_tex); wheel_tex = NULL; } break;
   }
 }
 static unsigned area_frame[A_N]; // (the frame each part was last on screen)
+#ifdef LV_TESTKIT
+static int test_lowmem;      // (the test kit's memory test: memory said to be short everywhere)
+static unsigned tk_released; // (parts that gave their memory back, counted for its report)
+#endif
 static SceUID main_thread;
 // Every part not on screen gives its memory back. Off screen 3 frames or more, its textures go at once
 // (the GPU's done with them); else as usual, three frames on.
@@ -3919,6 +3927,9 @@ static int release_hidden(const char *why, int at_once) {
     LOG("released %s (%s)\n", A_NAME[k], why);
   }
   if (n && at_once) free_due();
+#ifdef LV_TESTKIT
+  tk_released += n;
+#endif
   return n;
 }
 static int release_hidden_now(void) { return sceKernelGetThreadId() == main_thread && release_hidden("no room for a texture", 1) > 0; }
@@ -3929,6 +3940,9 @@ static int mem_short(size_t need) {
   static int forced = -1;
   if (forced < 0) { SceIoStat st; forced = sceIoGetstat(DATA "/debug_lowmem.txt", &st) >= 0; }
   if (forced) return 1;
+#endif
+#ifdef LV_TESTKIT
+  if (test_lowmem) return 1;
 #endif
   int fu = 0, fc = 0;
   return (mem_free(&fu, &fc) == 0 && ((size_t)fu < RESERVE_USER + need || (size_t)fc < RESERVE_CDRAM + need)) || !heap_room(need);
@@ -3945,6 +3959,9 @@ static void janitor(void) {
   drive_reap();
   if (mem_short(24u << 20)) release_hidden("memory short", 1);
 }
+#ifdef LV_TESTKIT
+#include "test.c"
+#endif
 #ifdef LV_DEBUG
 // (debug builds, at each change of screen: what each part still holds, to find what a screen leaves behind)
 static const char *res_extra(void) {
@@ -3972,6 +3989,9 @@ static void warm_icons(void);
 int main(void) {
   sceIoMkdir("ux0:data", 0777);
   sceIoMkdir(DATA, 0777);
+#ifdef LV_TESTKIT
+  tk_boot(); // (the last run's log kept, and a crash report if it ended without a goodbye)
+#endif
   sceSysmoduleLoadModule(SCE_SYSMODULE_IME);
   SceAppUtilInitParam ip;
   SceAppUtilBootParam bp;
@@ -4043,6 +4063,7 @@ int main(void) {
       uint64_t t = sceKernelGetProcessTimeWide();
       float f = last ? (t - last) / 16666.7f : 1;
       ft = f < 0.75f ? 1 : f > 4 ? 4 : f; // (a long pause, a suspend: as one slow frame, not a jump)
+      frame_len_ms = last ? (t - last) / 1000.0f : 16.667f; // (as it was: the test kit's measures)
       if (ft < 1.15f) ft = 1; // (60 fps, give or take: exactly the same as before)
       last = t;
       frame_t0 = t;
@@ -4065,6 +4086,9 @@ int main(void) {
     // (and the icons: the app's own, then the sites', two a frame, read from the card now rather than
     //  the first time a screen shows them)
     if (frame_no < splash_until && frame_no > 10) warm_icons();
+#ifdef LV_TESTKIT
+    if (frame_no >= splash_until) tk_frame_input();
+#endif
     if (in.touching || in.tap) touch_mode = 1;
     else if (in.pressed || fabsf(in.lx) > 0.5f || fabsf(in.ly) > 0.5f) touch_mode = 0;
     // touch lock: nothing gets through but SELECT (the disguise still works)
@@ -4091,6 +4115,9 @@ int main(void) {
     if (going_away) {
       // (the PS button: nothing keeps playing behind the LiveArea, and nothing is left unsaved)
       going_away = 0;
+#ifdef LV_TESTKIT
+      tk_put_away();
+#endif
       if (vid && !lv_video_paused(vid)) lv_video_pause(vid, 1);
       if (wv_vid && !lv_video_paused(wv_vid)) lv_video_pause(wv_vid, 1);
       slideshow = 0;
@@ -4248,6 +4275,9 @@ int main(void) {
       case S_DRIVE: draw_drive(); break;
       case S_PIN: draw_pin(); break;
       case S_STATS: draw_stats(); break;
+#ifdef LV_TESTKIT
+      case S_TEST: draw_test_menu(); break;
+#endif
       case S_WIFI: draw_wifi(); break;
       case S_CALC: draw_calc(); break;
       case S_CLEAN: draw_clean(); break;
@@ -4304,6 +4334,9 @@ int main(void) {
       if (dt > worst) worst = dt;
       if (dt > 16600) slow++;
     }
+#endif
+#ifdef LV_TESTKIT
+    tk_frame_end((sceKernelGetProcessTimeWide() - frame_t0) / 1000.0f, frame_len_ms);
 #endif
     vita2d_end_drawing();
     vita2d_common_dialog_update();

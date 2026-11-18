@@ -109,6 +109,9 @@ static Strip strips[2];   // (the last two strips cut: a chapter's pages go stri
 static int strip_next;
 static pthread_mutex_t strip_mx = PTHREAD_MUTEX_INITIALIZER;     // (the two above)
 static pthread_mutex_t strip_cut_mx = PTHREAD_MUTEX_INITIALIZER; // (one strip cut at a time: the most memory it takes)
+// (how the cutting has gone: the test kit's report)
+static struct { int cuts; float ms, ms_max; unsigned store_kb; } strip_stats;
+static void strip_stats_reset(void) { memset(&strip_stats, 0, sizeof strip_stats); }
 static void strip_free(Strip *s) {
   for (int k = 0; k < s->nb && s->jpg; k++) free(s->jpg[k]);
   free(s->jpg); free(s->len);
@@ -158,9 +161,16 @@ static int mg_fetch_band(LvHttp *h, const char *url, int k, int rows, int total,
   s.nb = (ih + br - 1) / br;
   s.jpg = calloc(s.nb, sizeof *s.jpg);
   s.len = calloc(s.nb, sizeof *s.len);
+  uint64_t cut0 = sceKernelGetProcessTimeWide();
   int got = s.jpg && s.len ? lv_decode_bands(raw, rn, br, W, strip_band, &s) : -1;
   free(raw);
-  LOG("strip %s: %dx%d, %d bands of %d rows -> %d (coefficients held %u KB)\n", url, iw, ih, s.nb, br, got, (unsigned)(lv_jpeg_store_peak() >> 10));
+  {
+    float ms = (sceKernelGetProcessTimeWide() - cut0) / 1000.0f;
+    unsigned kb = (unsigned)(lv_jpeg_store_peak() >> 10);
+    strip_stats.cuts++; strip_stats.ms += ms; if (ms > strip_stats.ms_max) strip_stats.ms_max = ms;
+    if (kb > strip_stats.store_kb) strip_stats.store_kb = kb;
+  }
+  LOG("strip %s: %dx%d, %d bands of %d rows -> %d (coefficients held %u KB)\n", url, iw, ih, s.nb, br, got, strip_stats.store_kb);
   if (got <= 0) { strip_free(&s); pthread_mutex_unlock(&strip_cut_mx); *err = "This strip couldn't be read"; return 0; }
   pthread_mutex_lock(&strip_mx);
   strip_free(&strips[strip_next]);
@@ -637,8 +647,51 @@ static void mg_read(int chapter) {
   screen = S_READER;
 }
 // the page wanted at slot k (0 shown, 1-2 next), asked for if it isn't here
+// The next strip, cut ahead: while the pages of this one are read, the next one (a few pages on) is
+// downloaded and cut on a thread of its own, so turning onto it doesn't wait seconds for the cut
+static char strip_pf_url[640];
+static volatile int strip_pf_busy;
+static void *strip_pf_main(void *arg) {
+  char *url = arg;
+  char base[700];
+  int k, rows, total;
+  if (lv_band_of(url, base, sizeof base, &k, &rows, &total)) {
+    LvHttp *h = lv_http_new();
+    uint8_t *b = NULL; size_t n = 0; const char *err = NULL;
+    if (h && mg_fetch_band(h, base, k, rows, total, &b, &n, &err)) free(b);
+    LOG("strip cut ahead: %s\n", base);
+    lv_http_free(h);
+  }
+  free(url);
+  strip_pf_busy = 0;
+  return NULL;
+}
+static void strip_prefetch(int page) {
+  if (strip_pf_busy || page < 0 || page >= mg.npages) return;
+  char cur[700], next[700];
+  int k, rows, total;
+  if (!lv_band_of(mg.pages[page], cur, sizeof cur, &k, &rows, &total)) return;
+  for (int q = page + 1; q < mg.npages && q <= page + 40; q++) { // (from the strip's first page on: the next one is ready long before it's reached)
+    if (!lv_band_of(mg.pages[q], next, sizeof next, &k, &rows, &total) || !strcmp(next, cur)) continue;
+    if (!strcmp(next, strip_pf_url)) return; // (asked already)
+    uint8_t *b = NULL; size_t n = 0;
+    if (strip_copy(next, 0, &b, &n)) { free(b); return; } // (cut already)
+    snprintf(strip_pf_url, sizeof strip_pf_url, "%s", next);
+    char *url = strdup(mg.pages[q]);
+    if (!url) return;
+    strip_pf_busy = 1;
+    pthread_t t;
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setstacksize(&at, 256 * 1024);
+    if (pthread_create(&t, &at, strip_pf_main, url) == 0) pthread_detach(t);
+    else { free(url); strip_pf_busy = 0; }
+    return;
+  }
+}
 static void mg_want_page(int page, int hi) {
   if (page < 0 || page >= mg.npages) return;
+  strip_prefetch(page);
   for (int k = 0; k < 3; k++) if (mg.ptex_page[k] == page && !hi) return;
   mg_push(MJ_PAGE, page, hi, mg.pages[page]);
 }

@@ -441,6 +441,39 @@ arm-vita-eabi-addr2line -f -e vita/build/LewdVault <PC address>
 A debug build (`-DLV_DEBUG`) also writes `ux0:data/LWDV00001/log.txt`, with each screen's frame
 times (`perf ...`) and any step over 4 ms (`pt ...`).
 
+## The test kit
+
+A separate VPK for testing, **Lewd Vault Test** (`LWDT00001`, so it installs beside the app and
+uses the same vault, settings and data folder). Built by CI as the `LewdVault-test-kit-vpk` artifact,
+or by hand:
+
+```
+cmake -S vita -B vita/build-test -DLV_TESTKIT=ON -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake && cmake --build vita/build-test
+```
+
+It opens on a menu (`src/test.c`): **Open the app normally** (the app as usual, a line of live
+numbers at the top: frames a second, each frame's work, the heap, free main and video memory; every
+button press and tap logged), **Run every test**, or one of them: the Library scrolling, the full view
+going through pictures (how long each takes to be sharp), the Browser (first page, first previews,
+scrolling), the video browser, Comics (a MangaDex list, book, chapters, pages), webtoon strips (cut
+times, memory held), memory (every part made to give its memory back, then visited again), the
+network (every source asked once: answer, time, size), the memory card (16 MB written and read, the
+vault's files read) and a stress run (five tours of every screen, memory after each). The app drives
+itself through the real screens; ○ and △ together stop a test. The settings are put back after.
+
+Each run writes a report to `ux0:data/LWDV00001/reports/`: the console (firmware, model, clocks,
+battery), memory, the vault, each test's numbers (frames a second, frame length average, p95, p99,
+worst, late frames, work per frame, the heap and memory at their lowest) and the log's last lines.
+Reports can be read from a PC on the same Wi-Fi: open the app's Wi-Fi transfer page and go to
+`/reports`. With a web address in `ux0:data/LWDV00001/report_url.txt` (a Discord webhook, or anything
+that takes a POST) each report is also sent there as it's written; the address stays on the card,
+never in the repository.
+
+Crashes: where the app is (the test, its step, the screen) is kept in `testkit_marker.txt` as it
+goes, and the previous run's log is kept as `log-prev.txt`. A run that ended without saying it was put
+away (the PS button) is a crash: at the next start a crash report is written (where it was, the
+system's own dumps in `ux0:data`, the last 200 lines of its log), and sent if there's an address.
+
 ## Files
 
 | File | What it is |
@@ -453,6 +486,7 @@ times (`perf ...`) and any step over 4 ms (`pt ...`).
 | `src/privacy.c`, `src/clean.c` | The calculator disguise and touch lock; clean up and the health check |
 | `src/livearea.c` | The LiveArea's frames (which vault they open) and its numbers |
 | `src/vbrowse.c` | The video browser |
+| `src/test.c` | The test kit (`-DLV_TESTKIT=ON`): its menu, the tests that drive the app, reports, crash reports |
 | `src/viewopt.c` | Viewing: the full views' size (fit, fill, original, fit width, stretch) and orientation, and their panel |
 | `src/manga.c`, `src/manga_ui.c` | Comics: MangaDex, E-Hentai and the other sources (`LV_MSRC`), the covers, chapters and the reader, saving a chapter as a comic |
 | `src/discover.c`, `tests/discover/` | The source finder's readers of the booru lists, and saved copies of those lists |

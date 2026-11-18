@@ -58,6 +58,19 @@ jobs:
           name: LewdVault-vpk
           path: Lewd.Vault.Vita.vpk
           if-no-files-found: error
+      # the test kit: a separate app (LWDT00001) beside the real one, a menu of tests and reports
+      # (vita/src/test.c); for testing only, never attached to a release
+      - name: Build the test kit VPK
+        run: |
+          docker run --rm -v "$PWD":/w -w /w -u "$(id -u):$(id -g)" vitasdk/vitasdk:latest \
+            sh -c 'cmake -S vita -B vita/build-test -DLV_TESTKIT=ON -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake && cmake --build vita/build-test -j4'
+          cp vita/build-test/LewdVaultTest.vpk Lewd.Vault.Vita.Test.vpk
+          ls -la Lewd.Vault.Vita.Test.vpk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LewdVault-test-kit-vpk
+          path: Lewd.Vault.Vita.Test.vpk
+          if-no-files-found: error
       - name: Attach the VPK to the release
         if: github.event_name == 'workflow_dispatch' && inputs.release != ''
         env:
