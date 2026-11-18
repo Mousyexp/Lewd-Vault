@@ -86,6 +86,10 @@ static void meas_end(void) {
   float secs = (sceKernelGetProcessTimeWide() - ms.t0) / 1e6f;
   rpf("  %-26s %u frames in %.1f s = %.1f fps | frame length avg %.1f ms, p95 %.1f, p99 %.1f, max %.1f | late %u (%.1f%%), over 2 frames %u\n",
       ms.name, n, secs, n / (secs > 0 ? secs : 1), sl / n, pct(ms.len, n, 0.95f), pct(ms.len, n, 0.99f), ms.len[n - 1], late, 100.0 * late / n, very);
+  // (the aim: 60 frames a second, every frame on time; held if 99% of them are)
+  float on_time = 100.0f * (n - late) / n;
+  rpf("  %-26s 60 fps %s: %.1f%% of frames on time (the aim: 99%%+)%s\n", "", on_time >= 99 ? "HELD" : "MISSED", on_time,
+      on_time >= 99 ? "" : sw / n > 14 ? "; the work itself is too long" : "; the work is short: the drawing (GPU) or waits");
   rpf("  %-26s work avg %.2f ms, p95 %.2f, max %.2f | heap %.1f -> max %.1f MB | main memory free min %.1f MB, video %.1f MB\n", "",
       sw / n, pct(ms.work, n, 0.95f), ms.work[n - 1], ms.heap0 / 1048576.0, ms.heap_max / 1048576.0, ms.fu_min / 1048576.0, ms.fc_min / 1048576.0);
 }
@@ -662,7 +666,7 @@ static void tk_frame_end(float work_ms, float len_ms) {
              heap_used() / 1048576.0, hfu >> 20, hfc >> 20, T.active ? "  ·  " : "", T.active ? TK_NAME[T.test] : "");
     int w = text_w(12, b) + 16;
     rrect(W / 2 - w / 2, 2, w, 18, 6, RGBA(0, 0, 0, 170));
-    text_center(W / 2, 15, T.active ? ACC : TEXT, 12, b);
+    text_center(W / 2, 15, avg_len > 17.2f ? ACC2 : T.active ? ACC : TEXT, 12, b); // (red under 58 fps: below the aim)
     if (T.active && T.status[0]) text_center(W / 2, 34, DIM, 12, T.status);
   }
 }

@@ -463,7 +463,9 @@ itself through the real screens; ○ and △ together stop a test. The settings 
 
 Each run writes a report to `ux0:data/LWDV00001/reports/`: the console (firmware, model, clocks,
 battery), memory, the vault, each test's numbers (frames a second, frame length average, p95, p99,
-worst, late frames, work per frame, the heap and memory at their lowest) and the log's last lines.
+worst, late frames, work per frame, the heap and memory at their lowest; the aim is 60 frames a
+second, and each measure says whether it was HELD, 99% of frames on time, or MISSED, and whether the
+work or the drawing was the cause) and the log's last lines. The live numbers go red under 58 fps.
 Reports can be read from a PC on the same Wi-Fi: open the app's Wi-Fi transfer page and go to
 `/reports`. With a web address in `ux0:data/LWDV00001/report_url.txt` (a Discord webhook, or anything
 that takes a POST) each report is also sent there as it's written; the address stays on the card,
