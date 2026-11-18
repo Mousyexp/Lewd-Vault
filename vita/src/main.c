@@ -341,6 +341,16 @@ static void rrect(float x, float y, float w, float h, float r, unsigned c) {
 // A rounded outline (a ring 64 px across, 3 px thick, radius 16), drawn 9-sliced to any size: the
 // focus ring, on top of whatever it marks (it never covers the cards next to it while it moves).
 static unsigned frame_no;
+// How long the last frame took, in 60ths of a second (1 at 60 fps; 2 for a frame that took two): the
+// motion goes by the clock, not by frames, so a slow frame moves things as far as two quick ones
+// would, never a stutter backwards or a slowed animation.
+static float ft = 1;
+static uint64_t frame_t0; // (when this frame's work began)
+// Whether this frame has done enough: pictures that came in wait for the next one, so a batch of
+// them never makes one frame late (the first each frame always goes in: they keep coming)
+static int frame_busy(void) { return sceKernelGetProcessTimeWide() - frame_t0 > 5000; }
+static float ease(float k) { return ft == 1 ? k : 1 - powf(1 - k, ft); }  // (x += (target - x) * ease(k))
+static float decay(float d) { return ft == 1 ? d : powf(d, ft); }         // (v *= decay(d))
 static vita2d_texture *ring_tex;
 static void make_ring(void) {
   const int S = 64, R = 16, T = 3;
@@ -388,7 +398,7 @@ static void focus_ring(float x, float y, float w, float h) {
   DRAW_GUARD(x, y, w, h);
   int scr = screen_now();
   if (fring.scr != scr || frame_no - fring.at > 3) { fring.x = x; fring.y = y; fring.w = w; fring.h = h; fring.scr = scr; }
-  else { fring.x += (x - fring.x) * 0.35f; fring.y += (y - fring.y) * 0.35f; fring.w += (w - fring.w) * 0.35f; fring.h += (h - fring.h) * 0.35f; }
+  else { fring.x += (x - fring.x) * ease(0.35f); fring.y += (y - fring.y) * ease(0.35f); fring.w += (w - fring.w) * ease(0.35f); fring.h += (h - fring.h) * ease(0.35f); }
   fring.at = frame_no;
   float br = 0.5f + 0.5f * sinf(frame_no * 0.1f);
   ring9(fring.x - 6, fring.y - 6, fring.w + 12, fring.h + 12, with_alpha(ACC, (int)(60 + 50 * br)));
@@ -1993,7 +2003,7 @@ static int lhero_input(void) {
   if (in.pressed & SCE_CTRL_CIRCLE) { lhero_on = 0; sfx(SFX_BACK); }
   int open = (in.pressed & SCE_CTRL_CROSS) != 0;
   in.pressed &= ~(SCE_CTRL_RIGHT | SCE_CTRL_LEFT | SCE_CTRL_DOWN | SCE_CTRL_UP | SCE_CTRL_CROSS | SCE_CTRL_CIRCLE | SCE_CTRL_SQUARE | SCE_CTRL_TRIANGLE);
-  scroll += (0 - scroll) * 0.3f; // (in sight)
+  scroll += (0 - scroll) * ease(0.3f); // (in sight)
   if (open) {
     for (int k = 0; k < nshown; k++) if (shown[k] == lhero[lhero_sel]) { lhero_on = 0; lib_open(k); return 2; }
   }
@@ -2009,13 +2019,13 @@ static int lhero_draw(float y, int *want, int nwant_max) {
     float maxx = nlhero * (LHERO_CW + 12) - 12 - (W - 2 * JMARGIN);
     if (want_x > maxx) want_x = maxx;
     if (want_x < 0) want_x = 0;
-    lhero_x += (want_x - lhero_x) * 0.25f;
+    lhero_x += (want_x - lhero_x) * ease(0.25f);
   }
   if (in.touching && in.down_y > y + 20 && in.down_y < y + 20 + LHERO_CH && abs(in.tx - in.down_x) > abs(in.ty - in.down_y)) {
     lhero_x -= in.drag_dx;
   }
   float maxx = fmaxf(0, nlhero * (LHERO_CW + 12) - 12 - (W - 2 * JMARGIN));
-  if (!in.touching) { if (lhero_x < 0) lhero_x *= 0.7f; if (lhero_x > maxx) lhero_x = maxx + (lhero_x - maxx) * 0.7f; }
+  if (!in.touching) { if (lhero_x < 0) lhero_x *= decay(0.7f); if (lhero_x > maxx) lhero_x = maxx + (lhero_x - maxx) * 0.7f; }
   // the titles: above the first of each kind
   float ring_x = -1, ring_y = 0;
   for (int k = 0; k < nlhero; k++) {
@@ -2103,10 +2113,10 @@ static void draw_library(void) {
   int hero_drag = nlhero && in.touching && in.down_y > TOP + 6 - scroll + 24 && in.down_y < TOP + 6 - scroll + 24 + LHERO_CH && abs(in.tx - in.down_x) > abs(in.ty - in.down_y);
   if (in.touching && in.ty > TOP && in.ty < H - BAR && !hero_drag) { scroll -= in.drag_dy; scroll_v = 0; }
   if (in.flicked && in.down_y > TOP) scroll_v = -in.fvy * 1.6f;
-  scroll += scroll_v;
-  scroll_v *= 0.94f;
+  scroll += scroll_v * ft;
+  scroll_v *= decay(0.94f);
   if (fabsf(scroll_v) < 0.2f) scroll_v = 0;
-  scroll += in.ly * 14 - in.bdy * 1.5f;
+  scroll += in.ly * 14 * ft - in.bdy * 1.5f;
   int before = sel;
   if (in.pressed & SCE_CTRL_RIGHT) sel++;
   if (in.pressed & SCE_CTRL_LEFT) sel--;
@@ -2118,7 +2128,7 @@ static void draw_library(void) {
     sfx(SFX_TICK);
     Rect r = lgrid.r[sel];
     if (r.y < scroll) scroll += (r.y - scroll) * 0.6f + (r.y < scroll - 1 ? -1 : 0);
-    else if (r.y + r.h > scroll + view_h) scroll += (r.y + r.h - view_h + 10 - scroll) * 0.6f;
+    else if (r.y + r.h > scroll + view_h) scroll += (r.y + r.h - view_h + 10 - scroll) * ease(0.6f);
     if (r.y < scroll) scroll = r.y;
     if (r.y + r.h > scroll + view_h) scroll = r.y + r.h - view_h + 10;
   }
@@ -2642,7 +2652,7 @@ static int hero_drag(HeroClose *hc, int may) {
 static int hero_release(HeroClose *hc) {
   // (call when not touching: 1 when it should start flying home)
   if (hc->drag > 110 && !hc->closing) { hc->closing = 1; hc->at = frame_no; return 1; }
-  hc->drag *= 0.6f;
+  hc->drag *= decay(0.6f);
   if (hc->drag < 1) hc->drag = 0;
   return 0;
 }
@@ -2815,7 +2825,7 @@ static void draw_viewer(void) {
     float mx = fmaxf(0, (dw - lv_aw) / 2), my = fmaxf(0, (dh - lv_ah) / 2);
     lv_mx = mx; lv_my = my;
     if (tall_fit && tall_top) { pan_y = my; tall_top = 0; }
-    if (tall_fit) { pan_y += tall_v; tall_v *= 0.93f; if (fabsf(tall_v) < 0.3f) tall_v = 0; tall_my = my; }
+    if (tall_fit) { pan_y += tall_v * ft; tall_v *= decay(0.93f); if (fabsf(tall_v) < 0.3f) tall_v = 0; tall_my = my; }
     pan_x = fminf(mx, fmaxf(-mx, pan_x));
     pan_y = fminf(my, fmaxf(-my, pan_y));
     float x = (W - dw) / 2 + pan_x + swipe_x + mdx, y = (avail_h - dh) / 2 + pan_y + mdy;
@@ -2879,7 +2889,7 @@ static void draw_viewer(void) {
     if (in.flicked && tall_fit && zoom < 1.01f && fabsf(in.fvy) > fabsf(in.fvx)) tall_v = in.fvy * 1.4f;
     if (swipe_x > 120) { swipe_x = 0; sfx(SFX_TICK); show_item(vk - 1); return; }
     if (swipe_x < -120) { swipe_x = 0; sfx(SFX_TICK); show_item(vk + 1); return; }
-    swipe_x *= 0.7f;
+    swipe_x *= decay(0.7f);
     if (zoom < 1.01f) zoom = 1;
   }
   int64_t vseek = INT64_MIN;
@@ -3044,7 +3054,7 @@ static void draw_viewer(void) {
 
   // --- the details, pulled up from below (as in the phone's full view) ---
   float target = details ? 1 : 0;
-  details_y += (target - details_y) * 0.25f;
+  details_y += (target - details_y) * ease(0.25f);
   if (details_y > 0.01f) {
     float top = H - details_y * 300;
     rrect(0, top, W, 330, 20, with_alpha(SURF, 250));
@@ -3356,7 +3366,7 @@ static void draw_settings(void) {
   int pv = set_sel == ST_THEME || set_sel == ST_BGS;
   float rw_want = pv ? W - 60 - 262 : W - 60;
   if (rw_now < 1) rw_now = rw_want;
-  rw_now += (rw_want - rw_now) * 0.3f;
+  rw_now += (rw_want - rw_now) * ease(0.3f);
   if (fabsf(rw_want - rw_now) < 0.5f) rw_now = rw_want;
   const int RW = (int)rw_now;
   for (int k = 0; k < NORD; k++) {
@@ -3569,7 +3579,7 @@ static void draw_onboarding(void) {
     if (was_touching) { if (in.flicked && fabsf(in.fvx) > 6) page += in.fvx < 0 ? 1 : -1; else page = (int)roundf(slide); }
     if (page < 0) page = 0;
     if (page > 2) page = 2;
-    slide += (page - slide) * 0.2f;
+    slide += (page - slide) * ease(0.2f);
   }
   was_touching = in.touching;
   int done = 0;
@@ -3684,6 +3694,29 @@ static void library_grew(int before) {
 #include "vbrowse.c"
 #include "manga_ui.c"
 #include "favs.c"
+static void warm_icons(void) {
+  static SceUID dir = -2;
+  static int site = 0;
+  for (int n = 0; n < 2; n++) {
+    if (dir == -2) dir = sceIoDopen("app0:ui");
+    if (dir >= 0) {
+      SceIoDirent e;
+      memset(&e, 0, sizeof e);
+      if (sceIoDread(dir, &e) > 0) {
+        char *dot = strrchr(e.d_name, '.');
+        if (dot && !strcmp(dot, ".png")) { *dot = 0; char *nm = strdup(e.d_name); if (nm) ui_icon(nm); } // (kept: the table points at it)
+        continue;
+      }
+      sceIoDclose(dir); dir = -1;
+    }
+    // then the sites': pictures, video sources, comics (their slots as the sites window has them)
+    int nv = nvsources();
+    if (site < LV_NSITES) { site_icon_named(site, LV_SITES[site].icon); site++; }
+    else if (site < LV_NSITES + nv && site - LV_NSITES < 32) { int k = site - LV_NSITES; site_icon_named(32 + k, vsource_icon(k)); site++; }
+    else if (site < LV_NSITES + nv + MS_N) { int k = site - LV_NSITES - nv; site_icon_named(64 + k, LV_MSRC[k].icon); site++; }
+    else return;
+  }
+}
 
 // ---------- each part of the app gives its memory back once it's been left ----------
 // The parts each hold textures while they're used (the Browser's previews, 16 MB of atlases; the
@@ -3838,6 +3871,7 @@ static const char *res_extra(void) {
 static const char *res_extra(void);
 #endif
 static void janitor(void);
+static void warm_icons(void);
 int main(void) {
   sceIoMkdir("ux0:data", 0777);
   sceIoMkdir(DATA, 0777);
@@ -3901,10 +3935,20 @@ int main(void) {
   }
   if (pin.on) pin_lock(-1);
   else open_start_vault();
+  lv_net_warm(); // (the network's base, on a thread of its own: the online light and the Browser never wait for it)
 
   unsigned idle_save = 0;
   for (;;) {
     frame_no++;
+    {
+      static uint64_t last;
+      uint64_t t = sceKernelGetProcessTimeWide();
+      float f = last ? (t - last) / 16666.7f : 1;
+      ft = f < 0.75f ? 1 : f > 4 ? 4 : f; // (a long pause, a suspend: as one slow frame, not a jump)
+      if (ft < 1.15f) ft = 1; // (60 fps, give or take: exactly the same as before)
+      last = t;
+      frame_t0 = t;
+    }
 #ifdef LV_DEBUG
     uint64_t perf_t0 = sceKernelGetProcessTimeWide();
 #endif
@@ -3912,6 +3956,17 @@ int main(void) {
     read_input();
     PT("read_input");
     if (frame_no < splash_until) { in.pressed = 0; in.tap = 0; in.touching = 0; } // (nothing happens under the loading screen)
+    // (under the loading screen, a size a frame: the letters the screens use most drawn into the font's
+    //  cache now, so the first time a screen shows text at that size it isn't drawing them then)
+    {
+      static const unsigned char WARM[] = {13, 14, 15, 16, 17, 18, 20};
+      static unsigned warmed;
+      if (warmed < sizeof WARM && frame_no < splash_until && frame_no > 2)
+        vita2d_font_text_width(font, WARM[warmed++], "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,:;!?'\"()-+/%&");
+    }
+    // (and the icons: the app's own, then the sites', two a frame, read from the card now rather than
+    //  the first time a screen shows them)
+    if (frame_no < splash_until && frame_no > 10) warm_icons();
     if (in.touching || in.tap) touch_mode = 1;
     else if (in.pressed || fabsf(in.lx) > 0.5f || fabsf(in.ly) > 0.5f) touch_mode = 0;
     // touch lock: nothing gets through but SELECT (the disguise still works)
@@ -3991,7 +4046,7 @@ int main(void) {
     }
     // (the header and the tab bar: tucked only while the Library or the Browser scrolls down)
     if (screen != S_LIBRARY && screen != S_WEB) chrome_target = 0;
-    chrome_hide += (chrome_target - chrome_hide) * 0.25f;
+    chrome_hide += (chrome_target - chrome_hide) * ease(0.25f);
     if (fabsf(chrome_target - chrome_hide) < 0.004f) chrome_hide = chrome_target;
     if (frame_no % 30 == 0) la_poll_events();
     if (wf_run && screen != S_WIFI && screen != S_COVER) wf_stop(); // (the server only while its screen is open)

@@ -362,6 +362,15 @@ and the Wi-Fi server stops with its page. Icons and other small textures live in
 pages, not a 256 KiB granule of video memory each (fifty icons and forty site tiles were ~22 MB of
 it). Debug builds log what's held at every change of screen (`res` lines in the log).
 
+**Smooth, frame after frame.** Motion goes by the clock, not by frames: each frame knows how long the
+last one took (`ft`), and the eases, the flings' slowing and the scrolls use it (`ease`, `decay`), so a
+slow frame moves things as far as two quick ones would instead of the animation stalling. Nothing slow
+is done on the drawing thread: the network's base starts on a thread of its own at launch (the online
+light shows offline until it's up, never a wait), the Browser's four workers are made by a helper, the
+font's letters at the sizes used most and the app's and sites' icons are read under the loading screen
+(and the sites window makes at most three new icons a frame after that), and pictures that come in are
+put in a few at a time, none once a frame has spent 5 ms (`frame_busy`), the rest the next frame.
+
 **Webtoon strips in a small budget.** A strip (700 x 23,000 pixels) is cut into page-sized bands
 without ever being decoded whole: a JPEG a row at a time (a progressive one's coefficients, which
 libjpeg keeps for the whole picture, are held compressed in RAM by our own backing store, ~7 MB

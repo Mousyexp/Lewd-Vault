@@ -106,7 +106,7 @@ static void draw_clean(void) {
       if (cl_swipe < -140 || vx < -14) decided = 1;
       else if (cl_swipe > 140 || vx > 14) decided = 0;
       else if (cl_swipe_y < -120 || vy < -14) decided = 2;
-      cl_swipe *= 0.7f; cl_swipe_y *= 0.7f;
+      cl_swipe *= decay(0.7f); cl_swipe_y *= decay(0.7f);
     }
     float f = cl_swipe / 300.0f;
     if (t) {

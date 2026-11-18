@@ -586,7 +586,7 @@ static void mg_search(void) {
   mg_list_more();
 }
 static void manga_open(int src) {
-  lv_net_base(); // (the rest on the worker that fetches)
+  lv_net_warm(); // (on a thread of its own; the rest on the worker that fetches)
   mg_start_thread();
   if (src != mg.src || !mg.books) { mg.src = src; mg_search(); }
   manga_back = screen == S_MANGA ? manga_back : S_WEB;
@@ -654,6 +654,13 @@ static void mg_take(void) {
   pthread_mutex_unlock(&mgmx);
   for (int k = 0; k < n; k++) {
     MDone *d = &got[k];
+    // (this frame's done enough: the rest back at the front, for the next)
+    if (k > 0 && frame_busy()) {
+      pthread_mutex_lock(&mgmx);
+      int rest = n - k;
+      if (nmdone + rest <= 16) { memmove(mdone + rest, mdone, nmdone * sizeof *mdone); memcpy(mdone, got + k, rest * sizeof *got); nmdone += rest; pthread_mutex_unlock(&mgmx); break; }
+      pthread_mutex_unlock(&mgmx); // (no room to put them back: done now after all)
+    }
     if (d->gen != mg_gen) { free(d->px.rgba); free(d->books); free(d->ch); lv_strings_free(d->urls, d->n); continue; }
     switch (d->kind) {
       case MJ_LIST:
@@ -761,7 +768,7 @@ static void draw_manga(void) {
   float max_scroll = fmaxf(0, content - view_h);
   // moving: touch, the stick, the D-pad
   if (in.touching && in.ty > TOP) mg.scroll -= in.drag_dy;
-  mg.scroll += in.ly * 14 - in.bdy * 1.5f;
+  mg.scroll += in.ly * 14 * ft - in.bdy * 1.5f;
   int before = mg.sel;
   if (in.pressed & SCE_CTRL_RIGHT) mg.sel++;
   if (in.pressed & SCE_CTRL_LEFT) mg.sel--;

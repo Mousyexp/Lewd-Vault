@@ -145,8 +145,8 @@ static int comic_reader(ComicSrc *s) {
     // ===== a continuous strip =====
     if (in.touching) { rd.off += rdy; rd.vel = 0; }
     else if (in.flicked && fabsf(rfy) > fabsf(rfx)) rd.vel = rfy * 1.5f;
-    rd.off += rd.vel - stick * 18;
-    rd.vel *= 0.94f;
+    rd.off += (rd.vel - stick * 18) * ft;
+    rd.vel *= decay(0.94f);
     if (fabsf(rd.vel) < 0.2f) rd.vel = 0;
     if (in.pressed & b_down) rd.vel = -RH * 0.06f;
     if (in.pressed & b_up) rd.vel = RH * 0.06f;
@@ -233,7 +233,7 @@ static int comic_reader(ComicSrc *s) {
       int fw = rtl ? -1 : 1;
       if (rd.swipe < -110) { rd.swipe = 0; rd_turn(s, fw); }
       else if (rd.swipe > 110) { rd.swipe = 0; rd_turn(s, -fw); }
-      rd.swipe *= 0.6f;
+      rd.swipe *= decay(0.6f);
       if (rd.zoom < 1.01f) rd.zoom = 1;
     }
     // taps: as chosen

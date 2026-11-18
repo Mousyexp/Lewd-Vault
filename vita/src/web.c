@@ -173,7 +173,7 @@ static int has_hidden(const char *tags, const char *hidden) {
 }
 static volatile float big_progress;
 static volatile int big_cancel;
-static int web_started;
+static volatile int web_started;
 
 static unsigned long long fnv64(const char *s) {
   unsigned long long h = 1469598103934665603ULL;
@@ -622,20 +622,32 @@ static void *sample_main(void *arg) {
 }
 
 static void custom_sites_load(void);
-static void web_start(void) {
-  if (web_started) return;
-  web_started = 1;
-  custom_sites_load();
-  lv_net_base(); // (the rest on the worker that fetches)
+// (the Browser's four workers made by a helper: making a thread takes a while, and the drawing
+//  thread doesn't wait for four of them; the grid shows at once and fills as they start)
+static void *web_spawn(void *arg) {
+  (void)arg;
   pthread_t t;
   pthread_attr_t at;
   pthread_attr_init(&at);
   pthread_attr_setstacksize(&at, 512 * 1024); // (they decode pictures)
   // (a thread that won't start, the memory being short for a moment: tried again next time)
-  if (pthread_create(&t, &at, list_main, NULL) != 0) { web_started = 0; return; }
+  if (pthread_create(&t, &at, list_main, NULL) != 0) { web_started = 0; return NULL; }
   if (pthread_create(&t, &at, preview_main, NULL) != 0) LOG("a preview thread didn't start\n");
   pthread_create(&t, &at, preview_main, NULL);
   if (pthread_create(&t, &at, sample_main, NULL) != 0) LOG("the sample thread didn't start\n");
+  return NULL;
+}
+static void web_start(void) {
+  if (web_started) return;
+  web_started = 1;
+  custom_sites_load();
+  lv_net_warm(); // (on a thread of its own; the rest on the worker that fetches)
+  pthread_t t;
+  pthread_attr_t at;
+  pthread_attr_init(&at);
+  pthread_attr_setstacksize(&at, 32 * 1024);
+  if (pthread_create(&t, &at, web_spawn, NULL) == 0) pthread_detach(t);
+  else web_spawn(NULL); // (no helper: made here, as before)
 }
 
 // ---------- searches ----------
@@ -841,6 +853,13 @@ static void web_take_results(void) {
   pthread_mutex_unlock(&wmx);
   for (int k = 0; k < n; k++) {
     WDone *d = &got[k];
+    // (this frame's done enough: the rest back at the front, for the next)
+    if (k > 0 && frame_busy()) {
+      pthread_mutex_lock(&wmx);
+      int rest = n - k;
+      if (nwdone + rest <= 24) { memmove(wdone + rest, wdone, nwdone * sizeof *wdone); memcpy(wdone, got + k, rest * sizeof *got); nwdone += rest; pthread_mutex_unlock(&wmx); break; }
+      pthread_mutex_unlock(&wmx); // (no room to put them back: done now after all)
+    }
     // (a save is on the card whatever the search: only its vault matters, below)
     if (d->gen != wgen && d->kind != WD_SAVE) { free(d->px.rgba); free(d->a); free(d->b); continue; }
     if (d->kind == WD_PREVIEW) {
@@ -1183,7 +1202,7 @@ static void find_open(int tab) {
   memcpy(find_sites, LV_SITES, sizeof find_sites); find_nsites = LV_NSITES;
   nvsources(); // (the video sources read here, on this thread: the finder's thread only looks at them)
   pthread_mutex_lock(&fdmx); nfrows = 0; pthread_mutex_unlock(&fdmx);
-  lv_net_base(); // (the rest on the worker that fetches)
+  lv_net_warm(); // (on a thread of its own; the rest on the worker that fetches)
   pthread_t t;
   pthread_attr_t at;
   pthread_attr_init(&at);
@@ -1326,7 +1345,12 @@ static vita2d_texture *site_tex[96];
 static int site_tex_tried[96];
 static vita2d_texture *site_icon_named(int slot, const char *name) {
   if (slot < 0 || slot >= 96 || !name) return NULL;
+  // (three new ones a frame at most: a window of forty fills in over a few frames, none of them late)
+  static unsigned frame; static int loads;
+  if (frame != frame_no) { frame = frame_no; loads = 0; }
+  if (!site_tex_tried[slot] && loads >= 3) return NULL;
   if (!site_tex_tried[slot]) {
+    loads++;
     site_tex_tried[slot] = 1;
     char p[96];
     snprintf(p, sizeof p, "app0:sites/%s.png", name);
@@ -1476,7 +1500,7 @@ static void check_sources(int tab) {
     m++;
   }
   check_jobs = jobs; ncheck_jobs = m; check_left = m;
-  lv_net_base(); // (the rest on the worker that fetches)
+  lv_net_warm(); // (on a thread of its own; the rest on the worker that fetches)
   pthread_t t;
   pthread_attr_t at;
   pthread_attr_init(&at);
@@ -1975,8 +1999,8 @@ static void draw_web(void) {
   if (!sheet_open) {
     if (in.touching && in.ty > TOP && in.ty < H - BAR) { wscroll -= in.drag_dy; wscroll_v = 0; }
     if (in.flicked && in.down_y > TOP) wscroll_v = -in.fvy * 1.6f;
-    wscroll += wscroll_v + in.ly * 14 - in.bdy * 1.5f;
-    wscroll_v *= 0.94f;
+    wscroll += (wscroll_v + in.ly * 14) * ft - in.bdy * 1.5f;
+    wscroll_v *= decay(0.94f);
     if (fabsf(wscroll_v) < 0.2f) wscroll_v = 0;
     int before = wsel;
     if (in.pressed & SCE_CTRL_RIGHT) wsel++;
@@ -1991,7 +2015,7 @@ static void draw_web(void) {
       if (r.y < wscroll) wscroll = r.y;
       else if (r.y + r.h > wscroll + view_h) wscroll = r.y + r.h - view_h + 10;
     }
-    if (wscroll < 0 && !in.touching) { wscroll *= 0.7f; wscroll_v = 0; }
+    if (wscroll < 0 && !in.touching) { wscroll *= decay(0.7f); wscroll_v = 0; }
     if (wscroll > max_scroll && !in.touching) { wscroll = max_scroll + (wscroll - max_scroll) * 0.7f; wscroll_v = 0; }
   }
   {
@@ -2197,7 +2221,7 @@ static int big_btn(int x, int y, int w, int h, const char *label, unsigned bg, u
 static void draw_save_wizard(void) {
   const LvPost *p = &posts[wv];
   // (the background: the frame is cleared to it already)
-  sw_anim += (1 - sw_anim) * 0.3f;
+  sw_anim += (1 - sw_anim) * ease(0.3f);
   // the picture, on the left
   vita2d_texture *t = wv_tex_post == wv && wv_tex ? wv_tex : preview_of(wv);
   const int PW = 360;
@@ -2743,7 +2767,7 @@ static void draw_webview(void) {
     if (hero_release(&whero)) { sfx(SFX_BACK); return; }
     if (wswipe > 120) { wswipe = 0; sfx(SFX_TICK); wv_show(wv - 1); return; }
     if (wswipe < -120) { wswipe = 0; sfx(SFX_TICK); wv_show(wv + 1); return; }
-    wswipe *= 0.7f;
+    wswipe *= decay(0.7f);
     if (wzoom < 1.01f) wzoom = 1;
   }
   int64_t vseek = INT64_MIN;
@@ -2849,7 +2873,7 @@ static void draw_webview(void) {
   if (wv_vid) vctl_flash_draw();
 
   // --- the details, pulled up ---
-  wdetails_y += ((wdetails ? 1 : 0) - wdetails_y) * 0.25f;
+  wdetails_y += ((wdetails ? 1 : 0) - wdetails_y) * ease(0.25f);
   if (wdetails_y > 0.01f) {
     float top = H - wdetails_y * 300;
     rrect(0, top, W, 330, 20, with_alpha(SURF, 250));

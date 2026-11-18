@@ -216,7 +216,7 @@ static float bar_busy(void) {
 }
 static void fav_thread_start(void) {
   if (!fav_thread_on) {
-    lv_net_base(); // (the rest on the worker that fetches)
+    lv_net_warm(); // (on a thread of its own; the rest on the worker that fetches)
     pthread_t t;
     pthread_attr_t at;
     pthread_attr_init(&at);
@@ -255,7 +255,7 @@ static void favs_open(int tab) {
   fav_tab = tab; fav_sel = 0; fav_scroll = 0;
   fav_back = screen == S_FAVS ? fav_back : screen;
   if (!fav_thread_on) {
-    lv_net_base(); // (the rest on the worker that fetches)
+    lv_net_warm(); // (on a thread of its own; the rest on the worker that fetches)
     pthread_t t;
     pthread_attr_t at;
     pthread_attr_init(&at);
@@ -330,7 +330,7 @@ static void fav_read(int at, int offline) {
   const Fav *v = &favs[at];
   int src = MS_MANGADEX;
   for (int k = 0; k < MS_N; k++) if (!strcmp(v->site, LV_MSRC[k].name)) src = k; // (by its name, as kept)
-  lv_net_base(); // (the rest on the worker that fetches)
+  lv_net_warm(); // (on a thread of its own; the rest on the worker that fetches)
   mg_start_thread();
   mg.src = src;
   mg_search_cancel();

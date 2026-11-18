@@ -11,7 +11,7 @@ static char drive_new_id[200];
 static int drive_ask_secret;  // (the Client ID typed: the secret next)
 
 static void open_drive(int from) {
-  lv_net_base(); // (the rest on the worker that fetches)
+  lv_net_warm(); // (on a thread of its own; the rest on the worker that fetches)
   drive_return = from;
   drive_sel = 0;
   screen = S_DRIVE;

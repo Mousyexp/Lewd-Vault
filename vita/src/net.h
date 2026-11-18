@@ -6,7 +6,9 @@
 #include <stdint.h>
 
 int lv_net_init(void); // 0 when the network is up (libcurl too: slow the first time, for worker threads)
-int lv_net_base(void); // the Vita's network only (quick): the online light, the Wi-Fi page's server
+int lv_net_base(void);
+// The base started on a thread of its own, now; returns at once (the drawing thread never waits for it).
+void lv_net_warm(void); // the Vita's network only (quick): the online light, the Wi-Fi page's server
 int lv_net_online(void); // 1 when connected (Wi-Fi)
 typedef struct LvHttp LvHttp;
 LvHttp *lv_http_new(void);

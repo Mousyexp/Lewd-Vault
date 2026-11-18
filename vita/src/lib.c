@@ -679,7 +679,7 @@ static void side_add(int k, int out) {
   side_changed();
 }
 static void draw_side(void) {
-  side_t += ((side_open ? 1.0f : 0.0f) - side_t) * 0.32f;
+  side_t += ((side_open ? 1.0f : 0.0f) - side_t) * ease(0.32f);
   if (fabsf(side_t - side_open) < 0.01f) side_t = (float)side_open;
   if (side_t <= 0) return;
   if (side_open && side_counted_n != nshown) { count_tags(); side_counted_n = nshown; }

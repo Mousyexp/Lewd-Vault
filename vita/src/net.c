@@ -41,7 +41,7 @@ static char proxy[256], cafile[256] = "app0:cacert.pem";
 #include <pthread.h>
 static pthread_mutex_t init_mx = PTHREAD_MUTEX_INITIALIZER;
 static int net_init_locked(void);
-static int base_up;
+static volatile int base_up;
 // The Vita's own network, quickly (its module, sceNetInit, sceNetCtlInit): enough for the online
 // light and the Wi-Fi page's server. Once.
 int lv_net_base(void) {
@@ -82,9 +82,23 @@ static int net_init_locked(void) {
   return 0;
 }
 
+// The base started on a thread of its own (loading the module and starting it takes a few hundred ms):
+// asked for at the app's start, so the drawing thread never waits for it
+static void *net_warm_main(void *arg) { (void)arg; lv_net_base(); return NULL; }
+void lv_net_warm(void) {
+  static volatile int started;
+  if (base_up || started) return;
+  started = 1;
+  pthread_t t;
+  pthread_attr_t at;
+  pthread_attr_init(&at);
+  pthread_attr_setstacksize(&at, 64 * 1024);
+  if (pthread_create(&t, &at, net_warm_main, NULL) == 0) pthread_detach(t);
+  else started = 0;
+}
 int lv_net_online(void) {
   int state = 0;
-  if (lv_net_base() < 0) return 0;
+  if (!base_up) { lv_net_warm(); return 0; } // (not up yet: offline for now, never a wait)
   // (every request asks: the answer kept for a second, not a system call for each one)
   static volatile uint64_t at;
   static volatile int last;

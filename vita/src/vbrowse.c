@@ -292,7 +292,7 @@ static void vb_clear(void) {
   vb_y = 0;
 }
 static void vb_open(int k) {
-  lv_net_base(); // (the rest on the worker that fetches)
+  lv_net_warm(); // (on a thread of its own; the rest on the worker that fetches)
   wlists_load();
   pthread_mutex_lock(&vbmx);
   vb_gen++;
@@ -429,7 +429,7 @@ static void draw_videos(void) {
   int site = vsource_site(vb_src);
   // where the view is: the chosen row in sight (the banner scrolls away as rows go down)
   float target = vb_row == 0 ? 0 : HERO_H - 120 + (vb_row - 1) * (VB_CH + 52);
-  vb_y += (target - vb_y) * 0.22f;
+  vb_y += (target - vb_y) * ease(0.22f);
   float y0 = -vb_y;
   // ---- the banner: the first trending video, big, fading into the page ----
   VRow *r0 = &vrows[0];
@@ -471,7 +471,7 @@ static void draw_videos(void) {
     // (the chosen card kept in sight)
     float want = vb_col[r] * (VB_CW + 12) - (W - 60 - VB_CW) / 2.0f;
     if (want < 0) want = 0;
-    if (r == vb_row || vb_x[r] > want + W) vb_x[r] += (want - vb_x[r]) * 0.25f;
+    if (r == vb_row || vb_x[r] > want + W) vb_x[r] += (want - vb_x[r]) * ease(0.25f);
     if (in.touching && in.down_y > ry && in.down_y < ry + VB_CH + 40) { vb_x[r] -= in.drag_dx; vb_row = r; }
     for (int k = 0; k < row->n; k++) {
       float x = 30 + k * (VB_CW + 12) - vb_x[r];
@@ -505,7 +505,7 @@ static void draw_videos(void) {
       text(30, ry + 20, r == vb_row ? TEXT : DIM, 18, "Up next \u00b7 your Favourites");
       float want = vb_col[r] * (VB_CW + 12) - (W - 60 - VB_CW) / 2.0f;
       if (want < 0) want = 0;
-      if (r == vb_row) vb_x[r] += (want - vb_x[r]) * 0.25f;
+      if (r == vb_row) vb_x[r] += (want - vb_x[r]) * ease(0.25f);
       if (in.touching && in.down_y > ry && in.down_y < ry + VB_CH + 40) { vb_x[r] -= in.drag_dx; vb_row = r; }
       for (int k = 0; k < nup; k++) {
         float x = 30 + k * (VB_CW + 12) - vb_x[r], cy = ry + 32;
@@ -547,7 +547,7 @@ static void draw_videos(void) {
   VRow *cur = vb_row < VB_ROWS ? &vrows[vb_row] : NULL;
   if (in.pressed & SCE_CTRL_RIGHT) { if (vb_col[vb_row] < cur_n - 1) { vb_col[vb_row]++; sfx(SFX_TICK); } }
   if (in.pressed & SCE_CTRL_LEFT) { if (vb_col[vb_row] > 0) { vb_col[vb_row]--; sfx(SFX_TICK); } }
-  vb_x[vb_row] += in.lx * 12;
+  vb_x[vb_row] += in.lx * 12 * ft;
   if ((in.pressed & SCE_CTRL_CROSS) && cur_n) { sfx(SFX_SELECT); if (cur) vb_play(vb_row, vb_col[vb_row]); else upnext_play(vb_col[vb_row]); return; }
   if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = S_WEB; return; }
   if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
