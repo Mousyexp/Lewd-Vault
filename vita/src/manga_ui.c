@@ -330,7 +330,7 @@ static void *mg_main(void *arg) {
           // (a tall page, a webtoon's: the screen's width, as tall as a texture can be)
           int tall = lv_image_size(b, n, &iw, &ih) && iw > 0 && ih > iw * 2.2f;
           if ((tall || hi) && !heap_room((size_t)W * 4096 * 8)) { tall = 0; hi = 0; } // (keeping the heap under 95%)
-          if (lv_decode(b, n, tall ? W : hi ? W * 2 : W, tall ? 4096 : hi ? H * 2 : H, &d.px) != 0) d.px.rgba = NULL;
+          if (lv_decode_lowmem(b, n, tall ? W : hi ? W * 2 : W, tall ? 4096 : hi ? H * 2 : H, &d.px) != 0) d.px.rgba = NULL; // (a big page: in bands)
         }
         if (!d.px.rgba) snprintf(d.err, sizeof d.err, "%s", err && err[0] ? err : "This page couldn't be loaded");
         break;
@@ -602,7 +602,9 @@ static void manga_open(int src) {
   manga_back = screen == S_MANGA ? manga_back : S_WEB;
   screen = S_MANGA;
 }
+static void mg_stage_drop(void);
 static void mg_free_pages(void) {
+  mg_stage_drop();
   lv_strings_free(mg.pages, mg.npages);
   mg.pages = NULL;
   mg.npages = 0;
@@ -689,13 +691,59 @@ static void strip_prefetch(int page) {
     return;
   }
 }
+// Pages on their way into their textures, a slice of rows a frame (about 2 ms of copying in all);
+// each goes into its slot (0 the page shown, 1-2 the next) once it's whole
+static struct { LvPixels px; vita2d_texture *t; int row, page, on; } mg_stage[3];
+static int mg_stage_add(LvPixels *px, int page) {
+  for (int k = 0; k < 3; k++) {
+    if (mg_stage[k].on) continue;
+    vita2d_texture *t = tex_new(px->w, px->h);
+    if (!t) return 0;
+    mg_stage[k].px = *px; mg_stage[k].t = t; mg_stage[k].row = 0; mg_stage[k].page = page; mg_stage[k].on = 1;
+    return 1;
+  }
+  return 0;
+}
+static void mg_stage_drop(void) {
+  for (int k = 0; k < 3; k++) if (mg_stage[k].on) { free(mg_stage[k].px.rgba); release_tex(mg_stage[k].t); mg_stage[k].on = 0; }
+}
+static void mg_stage_step(void) {
+  uint64_t t0 = sceKernelGetProcessTimeWide();
+  for (int k = 0; k < 3; k++) {
+    if (!mg_stage[k].on) continue;
+    LvPixels *px = &mg_stage[k].px;
+    uint8_t *d = vita2d_texture_get_datap(mg_stage[k].t);
+    unsigned stride = vita2d_texture_get_stride(mg_stage[k].t);
+    while (mg_stage[k].row < px->h) {
+      int end = mg_stage[k].row + 32 < px->h ? mg_stage[k].row + 32 : px->h;
+      for (int y = mg_stage[k].row; y < end; y++) memcpy(d + (size_t)y * stride, px->rgba + (size_t)y * px->w * 4, (size_t)px->w * 4);
+      mg_stage[k].row = end;
+      if (sceKernelGetProcessTimeWide() - t0 > 2000) break; // (this frame's share done)
+    }
+    if (mg_stage[k].row < px->h) return;
+    // (whole: into its slot, if it's still one of the three wanted)
+    vita2d_texture_set_filters(mg_stage[k].t, SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
+    int page = mg_stage[k].page;
+    if (page >= mg.page && page <= mg.page + 2) {
+      int slot = page - mg.page;
+      release_tex(mg.ptex[slot]);
+      mg.ptex[slot] = mg_stage[k].t;
+      mg.ptex_page[slot] = page;
+    } else release_tex(mg_stage[k].t);
+    free(px->rgba);
+    mg_stage[k].on = 0;
+    if (sceKernelGetProcessTimeWide() - t0 > 2000) return;
+  }
+}
 static void mg_want_page(int page, int hi) {
   if (page < 0 || page >= mg.npages) return;
   strip_prefetch(page);
+  for (int k = 0; k < 3; k++) if (mg_stage[k].on && mg_stage[k].page == page && !hi) return; // (on its way in)
   for (int k = 0; k < 3; k++) if (mg.ptex_page[k] == page && !hi) return;
   mg_push(MJ_PAGE, page, hi, mg.pages[page]);
 }
 static void mg_take(void) {
+  mg_stage_step(); // (pages on their way into their textures: this frame's slice)
   if (!nmdone) return; // (nothing come: no lock)
   pthread_mutex_lock(&mgmx);
   int n = nmdone < 6 ? nmdone : 6;
@@ -751,7 +799,7 @@ static void mg_take(void) {
         for (int s = 1; s < MG_TEX; s++) if (mg.tex_used[s] < mg.tex_used[best]) best = s;
         if (mg.tex[best] && mg.tex_book[best] >= 0 && mg.tex_book[best] < mg.nbooks) mg.cstate[mg.tex_book[best]] = 0;
         release_tex(mg.tex[best]);
-        mg.tex[best] = upload(&d->px);
+        mg.tex[best] = pool_put(&pool_covers, &d->px);
         mg.tex_book[best] = d->a;
         mg.tex_used[best] = frame_no;
         mg.cstate[d->a] = mg.tex[best] ? 2 : 3;
@@ -792,12 +840,11 @@ static void mg_take(void) {
         if (mg_offline_pending && mg.npages) { mg_offline_pending = 0; msave_start(); }
         break;
       case MJ_PAGE:
-        if (d->px.rgba && d->a >= mg.page && d->a <= mg.page + 2) {
+        // (into its texture a slice a frame: a page is up to 15 MB, copied in one frame it was a stutter)
+        if (d->px.rgba && d->a >= mg.page && d->a <= mg.page + 2 && mg_stage_add(&d->px, d->a)) d->px.rgba = NULL;
+        else if (d->px.rgba && d->a >= mg.page && d->a <= mg.page + 2) {
           int slot = d->a - mg.page;
-          // (the slots follow the page shown: 0 it, 1-2 the next ones)
           release_tex(mg.ptex[slot]);
-          // (a texture of its own each: one in the screen's shared buffers could be drawn over once
-          //  it moved to another slot as the pages turn)
           mg.ptex[slot] = upload(&d->px);
           mg.ptex_page[slot] = d->a;
         }

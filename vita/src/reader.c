@@ -27,7 +27,7 @@ static const char *const RD_ORIENT[] = {"Landscape", "Portrait (on its side)"};
 static const char *const RD_ANIM[] = {"Slide", "Fade", "Zoom", "None"};
 static const char *const RD_DIR[] = {"Left to right", "Right to left (manga)"};
 static const char *const RD_TAP[] = {"Sides turn pages", "Anywhere: the next", "Only the controls"};
-static const char *const RD_DBL[] = {"Zoom", "Nothing"};
+static const char *const RD_DBL[] = {"Zoom", "Nothing", "Fit width"};
 static const char *const RD_BACK[] = {"Swipe turns pages", "Nothing"};
 enum { RO_MODE, RO_ORIENT, RO_ANIM, RO_DIR, RO_TAP, RO_DBL, RO_BACK, RO_N };
 static const char *const RO_ICON[RO_N] = {"pages", "rotate", "swipe", "direction", "tap", "zoom", "touchpad"};
@@ -38,7 +38,7 @@ static int *ro_val(int k) {
     case RO_DIR: return &cfg.cdir; case RO_TAP: return &cfg.ctap; case RO_DBL: return &cfg.cdbl; default: return &cfg.cback;
   }
 }
-static int ro_count(int k) { static const int N[RO_N] = {2, 2, 4, 2, 3, 2, 2}; return N[k]; }
+static int ro_count(int k) { static const int N[RO_N] = {2, 2, 4, 2, 3, 3, 2}; return N[k]; }
 static const char *ro_text(int k) {
   int v = *ro_val(k);
   switch (k) {
@@ -90,6 +90,7 @@ static struct {
   int anim_dir, anim_from;       // (pages: the turn being animated, and the page before)
   unsigned anim_at, chrome_until;
   float back_sw;                 // (the rear touchpad's swipe so far)
+  float fitw;                    // (pages: the zoom at which the page shown fills the width)
 } rd;
 #define RD_GAP (s->strip ? 0 : 8) // (between pages in a strip; a webtoon's bands meet)
 static int rd_portrait(void) { return cfg.corient == 1; }
@@ -202,7 +203,9 @@ static int comic_reader(ComicSrc *s) {
     if (t) {
       float tw = vita2d_texture_get_width(t), th = vita2d_texture_get_height(t);
       int tall = th > tw * 2.2f;
-      float sc = (tall ? RW / tw : fminf(RW / tw, RH / th)) * rd.zoom;
+      float fit = tall ? RW / tw : fminf(RW / tw, RH / th);
+      rd.fitw = fmaxf(1, (RW / tw) / fit);
+      float sc = fit * rd.zoom;
       float dw = tw * sc, dh = th * sc;
       float mx = fmaxf(0, (dw - RW) / 2), my = fmaxf(0, (dh - RH) / 2);
       rd.pan_x = fminf(mx, fmaxf(-mx, rd.pan_x));
@@ -237,7 +240,9 @@ static int comic_reader(ComicSrc *s) {
       if (rd.zoom < 1.01f) rd.zoom = 1;
     }
     // taps: as chosen
-    if (in.dbl && cfg.cdbl == 0) { rd.zoom = rd.zoom > 1.5f ? 1 : 2.5f; rd.pan_x = (RW / 2 - rtx) * (rd.zoom - 1); rd.pan_y = (RH / 2 - rty) * (rd.zoom - 1); }
+    // (fit width: the page's width the screen's, from its top: a page's panels at a readable size)
+    if (in.dbl && cfg.cdbl == 2) { rd.zoom = rd.zoom > 1.01f ? 1 : rd.fitw; rd.pan_x = 0; rd.pan_y = 1e5f; }
+    else if (in.dbl && cfg.cdbl == 0) { rd.zoom = rd.zoom > 1.5f ? 1 : 2.5f; rd.pan_x = (RW / 2 - rtx) * (rd.zoom - 1); rd.pan_y = (RH / 2 - rty) * (rd.zoom - 1); }
     else if (in.tap && !top_band && rd.zoom < 1.01f) {
       int fw = rtl ? -1 : 1;
       if (cfg.ctap == 0 && rtx < RW / 3) rd_turn(s, -fw);
@@ -250,7 +255,10 @@ static int comic_reader(ComicSrc *s) {
     if (in.pressed & b_prev) rd_turn(s, -1);
     if (in.pressed & SCE_CTRL_RTRIGGER) rd_turn(s, 1);
     if (in.pressed & SCE_CTRL_LTRIGGER) rd_turn(s, -1);
-    if (in.pressed & SCE_CTRL_CROSS) { rd.zoom = rd.zoom > 1.5f ? 1 : 2; rd.pan_x = rd.pan_y = 0; }
+    if (in.pressed & SCE_CTRL_CROSS) {
+      if (cfg.cdbl == 2) { rd.zoom = rd.zoom > 1.01f ? 1 : rd.fitw; rd.pan_x = 0; rd.pan_y = 1e5f; }
+      else { rd.zoom = rd.zoom > 1.5f ? 1 : 2; rd.pan_x = rd.pan_y = 0; }
+    }
     if (rd.zoom > 1.01f) { rd.pan_x -= (por ? -in.ly : in.lx) * 12; rd.pan_y -= stick * 12; }
   }
   // the rear touchpad: a swipe along it turns the page (or scrolls the strip)

@@ -634,7 +634,7 @@ static void cfg_load(void) {
   if (cfg.lmode < 0 || cfg.lmode > 3) cfg.lmode = 0;
   if (cfg.theme < 0 || cfg.theme > NTHEMES + 1) cfg.theme = 0;
   cfg.acc_h = ((cfg.acc_h % 360) + 360) % 360;
-  { int *c[] = {&cfg.cmode, &cfg.corient, &cfg.canim, &cfg.cdir, &cfg.ctap, &cfg.cdbl, &cfg.cback}; static const int top[] = {1, 1, 3, 1, 2, 1, 1};
+  { int *c[] = {&cfg.cmode, &cfg.corient, &cfg.canim, &cfg.cdir, &cfg.ctap, &cfg.cdbl, &cfg.cback}; static const int top[] = {1, 1, 3, 1, 2, 2, 1};
     for (int k = 0; k < 7; k++) if (*c[k] < 0 || *c[k] > top[k]) *c[k] = 0; }
   { int *c[] = {&cfg.ifit, &cfg.iorient, &cfg.vfit, &cfg.vorient}; static const int top[] = {3, 1, 4, 1};
     for (int k = 0; k < 4; k++) if (*c[k] < 0 || *c[k] > top[k]) *c[k] = 0; }
@@ -1005,6 +1005,71 @@ static void atlas_make(int a) {
     }
   }
 }
+// ---------- pools: covers and cards in shared atlases, not a texture each ----------
+// The comics' covers, the video browser's cards and Favourites' covers: each was a texture of its own,
+// made and freed as they scrolled (a 256 KiB granule of video memory each, and the memory manager
+// asked every time). A pool cuts 1024 x 1024 atlases into cells of one size; a picture goes into a free
+// cell (shrunk to fit, if it's bigger), and its "texture" is a view onto that cell. A cell let go is
+// used again only three frames on (the GPU may still be drawing the old picture).
+#define POOL_ATL 8
+#define MG_POOL_W 148 // (the comics' covers: MG_CW x MG_CH, manga_ui.c)
+#define MG_POOL_H 210
+#define VB_POOL_W 190 // (the video browser's cards: VB_CW x VB_CH, vbrowse.c)
+#define VB_POOL_H 107
+#define FAV_POOL_W 216 // (Favourites: a video's card or a comic's cover, whichever's bigger each way)
+#define FAV_POOL_H 210
+#define POOL_CELLS 256
+typedef struct {
+  int cw, ch, cols, per;                 // (a cell's size; cells across and in each atlas)
+  vita2d_texture *at[POOL_ATL];
+  vita2d_texture cell[POOL_CELLS];
+  unsigned char used[POOL_CELLS];
+  unsigned freed_at[POOL_CELLS];
+} Pool;
+static Pool pool_covers = {MG_POOL_W, MG_POOL_H}, pool_cards = {VB_POOL_W, VB_POOL_H}, pool_favs = {FAV_POOL_W, FAV_POOL_H};
+static int pool_owns(const Pool *p, const vita2d_texture *t) { return t >= p->cell && t < p->cell + POOL_CELLS; }
+static vita2d_texture *pool_put(Pool *p, const LvPixels *px) {
+  if (!px->rgba || px->w <= 0 || px->h <= 0) return NULL;
+  if (!p->per) { p->cols = 1024 / (p->cw + 2); p->per = p->cols * (1024 / (p->ch + 2)); }
+  int n = p->per * POOL_ATL < POOL_CELLS ? p->per * POOL_ATL : POOL_CELLS, k = -1;
+  for (int i = 0; i < n && k < 0; i++) if (!p->used[i] && frame_no - p->freed_at[i] >= 3) k = i;
+  if (k < 0) return upload(px); // (full: a texture of its own, as before)
+  int a = k / p->per, c = k % p->per;
+  if (!p->at[a] && !(p->at[a] = tex_new(1024, 1024))) return upload(px);
+  unsigned stride = vita2d_texture_get_stride(p->at[a]);
+  uint8_t *d = (uint8_t *)vita2d_texture_get_datap(p->at[a]) + (size_t)((c / p->cols) * (p->ch + 2)) * stride + (size_t)((c % p->cols) * (p->cw + 2)) * 4;
+  float s = fminf(1.0f, fminf((float)p->cw / px->w, (float)p->ch / px->h));
+  int w = (int)(px->w * s), h = (int)(px->h * s);
+  if (w < 1) w = 1;
+  if (h < 1) h = 1;
+  for (int y = 0; y < h; y++) {
+    int yy = s == 1.0f ? y : (int)((y + 0.5f) / s);
+    if (yy >= px->h) yy = px->h - 1;
+    const uint32_t *srow = (const uint32_t *)(px->rgba + (size_t)yy * px->w * 4);
+    uint32_t *drow = (uint32_t *)(d + (size_t)y * stride);
+    if (s == 1.0f) { memcpy(drow, srow, (size_t)w * 4); continue; }
+    for (int x = 0; x < w; x++) { int xx = (int)((x + 0.5f) / s); drow[x] = srow[xx < px->w ? xx : px->w - 1]; }
+  }
+  vita2d_texture *t = &p->cell[k];
+  memset(t, 0, sizeof *t);
+  sceGxmTextureInitLinearStrided(&t->gxm_tex, d, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, w, h, stride);
+  sceGxmTextureSetMinFilter(&t->gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
+  sceGxmTextureSetMagFilter(&t->gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
+  p->used[k] = 1;
+  return t;
+}
+static int pool_free(Pool *p, vita2d_texture *t) {
+  if (!pool_owns(p, t)) return 0;
+  int k = (int)(t - p->cell);
+  p->used[k] = 0; p->freed_at[k] = frame_no;
+  return 1;
+}
+static int pool_free_any(vita2d_texture *t) { return pool_free(&pool_covers, t) || pool_free(&pool_cards, t) || pool_free(&pool_favs, t); }
+// (a part let go: its pool's atlases too; its owner has forgotten its cells)
+static void pool_release(Pool *p) {
+  for (int a = 0; a < POOL_ATL; a++) if (p->at[a]) { free_later(p->at[a]); p->at[a] = NULL; }
+  memset(p->used, 0, sizeof p->used);
+}
 static void atlas_init(void) { atlas_make(0); } // (the first of the Library's at the start; the rest as needed)
 // A thumbnail into its cell, whole: it was decoded to fit CELL_W x CELL_H, so it's copied as it is
 // (scaled down only if it somehow isn't), and the cell's view takes its size.
@@ -1050,7 +1115,8 @@ static vita2d_texture *scr_buf[6];
 static vita2d_texture scr_view[6];
 static int scr_next[2];
 static int is_view(const vita2d_texture *t) { return t >= scr_view && t < scr_view + 6; }
-static void release_tex(vita2d_texture *t) { if (t && !is_view(t)) free_later(t); }
+static int pool_free_any(vita2d_texture *t);
+static void release_tex(vita2d_texture *t) { if (t && !is_view(t) && !pool_free_any(t)) free_later(t); }
 // set: 0 the Library's full view, 1 the Browser's
 static vita2d_texture *screen_upload(int set, const LvPixels *px) {
   if (!px->rgba || px->w <= 0 || px->h <= 0) return NULL;
@@ -1785,20 +1851,19 @@ static unsigned mix_col(unsigned a, unsigned b, float t) { // (a to b; alpha fro
   int bl = (int)(((a >> 16) & 255) * (1 - t) + ((b >> 16) & 255) * t);
   return RGBA(r, g, bl, (a >> 24) & 255);
 }
-// Liquid glass, as iOS has it: the chosen thing in a lens of clear glass. Mostly see-through (what's
-// behind shows), a breath of the accent in it, light caught along its top edge and, fainter, its
-// bottom one (the edges bend the light), a glint at the top left, a soft glow pooled inside at the
-// bottom, a faint shadow under it. round: a pill (the tab bar); else squircle corners (segments).
+// Liquid glass, as iOS has it: the chosen thing in a lens of glass, a breath of the accent in it, a
+// faint even rim, light from above as a soft gradient, a faint shadow under it. round: a pill (the tab bar); else squircle corners (segments).
 static void glass(float x, float y, float w, float h, int round) {
   void (*rr)(float, float, float, float, float, unsigned) = round ? rrect_round : rrect;
   float r = round ? h / 2 : h * 0.34f;
-  rr(x, y + 1.5f, w, h, r, RGBA(0, 0, 0, 40));                                   // (its shadow)
-  rr(x, y, w, h, r, with_alpha(mix_col(TEXT, ACC, 0.3f), 52));                   // (the glass: clear, a little tinted)
-  rr(x + 1, y + 1, w - 2, h - 2, r - 1, with_alpha(ACC, 30));
-  rr(x + r * 0.3f, y + 1.2f, w - r * 0.6f, h * 0.45f, r * 0.75f, with_alpha(TEXT, 13)); // (a soft sheen over its top half)
-  rr(x + r * 0.55f, y + 0.6f, w - r * 1.1f, 1.4f, 0.7f, with_alpha(TEXT, 175));   // (its top edge, catching the light)
-  rr(x + r * 0.75f, y + h - 2, w - r * 1.5f, 1.2f, 0.6f, with_alpha(TEXT, 60));   // (its bottom edge, fainter)
-  rr(x + r * 0.6f, y + h * 0.2f, fminf(w * 0.12f, 14), fmaxf(2, h * 0.09f), 1, with_alpha(TEXT, 70)); // (a small glint)
+  rr(x, y + 1.5f, w, h, r, RGBA(0, 0, 0, 36));                                     // (its shadow)
+  rr(x, y, w, h, r, with_alpha(TEXT, 30));                                         // (its rim: faint, even, all round)
+  rr(x + 1, y + 1, w - 2, h - 2, r - 1, with_alpha(mix_col(SURF2, ACC, 0.32f), 235)); // (the glass, a little of the accent in it)
+  // (light from above: a soft gradient, a few faint layers, no edge of its own)
+  for (int k = 0; k < 4; k++) {
+    float hh = (h - 2) * (0.62f - k * 0.13f);
+    rr(x + 1, y + 1, w - 2, hh, fminf(r - 1, hh / 2), with_alpha(TEXT, 7));
+  }
 }
 static void tab_bubble(float x, float y, float w, float h) { glass(x, y, w, h, 1); }
 // (the screens leave BAR at the bottom free when scrolled to the end; meanwhile they show through
@@ -3975,6 +4040,7 @@ static void area_release(int a) {
         }
       pthread_mutex_unlock(&vbmx);
       if (vb_hero) { release_tex(vb_hero); vb_hero = NULL; vb_hero_state = 0; }
+      pool_release(&pool_cards);
       break;
     case A_COMICS:
       for (int k = 0; k < MG_TEX; k++) {
@@ -3984,6 +4050,7 @@ static void area_release(int a) {
         release_tex(mg.tex[k]); mg.tex[k] = NULL; mg.tex_book[k] = -1;
       }
       for (int k = 0; k < 3; k++) { release_tex(mg.ptex[k]); mg.ptex[k] = NULL; mg.ptex_page[k] = -1; }
+      pool_release(&pool_covers);
       // (the strips' bands: a few MB of the heap; not while one's being cut: never a wait for it here)
       if (pthread_mutex_trylock(&strip_cut_mx) == 0) {
         pthread_mutex_lock(&strip_mx);
@@ -3992,7 +4059,7 @@ static void area_release(int a) {
         pthread_mutex_unlock(&strip_cut_mx);
       }
       break;
-    case A_FAVS: fav_drop_textures(); break;
+    case A_FAVS: fav_drop_textures(); pool_release(&pool_favs); break;
     case A_SETTINGS: if (wheel_tex) { free_later(wheel_tex); wheel_tex = NULL; } break;
   }
 }

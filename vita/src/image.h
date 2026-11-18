@@ -27,3 +27,5 @@ int lv_decode_rows(const uint8_t *data, size_t n, int y0, int y1, int max_w, int
 int lv_decode_bands(const uint8_t *data, size_t n, int band_h, int max_w, int (*cb)(void *ctx, int k, LvPixels *px), void *ctx);
 // The most a progressive JPEG's compressed coefficients took since the last ask (and reset).
 size_t lv_jpeg_store_peak(void);
+// As lv_decode, but a big JPEG is read in bands, never whole at its own size (a tall comic page).
+int lv_decode_lowmem(const uint8_t *data, size_t n, int max_w, int max_h, LvPixels *out);

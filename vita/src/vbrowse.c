@@ -280,7 +280,7 @@ static void *vb_main(void *arg) {
 }
 static void vb_clear(void) {
   for (int r = 0; r < VB_ROWS; r++) {
-    for (int k = 0; k < VB_PER; k++) { if (vrows[r].tex[k]) free_later(vrows[r].tex[k]); vrows[r].tex[k] = NULL; vrows[r].ts[k] = 0; }
+    for (int k = 0; k < VB_PER; k++) { if (vrows[r].tex[k]) release_tex(vrows[r].tex[k]); vrows[r].tex[k] = NULL; vrows[r].ts[k] = 0; }
     lv_posts_free(vrows[r].p, vrows[r].n);
     vrows[r].p = NULL; vrows[r].n = 0; vrows[r].state = 0; vrows[r].err[0] = 0;
     vb_col[r] = 0; vb_x[r] = 0;
@@ -346,9 +346,9 @@ static void vb_take(void) {
   for (int k = 0; k < n; k++) {
     VbDone *d = &got[k];
     if (d->gen == vb_gen && d->px.rgba) {
-      vita2d_texture *t = upload(&d->px);
-      if (d->card < 0) { if (vb_hero) free_later(vb_hero); vb_hero = t; }
-      else if (d->card < VB_PER) { if (vrows[d->row].tex[d->card]) free_later(vrows[d->row].tex[d->card]); vrows[d->row].tex[d->card] = t; vrows[d->row].ts[d->card] = t ? 2 : 3; }
+      vita2d_texture *t = d->card < 0 ? upload(&d->px) : pool_put(&pool_cards, &d->px); // (the cards in a pool; the banner its own)
+      if (d->card < 0) { if (vb_hero) release_tex(vb_hero); vb_hero = t; }
+      else if (d->card < VB_PER) { if (vrows[d->row].tex[d->card]) release_tex(vrows[d->row].tex[d->card]); vrows[d->row].tex[d->card] = t; vrows[d->row].ts[d->card] = t ? 2 : 3; }
     } else if (d->gen == vb_gen && d->card >= 0 && d->card < VB_PER) vrows[d->row].ts[d->card] = 3;
     free(d->px.rgba);
   }

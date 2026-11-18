@@ -524,3 +524,36 @@ int lv_decode_bands(const uint8_t *d, size_t n, int band_h, int max_w, int (*cb)
   jpeg_destroy_decompress(&c);
   return done ? done : -1;
 }
+
+// A big picture at most max_w x max_h without its full size ever in memory: a JPEG of more than ~3
+// million pixels is read in bands of rows, each shrunk into its place in the result (a 1200 x 6000
+// page was 29 MB decoded whole first); anything else as lv_decode does.
+typedef struct { LvPixels *out; int y; } LowMem;
+static int lowmem_band(void *ctx, int k, LvPixels *px) {
+  (void)k;
+  LowMem *m = ctx;
+  int rows = px->h;
+  if (m->y + rows > m->out->h) rows = m->out->h - m->y;
+  int w = px->w < m->out->w ? px->w : m->out->w;
+  for (int y = 0; y < rows; y++) memcpy(m->out->rgba + (size_t)(m->y + y) * m->out->w * 4, px->rgba + (size_t)y * px->w * 4, (size_t)w * 4);
+  m->y += rows > 0 ? rows : 0;
+  free(px->rgba);
+  return m->y >= m->out->h;
+}
+int lv_decode_lowmem(const uint8_t *d, size_t n, int max_w, int max_h, LvPixels *out) {
+  memset(out, 0, sizeof *out);
+  int w = 0, h = 0;
+  if (!(n >= 3 && d[0] == 0xFF && d[1] == 0xD8) || !lv_image_size(d, n, &w, &h) || (long long)w * h <= 3000000) return lv_decode(d, n, max_w, max_h, out);
+  int ow, oh;
+  fit(w, h, max_w, max_h, &ow, &oh);
+  out->rgba = calloc((size_t)ow * oh, 4);
+  if (!out->rgba) return -1;
+  out->w = ow; out->h = oh;
+  LowMem m = {out, 0};
+  // (bands of about 256 rows of the result: each shrunk to the result's width, so to its share of rows)
+  int band = (int)((long long)256 * h / oh);
+  if (band < 16) band = 16;
+  if (lv_decode_bands(d, n, band, ow, lowmem_band, &m) < 0 || m.y < oh / 2) { free(out->rgba); memset(out, 0, sizeof *out); return lv_decode(d, n, max_w, max_h, out); }
+  for (int y = m.y; y < oh && y > 0; y++) memcpy(out->rgba + (size_t)y * ow * 4, out->rgba + (size_t)(m.y - 1) * ow * 4, (size_t)ow * 4); // (a row short at the end: the last one again)
+  return 0;
+}

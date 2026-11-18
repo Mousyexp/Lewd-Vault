@@ -203,7 +203,7 @@ static void fav_take(void) {
   pthread_mutex_unlock(&fvmx);
   for (int k = 0; k < n; k++) {
     int s = got[k].slot;
-    if (got[k].gen == fav_gen && s >= 0 && s < FAV_MAX && got[k].px.rgba) { if (fav_tex[s]) release_tex(fav_tex[s]); fav_tex[s] = upload(&got[k].px); fav_ts[s] = fav_tex[s] ? 2 : 3; }
+    if (got[k].gen == fav_gen && s >= 0 && s < FAV_MAX && got[k].px.rgba) { if (fav_tex[s]) release_tex(fav_tex[s]); fav_tex[s] = pool_put(&pool_favs, &got[k].px); fav_ts[s] = fav_tex[s] ? 2 : 3; }
     else if (got[k].gen == fav_gen && s >= 0 && s < FAV_MAX) fav_ts[s] = 3;
     free(got[k].px.rgba);
   }
