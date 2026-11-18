@@ -18,6 +18,9 @@ set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
 set(CMAKE_C_STANDARD 11)
 # Tuned for the Vita's Cortex-A9 (docs: vita/README.md, "Speed"): -O3 for the work, NEON, and the
 # linker drops every function and variable nothing uses (smaller code, more of it in the I-cache).
+# (room after the code for the module data vita-elf-create adds: without it, a build whose code
+#  happens to end just short of a 64 KiB line fails with "segment 1 overlaps")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--defsym=__sce_headroom=0x2000")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -ffunction-sections -fdata-sections -Wall -Wno-unused-parameter -D_GNU_SOURCE")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
 

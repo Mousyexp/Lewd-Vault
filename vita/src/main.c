@@ -1984,7 +1984,7 @@ static int lhero_draw(float y, int *want, int nwant_max) {
       for (int j = 0; j < nshown; j++) if (shown[j] == i) { lhero_on = 0; lib_open(j); return -1; }
     }
   }
-  if (ring_x > -1) focus_ring(ring_x, ring_y, LHERO_CW, LHERO_CH);
+  if (ring_x > -1 && lsheet == LS_NONE) focus_ring(ring_x, ring_y, LHERO_CW, LHERO_CH);
   return nw;
 }
 
@@ -2092,7 +2092,7 @@ static void draw_library(void) {
     if (y + ch < TOP - 4) continue;
     LvItem *it = &vault.items[i];
     vita2d_texture *t = thumb_of(i);
-    int on = k == sel && !in.touching && !lhero_on;
+    int on = k == sel && !in.touching && !lhero_on && !sheet_up; // (a sheet open: the ring is the sheet's)
     float grow = on ? 3 : 0;
     if (on) { fr_x = x - grow; fr_y = y - grow; fr_w = cw + 2 * grow; fr_h = ch + 2 * grow; }
     int in_all_book = !book_shelf && is_cover_in_all(i);

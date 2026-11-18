@@ -455,6 +455,19 @@ static int sheet_row(int k, int x, int y, int w, int rh, const char *name, const
   if (hit(x, y, w, rh)) { lsheet_sel = k; in.pressed |= SCE_CTRL_CROSS; return 1; }
   return 0;
 }
+// A row with its icon: a small tinted tile at the left, the name after it, the value at the right
+static int sheet_row_i(int k, int x, int y, int w, int rh, const char *ic, const char *name, const char *value) {
+  int on = k == lsheet_sel;
+  if (on) rrect(x + 6, y, w - 12, rh - 4, 12, SURF2);
+  int cy = y + (rh - 4) / 2;
+  rrect(x + 16, cy - 15, 30, 30, 9, with_alpha(ACC, on ? 255 : 45));
+  icon(ic, x + 31, cy, on ? RGBA(20, 12, 16, 255) : ACC);
+  text(x + 58, cy + 6, TEXT, 17, name);
+  if (value && value[0]) text_fit(x + w - 22 - (text_w(16, value) < w / 2 ? text_w(16, value) : w / 2), cy + 6, ACC, 16, value, w / 2);
+  if (on) focus_ring(x + 6, y, w - 12, rh - 4);
+  if (hit(x, y, w, rh)) { lsheet_sel = k; in.pressed |= SCE_CTRL_CROSS; return 1; }
+  return 0;
+}
 static int sheet_nav(int n) {
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
   if (in.pressed & SCE_CTRL_DOWN) lsheet_sel = (lsheet_sel + 1) % n;
@@ -464,12 +477,13 @@ static int sheet_nav(int n) {
 static void sheet_close(void) { sfx(SFX_CLOSE); lsheet = LS_NONE; save_edits_now(); }
 // The order: a list to pick from (△ or the button opens it; ✕ or a tap picks)
 static void draw_sort_sheet(void) {
-  const int rh = 40, w = 300, h = NSORTS * rh + 64, x = W - w - 16, y = TOP + 4;
+  static const char *const SORT_ICONS[NSORTS] = {"newest", "oldest", "eye", "star", "heart", "shuffle", "sparkle", "eye_off", "history", "hourglass"};
+  const int rh = 46, w = 320, h = NSORTS * rh + 56, x = W - w - 16, y = 12;
   sheet_frame(x, y, w, h);
-  text(x + 20, y + 34, TEXT, 18, "Order");
+  text(x + 20, y + 32, TEXT, 18, "Order");
   for (int k = 0; k < NSORTS; k++) {
-    int ry = y + 50 + k * rh;
-    sheet_row(k, x, ry, w, rh, SORTS[k], k == cfg.sort ? "\u2713" : "");
+    int ry = y + 44 + k * rh;
+    sheet_row_i(k, x, ry, w, rh, SORT_ICONS[k], SORTS[k], k == cfg.sort ? "\u2713" : "");
   }
   sheet_nav(NSORTS);
   if ((in.pressed & SCE_CTRL_CROSS) && lsheet_sel >= 0 && lsheet_sel < NSORTS) {
@@ -503,23 +517,31 @@ static int coll_next(int d) {
 static void draw_filters_sheet(void) {
   if (!saved_loaded) saved_load();
   enum { F_SEARCH, F_KIND, F_NSFW, F_STARS, F_ALBUM, F_COLL, F_SIZE, F_TAGS, F_SAVED, F_SAVE, F_RESET, F_N };
-  int w = 460, x = W - w - 12, y = 12, rh = 46;
-  sheet_frame(x, y, w, F_N * rh + 16);
+  // (rows a little taller, each with its icon; the list scrolls to keep the chosen one in sight)
+  int w = 470, x = W - w - 12, y = 12, rh = 54, view = H - 24 - 16;
+  static float fs_scroll;
+  float want = lsheet_sel * rh;
+  if (want - fs_scroll > view - rh) fs_scroll = want - (view - rh);
+  if (want < fs_scroll) fs_scroll = want;
+  if (fs_scroll > F_N * rh - view) fs_scroll = F_N * rh - view > 0 ? F_N * rh - view : 0;
+  if (fs_scroll < 0) fs_scroll = 0;
+  sheet_frame(x, y, w, view + 16);
   char v[160];
   for (int k = 0; k < F_N; k++) {
-    int ry = y + 8 + k * rh;
+    int ry = y + 8 + k * rh - (int)fs_scroll;
+    if (ry < y || ry + rh > y + 8 + view + 4) continue;
     switch (k) {
-      case F_SEARCH: sheet_row(k, x, ry, w, rh, "Search", query[0] ? query : "tags, -not, ~any, artist:*"); break;
-      case F_KIND: sheet_row(k, x, ry, w, rh, "Show", KIND4[cfg.kind & 3]); break;
-      case F_NSFW: if (lf.nsfw_max) snprintf(v, sizeof v, "up to %d", lf.nsfw_max); else snprintf(v, sizeof v, "Any"); sheet_row(k, x, ry, w, rh, "NSFW level", v); break;
-      case F_STARS: snprintf(v, sizeof v, "%s", lf.stars_min == 0 ? "Any" : lf.stars_min == 1 ? "★ and up" : lf.stars_min == 2 ? "★★ and up" : "★★★"); sheet_row(k, x, ry, w, rh, "Stars", v); break;
-      case F_ALBUM: sheet_row(k, x, ry, w, rh, "Album", ALBUMS[lf.album]); break;
-      case F_COLL: sheet_row(k, x, ry, w, rh, "Collection", lf.coll[0] ? lf.coll : "All"); break;
-      case F_SIZE: sheet_row(k, x, ry, w, rh, "Card size", SIZES[lf.size]); break;
-      case F_TAGS: sheet_row(k, x, ry, w, rh, "Tags of these", "›"); break;
-      case F_SAVED: snprintf(v, sizeof v, "%s", nsaved_f ? "‹ choose ›" : "none yet"); sheet_row(k, x, ry, w, rh, "Saved filters", v); break;
-      case F_SAVE: sheet_row(k, x, ry, w, rh, "Save these filters…", ""); break;
-      case F_RESET: sheet_row(k, x, ry, w, rh, "Clear all filters", ""); break;
+      case F_SEARCH: sheet_row_i(k, x, ry, w, rh, "search", "Search", query[0] ? query : "tags, -not, ~any, artist:*"); break;
+      case F_KIND: sheet_row_i(k, x, ry, w, rh, "photos", "Show", KIND4[cfg.kind & 3]); break;
+      case F_NSFW: if (lf.nsfw_max) snprintf(v, sizeof v, "up to %d", lf.nsfw_max); else snprintf(v, sizeof v, "Any"); sheet_row_i(k, x, ry, w, rh, "flame", "NSFW level", v); break;
+      case F_STARS: snprintf(v, sizeof v, "%s", lf.stars_min == 0 ? "Any" : lf.stars_min == 1 ? "★ and up" : lf.stars_min == 2 ? "★★ and up" : "★★★"); sheet_row_i(k, x, ry, w, rh, "star", "Stars", v); break;
+      case F_ALBUM: sheet_row_i(k, x, ry, w, rh, "album", "Album", ALBUMS[lf.album]); break;
+      case F_COLL: sheet_row_i(k, x, ry, w, rh, "stack", "Collection", lf.coll[0] ? lf.coll : "All"); break;
+      case F_SIZE: sheet_row_i(k, x, ry, w, rh, "grid", "Card size", SIZES[lf.size]); break;
+      case F_TAGS: sheet_row_i(k, x, ry, w, rh, "tag", "Tags of these", "›"); break;
+      case F_SAVED: snprintf(v, sizeof v, "%s", nsaved_f ? "‹ choose ›" : "none yet"); sheet_row_i(k, x, ry, w, rh, "bookmark", "Saved filters", v); break;
+      case F_SAVE: sheet_row_i(k, x, ry, w, rh, "save", "Save these filters…", ""); break;
+      case F_RESET: sheet_row_i(k, x, ry, w, rh, "eraser", "Clear all filters", ""); break;
     }
   }
   int d = sheet_nav(F_N);
