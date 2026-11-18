@@ -216,7 +216,16 @@ search of 10 minutes and longer), R34V Longest (Rule34Video's longest)) gets two
 only its link (□), **↓ Offline** downloads it into the vault (START; asked while it's still coming, the
 save page opens once it's all here). A comic's page has the same two (□ and △). The **Favourites**
 screen (the ♥ in the Library's Videos and Comics modes) lists them, a tab each: Play or Read, Make
-available offline, Remove (`src/favs.c`, `ux0:data/LWDV00001/favorites.tsv`).
+available offline, Remove (`src/favs.c`, `ux0:data/LWDV00001/favorites.tsv`). Signed in to Google
+Drive, the list is **shared both ways** by every Vita on the same Google account: when the screen
+opens, with its ↻ button or SELECT, and after each vault sync. It's kept as `favorites.tsv` in a
+**Lewd Vault (Vita)** folder of its own in Drive (not in the vault's folder: the vault's format doesn't
+change), merged with the list both last agreed on (`src/favmerge.c`): one added on either side is
+kept, one removed on either side goes.
+
+**Picking up where you left off.** A Browser video closed more than 10 seconds in (and more than 10
+from its end) starts there next time (`ux0:data/LWDV00001/web_resume.tsv`, by the post's address, the
+last 200); while it's still downloading, once that far has come.
 
 **Offline copies are 480p.** The long-form sources' files are 480p already. A booru keeps only its
 original: when that's bigger and Settings › Video conversion is turned on (it starts off; with it
@@ -286,14 +295,17 @@ debug build talks to it when `ux0:data/LWDV00001/debug_drive.txt` holds its addr
 
 - Pictures: WebP, JPEG, PNG (decoded at screen size; zoom goes to 1920 px).
 - Videos: **MP4/M4V/MOV** (H.264) play in the Vita's hardware decoder, through sceAvPlayer.
-  **WebM/MKV** (VP8/VP9 with Opus/Vorbis/AAC sound) play in software: up to about 480p smoothly;
+  **MKV and AVI with H.264** are read by FFmpeg and decoded by the same hardware (sceAvcdec, as the
+  open-source Vita players do it). **WebM/MKV** (VP8/VP9) and **MPEG-4 Part 2 / H.263** (DivX/Xvid
+  AVIs, old 3GPs) play in software, with Opus/Vorbis/AAC/MP3 sound: up to about 480p smoothly;
   bigger VP9 is more than one Cortex-A9 core can decode in time. GIFs and videos the Vita can't play
   show their preview clip (`_app/clips`).
 - An Untraceable vault's files, videos included, are decrypted as they're read and never written
-  out plain.
+  out plain. Copies saved for offline go into it encrypted; a Browser video that plays while it
+  downloads has to be a plain file on the card, so with an Untraceable vault open it's deleted as
+  soon as nothing uses it (its view closed, the app put away, the vault locked).
 
-Not on the Vita: editing or deleting items, adding your own files, Reddit/Bing/video sites, Chat,
-Google Drive sync (copy the folder instead).
+Not on the Vita: adding your own files, Reddit/Bing, Chat.
 
 ## Building it
 
@@ -470,7 +482,9 @@ going through pictures (how long each takes to be sharp), the Browser (first pag
 scrolling), the video browser, Comics (a MangaDex list, book, chapters, pages), webtoon strips (cut
 times, memory held), memory (every part made to give its memory back, then visited again), the
 network (every source asked once: answer, time, size), the memory card (16 MB written and read, the
-vault's files read) and a stress run (five tours of every screen, memory after each). The app drives
+vault's files read), video formats (sample clips in the VPK: H.264 in MKV and AVI, MPEG-4 AVI, VP9
+WebM, each opened and its pictures a second counted), Google Drive (signed in: the Favourites both
+ways and a small report up) and a stress run (five tours of every screen, memory after each). The app drives
 itself through the real screens; ○ and △ together stop a test. The settings are put back after.
 
 Each run writes a report to `ux0:data/LWDV00001/reports/`: the console (firmware, model, clocks,
@@ -481,7 +495,8 @@ work or the drawing was the cause) and the log's last lines. The live numbers go
 Reports can be read from a PC on the same Wi-Fi: open the app's Wi-Fi transfer page and go to
 `/reports`. With a web address in `ux0:data/LWDV00001/report_url.txt` (a Discord webhook, or anything
 that takes a POST) each report is also sent there as it's written; the address stays on the card,
-never in the repository.
+never in the repository. Signed in to Google Drive (Settings › Google Drive in the app), each report
+also goes up to **Lewd Vault (Vita) › Test reports** in your Drive.
 
 Crashes: where the app is (the test, its step, the screen) is kept in `testkit_marker.txt` as it
 goes, and the previous run's log is kept as `log-prev.txt`. A run that ended without saying it was put
@@ -506,6 +521,7 @@ system's own dumps in `ux0:data`, the last 200 lines of its log), and sent if th
 | `src/discover.c`, `tests/discover/` | The source finder's readers of the booru lists, and saved copies of those lists |
 | `tools/make-ui-icons.mjs` | The tab bar's and buttons' icons (`ui/`) |
 | `src/drive.c`, `src/drive_ui.c` | Google Drive: the sign-in, the sync, its screen |
+| `src/favmerge.c` | Two-way Favourites: two lists and the last agreed one made one (tested on the PC) |
 | `src/third_party/qrcodegen.*` | Project Nayuki's QR code generator (MIT, its notice in the file) |
 | `src/vault.c` | `index.csv` / `views.csv`, finding files, thumbnails (packs too) |
 | `src/lvcrypt.c` | The Untraceable format: SHA-256, PBKDF2, ChaCha20, "LVX1" files |
