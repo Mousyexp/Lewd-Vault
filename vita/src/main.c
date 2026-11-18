@@ -296,6 +296,8 @@ static void text_fit(int x, int y, unsigned col, int size, const char *s, int ma
   text(x, y, col, size, b);
 }
 static void text_center(int cx, int y, unsigned col, int size, const char *s) { text(cx - text_w(size, s) / 2, y, col, size, s); }
+// the ○ button, as a hint: one ring (the font's own ○, nothing behind it)
+static void btn_hint_circle(int cx, int cy, unsigned col) { text_center(cx, cy + 5, col, 14, "\u25cb"); }
 
 // Circles and round corners from one small anti-aliased disc texture: a single quad each, where
 // vita2d's own filled circle is a fan of 100 triangles out of its per-frame vertex pool (a busy
@@ -324,7 +326,51 @@ static void circle(float cx, float cy, float r, unsigned c) {
   float s = r * 2 / DISC;
   vita2d_draw_texture_tint_scale(disc, cx - r, cy - r, s, s, c);
 }
+// The squircle's corner: a superellipse (|x|^5 + |y|^5 = 1) quarter, the continuous curve of iOS's
+// buttons, where a circle's quarter meets the straight edge with a corner you can see.
+static vita2d_texture *sqdisc;
+static void make_sqdisc(void) {
+  sqdisc = tex_new(DISC, DISC);
+  if (!sqdisc) return;
+  uint8_t *d = vita2d_texture_get_datap(sqdisc);
+  unsigned stride = vita2d_texture_get_stride(sqdisc);
+  const float R = DISC / 2.0f;
+  for (int y = 0; y < DISC; y++)
+    for (int x = 0; x < DISC; x++) {
+      // (4 x 4 samples a pixel: a smooth edge)
+      int in = 0;
+      for (int sy = 0; sy < 4; sy++)
+        for (int sx = 0; sx < 4; sx++) {
+          float dx = fabsf(x + (sx + 0.5f) / 4 - R) / R, dy = fabsf(y + (sy + 0.5f) / 4 - R) / R;
+          in += powf(dx, 5) + powf(dy, 5) <= 1;
+        }
+      uint8_t *p = d + y * stride + x * 4;
+      p[0] = p[1] = p[2] = 255;
+      p[3] = (uint8_t)(in * 255 / 16);
+    }
+  vita2d_texture_set_filters(sqdisc, SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
+}
+// A rounded rectangle with circular corners: the tab bar's pill and its bubble, which are round
+static void rrect_round(float x, float y, float w, float h, float r, unsigned c);
+// A rounded rectangle, its corners squircles. A pill (a chip, a button rounded right round) is made a
+// squircle-cornered box: it reads as the box you can press, its corners no longer cut away.
 static void rrect(float x, float y, float w, float h, float r, unsigned c) {
+  if (r * 2 >= h - 0.5f && w > h * 1.25f && h >= 16) r = h * 0.34f;
+  if (!sqdisc) { rrect_round(x, y, w, h, r, c); return; }
+  DRAW_GUARD(x, y, w, h, r);
+  if (r * 2 > h) r = h / 2;
+  if (r * 2 > w) r = w / 2;
+  if (r < 1) { vita2d_draw_rectangle(x, y, w, h, c); return; }
+  vita2d_draw_rectangle(x + r, y, w - 2 * r, h, c);
+  vita2d_draw_rectangle(x, y + r, r, h - 2 * r, c);
+  vita2d_draw_rectangle(x + w - r, y + r, r, h - 2 * r, c);
+  float s = r / (DISC / 2.0f), q = DISC / 2.0f;
+  vita2d_draw_texture_tint_part_scale(sqdisc, x, y, 0, 0, q, q, s, s, c);
+  vita2d_draw_texture_tint_part_scale(sqdisc, x + w - r, y, q, 0, q, q, s, s, c);
+  vita2d_draw_texture_tint_part_scale(sqdisc, x, y + h - r, 0, q, q, q, s, s, c);
+  vita2d_draw_texture_tint_part_scale(sqdisc, x + w - r, y + h - r, q, q, q, q, s, s, c);
+}
+static void rrect_round(float x, float y, float w, float h, float r, unsigned c) {
   DRAW_GUARD(x, y, w, h, r);
   if (r * 2 > h) r = h / 2;
   if (r * 2 > w) r = w / 2;
@@ -1679,6 +1725,14 @@ static int wf_return;      // (wifi.c: the screen to go back to,
 static char wf_last[160];  //  and the last file, or why it stopped)
 // ----- the library -----
 static void open_viewer(int k, int slideshow);
+static int show_pool; // (the slideshow's own list is the one shown: lib.c, mode_pass)
+// The slideshow's list made the one shown; returns where item (an item number) is in it, else 0
+static int show_pool_on(int item) {
+  show_pool = 1;
+  refilter();
+  for (int k = 0; k < nshown; k++) if (shown[k] == item) return k;
+  return 0;
+}
 // ---------- the app's icons (vita/ui/*.png, tools/make-ui-icons.mjs): white glyphs, tinted when drawn ----------
 // (found by a hash of the name: one or two compares, not a walk past every icon before it; room for
 //  128, there are fifty-odd)
@@ -1708,6 +1762,23 @@ static void icon(const char *name, float cx, float cy, unsigned col) {
 }
 
 // ---------- the tab bar: a pill floating over the bottom, as on iOS ----------
+// The chosen tab's bubble: glass with the accent's colour in it. A soft glow round it, a light rim,
+// its body, a sheen across its top half and a bright glint near the top: light on a curved surface.
+static unsigned mix_col(unsigned a, unsigned b, float t) { // (a to b; alpha from a)
+  int r = (int)((a & 255) * (1 - t) + (b & 255) * t), g = (int)(((a >> 8) & 255) * (1 - t) + ((b >> 8) & 255) * t);
+  int bl = (int)(((a >> 16) & 255) * (1 - t) + ((b >> 16) & 255) * t);
+  return RGBA(r, g, bl, (a >> 24) & 255);
+}
+static void tab_bubble(float x, float y, float w, float h) {
+  float r = h / 2;
+  rrect_round(x - 3, y - 2, w + 6, h + 5, r + 3, with_alpha(ACC, 34));                    // (the glow)
+  rrect_round(x, y, w, h, r, with_alpha(mix_col(SURF2, TEXT, 0.55f), 255));               // (the rim)
+  rrect_round(x + 1.5f, y + 1.5f, w - 3, h - 3, r - 1.5f, mix_col(with_alpha(SURF2, 255), ACC, 0.42f)); // (the body)
+  rrect_round(x + 1.5f, y + h * 0.55f, w - 3, h * 0.45f - 1.5f, r - 1.5f, with_alpha(ACC, 40)); // (deeper below)
+  rrect_round(x + 4, y + 2.5f, w - 8, h * 0.46f, h * 0.23f, with_alpha(TEXT, 30));       // (the sheen)
+  rrect_round(x + 4, y + 2.5f, w - 8, h * 0.22f, h * 0.11f, with_alpha(TEXT, 22));
+  rrect_round(x + w * 0.16f, y + 3.5f, w * 0.30f, 3, 1.5f, with_alpha(TEXT, 120));          // (the glint)
+}
 // (the screens leave BAR at the bottom free when scrolled to the end; meanwhile they show through
 // around the pill)
 #define PILL_W 600
@@ -1720,12 +1791,14 @@ static void favs_open(int tab); // (favs.c)
 static void ac_build(const char *q); // (web.c)
 static void draw_onboarding(void);
 static int tab_prev = -1; static unsigned tab_at; // (the tab switched from, and when: the slide)
+static int stats_back = S_SETTINGS; // (where ○ goes from Your stats: the Library's corner, or Settings)
 static int tab_of_screen(void) {
   switch (screen) {
     case S_LIBRARY: case S_FAVS: return 0;
     case S_WEB: case S_VIDEOS: case S_MANGA: return 1;
     case S_SHOW: return 2;
-    case S_SETTINGS: case S_DRIVE: case S_WIFI: case S_STATS: case S_HEALTH: return 3;
+    case S_STATS: return stats_back == S_LIBRARY ? 0 : 3;
+    case S_SETTINGS: case S_DRIVE: case S_WIFI: case S_HEALTH: return 3;
   }
   return -1;
 }
@@ -1760,12 +1833,12 @@ static void draw_bar(void) {
 #define PILL_W pw
 #define PILL_H ph
   // a soft shadow, the glassy body, a light rim along its top
-  rrect(px - 4, py + 2, PILL_W + 8, PILL_H + 8, (PILL_H + 8) / 2, RGBA(0, 0, 0, 50));
-  rrect(px - 1, py + 3, PILL_W + 2, PILL_H + 2, (PILL_H + 2) / 2, RGBA(0, 0, 0, 70));
-  rrect(px, py, PILL_W, PILL_H, PILL_H / 2, with_alpha(SURF2, 238));
-  rrect(px + 2, py + 1, PILL_W - 4, PILL_H / 2, PILL_H / 2 - 2, with_alpha(TEXT, 12));
+  rrect_round(px - 4, py + 2, PILL_W + 8, PILL_H + 8, (PILL_H + 8) / 2, RGBA(0, 0, 0, 50));
+  rrect_round(px - 1, py + 3, PILL_W + 2, PILL_H + 2, (PILL_H + 2) / 2, RGBA(0, 0, 0, 70));
+  rrect_round(px, py, PILL_W, PILL_H, PILL_H / 2, with_alpha(SURF2, 238));
+  rrect_round(px + 2, py + 1, PILL_W - 4, PILL_H / 2, PILL_H / 2 - 2, with_alpha(TEXT, 12));
   static const char *labels[] = {"Library", "Browser", "Slideshow", "Settings"};
-  static const char *icons[][2] = {{"photos", "photos_fill"}, {"compass", "compass_fill"}, {"play", "play_fill"}, {"gear", "gear_fill"}};
+  static const char *icons[][2] = {{"library", "library_fill"}, {"compass", "compass_fill"}, {"play", "play_fill"}, {"gear", "gear_fill"}};
   int sel_tab = tab_of_screen();
   // the selected tab's capsule morphs to it: its leading edge goes first, the other follows, so it
   // stretches on the way and settles to its size there
@@ -1777,7 +1850,7 @@ static void draw_bar(void) {
     pill_sel_r += (tr - pill_sel_r) * (right ? 0.38f : 0.18f);
     if (fabsf(tl - pill_sel_x) < 0.3f) pill_sel_x = tl;
     if (fabsf(tr - pill_sel_r) < 0.3f) pill_sel_r = tr;
-    rrect(pill_sel_x, py + 5, pill_sel_r - pill_sel_x, PILL_H - 10, (PILL_H - 10) / 2, with_alpha(TEXT, 26));
+    tab_bubble(pill_sel_x, py + 5, pill_sel_r - pill_sel_x, PILL_H - 10);
   }
   if (sel_tab == 0 && screen == S_LIBRARY) lib_new = 0;
   // (held on a tab: its shortcut, Library: the Comics shelf, Browser: Favourites)
@@ -1793,7 +1866,7 @@ static void draw_bar(void) {
   for (int k = 0; k < 4; k++) {
     int cx = px + k * tw + tw / 2;
     int on = k == sel_tab;
-    unsigned c = on ? ACC : with_alpha(TEXT, 200);
+    unsigned c = on ? TEXT : with_alpha(TEXT, 200); // (the chosen one white on its bubble)
     icon(icons[k][on], cx, t > 0.5f ? py + PILL_H / 2 : py + 23, c);
     if (t < 0.5f) text_center(cx, py + PILL_H - 9, with_alpha(c, (int)(255 * (1 - 2 * t))), 12, labels[k]);
     int iy = t > 0.5f ? py + PILL_H / 2 : py + 23;
@@ -1819,7 +1892,7 @@ static void draw_bar(void) {
     }
     // (the button that leads here: ○ goes round Library, Browser, Slideshow, Settings)
     int next = sel_tab >= 0 && k == (sel_tab + 1) % 4 && screen != S_DRIVE && screen != S_WIFI && screen != S_STATS && screen != S_HEALTH;
-    if (next && t < 0.5f) { circle(cx + 26, py + 14, 8, with_alpha(TEXT, 36)); text_center(cx + 26, py + 19, DIM, 11, "○"); }
+    if (next && t < 0.5f) btn_hint_circle(cx + 26, py + 14, with_alpha(TEXT, 110)); // (one ring: the ○ button)
     // (the whole quarter of the pill, and a little round it, is the tab's)
     if (in.tap && in.tap_x >= px + k * tw - (k == 0 ? 20 : 0) && in.tap_x < px + (k + 1) * tw + (k == 3 ? 20 : 0) && in.tap_y >= py - 10) {
       sfx(SFX_TAB);
@@ -1918,6 +1991,23 @@ static int online_button(int right) {
   return 44;
 }
 
+// The Library's corner: a quarter circle in the screen's top right, Your stats behind it (its bars),
+// and the connection's light on it, green or red, so the corner does both in the room of one button
+static int stats_corner(void) {
+  const float R = 58;
+  int y0 = HDR_Y - 2; // (the header's top: tucked away with it)
+  int on = online_now();
+  circle(W, y0, R + 2, with_alpha(BG, 200));
+  circle(W, y0, R, SURF2);
+  circle(W, y0, R - 1, mix_col(with_alpha(SURF2, 255), ACC, 0.18f));
+  icon("stats", W - 22, y0 + 22, TEXT);
+  circle(W - 41, y0 + 9, 3, on ? RGBA(90, 214, 120, 255) : RGBA(240, 84, 84, 255));
+  // (its own touch: the corner, a little more than drawn)
+  if (in.tap && in.tap_x >= W - R - 4 && in.tap_y < y0 + R + 4 && hypotf(W - in.tap_x, in.tap_y - y0) < R + 8) {
+    sfx(SFX_OPEN); stats_back = S_LIBRARY; screen = S_STATS; in.tap = 0;
+  }
+  return (int)R + 2;
+}
 static int cats_x; // (where the categories' list opens)
 static void favs_open(int tab); // (favs.c)
 #include "lib.c"
@@ -2291,7 +2381,7 @@ static void draw_library(void) {
   int nf = (cfg.kind != 0) + (lf.nsfw_max != 0) + (lf.stars_min != 0) + (lf.album != 0) + (lf.coll[0] != 0 && !book_inside);
   if (nf) snprintf(kl, sizeof kl, "Filters \u00b7 %d", nf); else snprintf(kl, sizeof kl, "Filters");
   int hb;
-  sx -= online_button(sx) + 8;
+  sx -= stats_corner() + 2; // (Your stats, and the connection's light, in the corner)
   // (Videos and Comics: their favourites, kept as links)
   if (!book_inside && (cfg.lmode == 2 || cfg.lmode == 3)) {
     int x = sx - 44, y = HDR_Y;
@@ -2339,7 +2429,10 @@ static void draw_library(void) {
     if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); selecting = 0; if (picked) memset(picked, 0, vault.n + 1); npicked = 0; in.pressed &= ~SCE_CTRL_CIRCLE; }
   } else {
     if (open_now && nshown) lib_open(sel);
-    if ((in.pressed & SCE_CTRL_START) && nshown && !book_shelf) { sfx(SFX_SLIDESHOW); open_viewer(sel, 1); }
+    if ((in.pressed & SCE_CTRL_START) && nshown && !book_shelf) {
+      int k = show_pool_on(sel < nshown ? shown[sel] : -1); // (the slideshow's own list: pictures, GIFs, short clips)
+      if (nshown) { sfx(SFX_SLIDESHOW); open_viewer(k, 1); } else { show_pool = 0; refilter(); sfx(SFX_ERROR); say("No pictures, GIFs or short clips to show"); }
+    }
     if ((in.pressed & SCE_CTRL_CIRCLE) && book_inside) { sfx(SFX_BACK); close_book(); }
     else if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_WEB; } // (○ goes round the tabs: Library, Browser, Settings)
     // a flick across the grid (sideways, not from the right edge): the next or previous mode
@@ -2927,7 +3020,11 @@ static void draw_viewer(void) {
   if (in.pressed & SCE_CTRL_CIRCLE) { if (details) details = 0; else { close_viewer(); return; } }
   if (in.pressed & SCE_CTRL_TRIANGLE) { sfx(details ? SFX_CLOSE : SFX_OPEN); details = !details; }
   if (in.pressed & SCE_CTRL_SQUARE) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); chrome_until = frame_no + 120; }
-  if (in.pressed & SCE_CTRL_START) { sfx(SFX_SLIDESHOW); slideshow = !slideshow; slide_at = frame_no; say(slideshow ? "Slideshow" : "Slideshow stopped"); }
+  if (in.pressed & SCE_CTRL_START) {
+    // (a slideshow goes through its own list: from here, if this one's in it, else from its start)
+    if (!slideshow && !show_pool) { int was = shown[vk], k = show_pool_on(was); if (!nshown) { show_pool = 0; refilter(); say("No pictures, GIFs or short clips to show"); return; } if (shown[k] != was) { show_item(k); } else vk = k; }
+    sfx(SFX_SLIDESHOW); slideshow = !slideshow; slide_at = frame_no; say(slideshow ? "Slideshow" : "Slideshow stopped");
+  }
   if ((in.pressed & SCE_CTRL_CROSS) && !details) {
     if (vid && !vid_clip) lv_video_pause(vid, !lv_video_paused(vid));
     else { zoom = zoom > 1.5f ? 1 : 2.5f; pan_x = pan_y = 0; }
@@ -3438,7 +3535,7 @@ static void draw_settings(void) {
           else say("Put a second vault on the card for the decoy to open");
         }
         break;
-      case ST_STATS: if (cross) { sfx(SFX_OPEN); screen = S_STATS; return; } break;
+      case ST_STATS: if (cross) { sfx(SFX_OPEN); stats_back = S_SETTINGS; screen = S_STATS; return; } break;
       case ST_WIFI: if (cross) { sfx(SFX_OPEN); wf_return = S_SETTINGS; wf_last[0] = 0; screen = S_WIFI; return; } break;
       case ST_VAULT: if (cross) { views_save_async(); resume_save(); find_vaults(); screen = S_PICK; return; } break;
       case ST_THEME:
@@ -3895,6 +3992,7 @@ int main(void) {
   // (a bigger per-frame vertex pool than vita2d's 1 MB: room to spare on the busiest screen)
   vita2d_init_advanced(POOL_SIZE);
   make_disc();
+  make_sqdisc();
   make_ring();
   splash_tex = vita2d_load_PNG_file("app0:splash.png");
   sfx_init(); // (no sounds read yet: the first one played reads the pack chosen, below)
@@ -4092,6 +4190,14 @@ int main(void) {
         if (was == S_MANGA && now != S_MANGA) mg_drop_covers();
         if (was == S_VIDEOS && now != S_VIDEOS) vb_drop_wants();
         if ((was == S_FAVS || was == S_VIDEOS) && now != S_FAVS && now != S_VIDEOS) fav_drop_wants();
+        // (the slideshow's list on its page and through a slideshow; the Library's own back after)
+        if (loaded_vault && now == S_SHOW && !show_pool) { show_pool = 1; refilter(); }
+        else if (loaded_vault && show_pool && now != S_SHOW && now != S_VIEWER) {
+          int keep = sel >= 0 && sel < nshown ? shown[sel] : -1; // (the Library's choice kept on the same one)
+          show_pool = 0; refilter();
+          for (int k = 0; k < nshown; k++) if (shown[k] == keep) { sel = k; break; }
+          if (sel >= nshown) sel = nshown ? nshown - 1 : 0;
+        }
       }
       last_screen = screen;
     }

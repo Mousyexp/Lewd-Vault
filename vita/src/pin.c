@@ -232,6 +232,6 @@ static void draw_stats(void) {
     snprintf(b, sizeof b, "Slideshow session: level %d reached", ss.st_hi[stage_now()]);
     text(30, H - BAR - 14, FAINT, 14, b);
   }
-  if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = S_SETTINGS; }
+  if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = stats_back; }
   draw_bar();
 }

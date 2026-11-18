@@ -112,7 +112,16 @@ static void comics_scan(void) {
   comics_covers(); // (once a change of the vault, not each filter)
 }
 static int is_comic(int i) { return comic_flag && i < comic_n && comic_flag[i]; }
+// The slideshow's own list: what the Pictures tab has (pictures and GIFs, no comic pages) and clips of
+// half a minute or less; not longer videos, not books. On while the Slideshow page or a slideshow is up.
+#define SHOW_CLIP_SECS 30
 static int mode_pass(int i) {
+  if (show_pool) {
+    if (is_comic(i)) return 0;
+    if (vault.hot[i].kind != LV_VIDEO) return 1;
+    double d = vault.items[i].duration;
+    return d > 0 && d <= SHOW_CLIP_SECS;
+  }
   switch (cfg.lmode) {
     case 0: return !is_comic(i) || comic_flag[i] == 2; // (All: a book once, as its cover; its pages in Comics)
     case 1: return vault.hot[i].kind != LV_VIDEO && !is_comic(i);
@@ -175,7 +184,7 @@ static int nbook_count;
 static int lib_books(void) {
   comics_scan();
   book_shelf = book_inside = 0;
-  if (cfg.lmode != 3) return 0;
+  if (cfg.lmode != 3 || show_pool) return 0;
   int m = 0;
   for (int i = 0; i < vault.n; i++) {
     if (!is_comic(i)) continue;

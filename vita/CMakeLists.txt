@@ -158,6 +158,9 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE ui/more.png ui/more.png
   FILE ui/photos.png ui/photos.png
   FILE ui/photos_fill.png ui/photos_fill.png
+  FILE ui/library.png ui/library.png
+  FILE ui/library_fill.png ui/library_fill.png
+  FILE ui/stats.png ui/stats.png
   FILE ui/play.png ui/play.png
   FILE ui/play_fill.png ui/play_fill.png
   FILE ui/plus.png ui/plus.png

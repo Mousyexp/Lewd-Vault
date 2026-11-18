@@ -29,6 +29,9 @@ const ICONS = {
   // the tab bar
   photos: `<rect x="5.5" y="3.5" width="15" height="12" rx="2.6" ${S} opacity=".55"/><rect x="2.5" y="7" width="16" height="13" rx="2.8" ${S}/><path d="M5 17.5 l4 -4.2 l3 3 l2 -2 l3 3.2" ${S}/><circle cx="8" cy="11.2" r="1.3" ${F}/>`,
   photos_fill: `<rect x="5.5" y="3.5" width="15" height="12" rx="2.6" ${F} opacity=".5"/><path d="M5.3 7 h10.9 a2.8 2.8 0 0 1 2.8 2.8 v7.4 a2.8 2.8 0 0 1 -2.8 2.8 h-10.9 a2.8 2.8 0 0 1 -2.8 -2.8 v-7.4 a2.8 2.8 0 0 1 2.8 -2.8 Z M5 17.5 l4 -4.2 l3 3 l2 -2 l3 3.2 Z M8 9.9 a1.3 1.3 0 1 0 0.01 0 Z" ${F} fill-rule="evenodd"/>`,
+  // the Library's tab: three cards fanned out, a heart on the front one (the vault's own)
+  library: `<path d="M10.6 4.2 L18.4 3.1 a2.4 2.4 0 0 1 2.7 2 l1.5 10.6 a2.4 2.4 0 0 1 -2 2.7 L18.6 18.7" ${S} opacity=".6"/><rect x="3" y="6.5" width="13.6" height="15" rx="2.8" ${S}/><path d="M9.8 18 C7.6 16.5 6.8 15.4 6.8 14.2 C6.8 13.3 7.5 12.6 8.3 12.6 C8.9 12.6 9.4 12.9 9.8 13.4 C10.2 12.9 10.7 12.6 11.3 12.6 C12.1 12.6 12.8 13.3 12.8 14.2 C12.8 15.4 12 16.5 9.8 18 Z" ${F}/>`,
+  library_fill: `<path d="M10.6 4.2 L18.4 3.1 a2.4 2.4 0 0 1 2.7 2 l1.5 10.6 a2.4 2.4 0 0 1 -2 2.7 L18.6 18.7" ${S} opacity=".6"/><path d="M5.8 6.5 h8 a2.8 2.8 0 0 1 2.8 2.8 v9.4 a2.8 2.8 0 0 1 -2.8 2.8 h-8 a2.8 2.8 0 0 1 -2.8 -2.8 v-9.4 a2.8 2.8 0 0 1 2.8 -2.8 Z M9.8 18 C7.6 16.5 6.8 15.4 6.8 14.2 C6.8 13.3 7.5 12.6 8.3 12.6 C8.9 12.6 9.4 12.9 9.8 13.4 C10.2 12.9 10.7 12.6 11.3 12.6 C12.1 12.6 12.8 13.3 12.8 14.2 C12.8 15.4 12 16.5 9.8 18 Z" ${F} fill-rule="evenodd"/>`,
   compass: `<circle cx="12" cy="12" r="9.3" ${S}/><path d="M15.6 8.4 L13.3 13.3 L8.4 15.6 L10.7 10.7 Z" ${S}/><circle cx="12" cy="12" r="1" ${F}/>`,
   compass_fill: `<path d="M12 2.7 a9.3 9.3 0 1 0 0.01 0 Z M15.6 8.4 L13.3 13.3 L8.4 15.6 L10.7 10.7 Z" ${F} fill-rule="evenodd"/><path d="M15.6 8.4 L13.3 13.3 L10.7 10.7 Z" ${F} opacity=".45"/>`,
   play: `<rect x="2.5" y="5" width="19" height="14" rx="3.4" ${S}/><path d="M10.2 9.2 v5.6 l4.8 -2.8 Z" ${F}/>`,
@@ -80,9 +83,11 @@ const ICONS = {
   touchpad: `<rect x="3" y="5" width="18" height="14" rx="4" ${S}/><circle cx="9" cy="12" r="1.7" ${F}/><circle cx="15" cy="12" r="1.7" ${F}/>`,
   // the Library's "All": a bento of tiles (one tall, two small) with a sparkle in the tall one
   all: `<path d="M5.4 3 h4.2 a2.6 2.6 0 0 1 2.6 2.6 v12.8 a2.6 2.6 0 0 1 -2.6 2.6 h-4.2 a2.6 2.6 0 0 1 -2.6 -2.6 v-12.8 a2.6 2.6 0 0 1 2.6 -2.6 Z M7.5 6.8 Q8 11.3 10.6 12 Q8 12.7 7.5 17.2 Q7 12.7 4.4 12 Q7 11.3 7.5 6.8 Z" ${F} fill-rule="evenodd"/><rect x="15" y="3.4" width="6" height="7" rx="2.1" ${S}/><rect x="15" y="13.6" width="6" height="7" rx="2.1" ${S}/>`,
+  // the Library's stats corner: three bars rising
+  stats: `<path d="M5 20 V13.5 M12 20 V8.5 M19 20 V4" ${S} stroke-width="2.6"/>`,
   image: `<rect x="3" y="4.5" width="18" height="15" rx="2.8" ${S}/><path d="M5.5 17 l4.5 -4.6 l3.2 3.2 l2.2 -2.2 l3.2 3.4" ${S}/><circle cx="8.6" cy="9.2" r="1.4" ${F}/>`,
 };
-const TAB = ['photos', 'photos_fill', 'compass', 'compass_fill', 'play', 'play_fill', 'gear', 'gear_fill'];
+const TAB = ['library', 'library_fill', 'photos', 'photos_fill', 'compass', 'compass_fill', 'play', 'play_fill', 'gear', 'gear_fill'];
 
 const browser = await chromium.launch();
 const page = await browser.newPage();

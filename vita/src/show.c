@@ -372,7 +372,7 @@ static void draw_show_plan(void) {
   // what the kind is, in a few words, and how much there is
   {
     static const char *const ABOUT[] = {
-      "Everything in the Library, one after another, at one pace.",
+      "The Library's pictures and GIFs, and clips of half a minute or less, one after another, at one pace.",
       "Starts low and climbs the levels slowly: 8 minutes a level, slides from 10 s down to 3 s, fading and drifting.",
       "Climbs the levels steadily: 5 minutes a level, slides from 8 s down to 1.5 s.",
       "Up the levels quickly: 2 minutes a level, slides from 4 s down to under a second.",
@@ -452,7 +452,7 @@ static void draw_show_plan(void) {
   else if (fid == R_PACE) text(gx, H - BAR - 2, FAINT, 13, "←→ the first slides  ·  hold R: the last ones");
   if ((in.pressed & SCE_CTRL_SQUARE) && ss.on) { sfx(SFX_CLOSE); session_end("Session ended"); }
   if ((in.pressed & SCE_CTRL_CROSS) || (in.pressed & SCE_CTRL_START) || start) {
-    if (!nshown) { sfx(SFX_ERROR); say("Nothing in the Library to show"); }
+    if (!nshown) { sfx(SFX_ERROR); say("No pictures, GIFs or short clips to show"); }
     else if (levels) {
       if (!ss.on) session_start();
       if (ss.on) {
