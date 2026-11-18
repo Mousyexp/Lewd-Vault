@@ -431,7 +431,7 @@ static void *sw_decode_main(void *arg) {
     if (v->paused) {
       // (the wall clock stops with the picture)
       int64_t t = sw_clock(v);
-      while (v->paused && v->run && v->seek_to < 0) sceKernelDelayThread(10000);
+      while (v->paused && v->run && v->seek_to < 0) sceKernelDelayThread(40000); // (paused: a look 25 times a second is plenty)
       v->clock_base_ms = t;
       v->wall_start = now_us();
       v->played = 0;
@@ -441,7 +441,7 @@ static void *sw_decode_main(void *arg) {
     if (r < 0) {
       if (v->loop) { v->seek_to = 0; continue; }
       v->ended = 1;
-      while (v->run && v->seek_to < 0) sceKernelDelayThread(20000);
+      while (v->run && v->seek_to < 0) sceKernelDelayThread(50000); // (at the end: waiting for a seek, unhurried)
       v->ended = 0;
       continue;
     }

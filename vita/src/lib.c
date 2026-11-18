@@ -18,6 +18,8 @@ static unsigned edits_at;       // (an edit waiting to be written: when the last
 static int comic_n = -1; // (the comics' flags are worked out again: an edit can make a page a comic's)
 static void side_set(int open);
 static void edited(void) { edits_at = frame_no ? frame_no : 1; comic_n = -1; }
+// (stars and levels can't make a page a comic's or not: the comics aren't worked out again for them)
+static void edited_plain(void) { edits_at = frame_no ? frame_no : 1; }
 static void save_edits_now(void) {
   if (!vault.index_dirty) return;
   if (index_save_async() != 0) { sfx(SFX_ERROR); say("The changes couldn't be written to the card"); }
@@ -58,6 +60,14 @@ static void lib_prepare(void) {
   gmtime_r(&t, &g);
   strftime(forgotten_key, sizeof forgotten_key, "%Y-%m-%d", &g);
   ROW_H = SIZE_H[lf.size < 0 || lf.size > 2 ? 1 : lf.size];
+}
+
+// The cards made a new size: only laid out again, not filtered and sorted again (the same ones)
+static void relayout(void) {
+  ROW_H = SIZE_H[lf.size < 0 || lf.size > 2 ? 1 : lf.size];
+  if (book_shelf && ROW_H < 220) ROW_H = 220;
+  grid_build(&lgrid, nshown, lib_aspect);
+  lhero_offset(); // (the row's the same: only the grid's place under it)
 }
 
 // ---------- the modes: everything, pictures, videos, comics ----------
@@ -535,7 +545,8 @@ static void draw_filters_sheet(void) {
       case F_SAVE: changed = 0; if ((in.pressed & SCE_CTRL_CROSS) && !ime_open) ime_start(5, "A name for these filters", "", 0); break;
       case F_RESET: cfg.kind = 0; lf.nsfw_max = lf.stars_min = lf.album = 0; lf.coll[0] = 0; query[0] = 0; cat = -1; break;
     }
-    if (changed) { sfx(SFX_TOGGLE); lib_after_change(); scroll = 0; sel = 0; cfg_save(); }
+    if (changed && lsheet_sel == F_SIZE) { sfx(SFX_TOGGLE); relayout(); cfg_save(); } // (a size: laid out again, the same cards)
+    else if (changed) { sfx(SFX_TOGGLE); lib_after_change(); scroll = 0; sel = 0; cfg_save(); }
   }
   // (□ removes the saved filter shown)
   if (lsheet_sel == F_SAVED && (in.pressed & SCE_CTRL_SQUARE) && saved_k >= 0 && saved_k < nsaved_f) {
@@ -781,7 +792,7 @@ static void draw_tags_sheet(void) {
 static void set_int(int i, const char *col, int v) {
   char b[16];
   snprintf(b, sizeof b, "%d", v);
-  if (lv_item_set(&vault, i, col, b) == 0) edited();
+  if (lv_item_set(&vault, i, col, b) == 0) edited_plain(); // (quality and nsfw only, here)
 }
 static void set_category(int i, int d) {
   if (vault.ncats < 1) return;

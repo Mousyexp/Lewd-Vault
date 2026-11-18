@@ -133,7 +133,11 @@ static void preset(int p) {
     case PRE_FAST: so.first = 2; so.minutes = 2; so.s0 = 4; so.s1 = 0.6f; so.fade = 0; so.motion = 0; break;
   }
 }
-static void show_save(void) {
+static unsigned show_dirty_at;
+static void show_write(void);
+static void show_save(void) { show_dirty_at = frame_no ? frame_no : 1; } // (written a second later: main's loop)
+static void show_write(void) {
+  show_dirty_at = 0;
   FILE *f = fopen(DATA "/slideshow.txt.part", "w");
   if (!f) return;
   fprintf(f, "%d %d %d %d %d %d %d %d %d %.2f %.2f %.2f\n", so.preset, so.lo, so.first, so.hi, so.below, so.motion, so.fade, so.sleep, so.lock,
@@ -170,7 +174,13 @@ static int stage_now(void) {
 }
 // The highest level open now (10 with no session, or with the lock off)
 static int unlocked_level(void) { return ss.on && so.lock && ss.nst ? ss.st_hi[stage_now()] : 10; }
-static int is_locked(int i) { return vault.items[i].nsfw > unlocked_level(); }
+static int is_locked(int i) {
+  // (asked for every card every frame: the level open worked out once a frame)
+  static unsigned at = ~0u;
+  static int lvl;
+  if (at != frame_no) { at = frame_no; lvl = unlocked_level(); }
+  return vault.items[i].nsfw > lvl;
+}
 static void show_load(void) {
   FILE *f = fopen(DATA "/slideshow.txt", "r");
   if (!f) return;

@@ -23,10 +23,23 @@ static void draw_qr(const char *text, int x, int y, int size) {
   static uint8_t qr[qrcodegen_BUFFER_LEN_FOR_VERSION(10)];
   static char made[160];
   static int ok;
+  static vita2d_texture *qt; // (the code as a texture, a pixel a module: one quad drawn, not a rectangle per module)
   if (strcmp(made, text)) {
     uint8_t tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(10)];
     ok = qrcodegen_encodeText(text, tmp, qr, qrcodegen_Ecc_MEDIUM, 1, 10, qrcodegen_Mask_AUTO, true);
     snprintf(made, sizeof made, "%s", text);
+    if (qt) { free_later(qt); qt = NULL; }
+    if (ok) {
+      int n = qrcodegen_getSize(qr);
+      qt = vita2d_create_empty_texture(n, n);
+      if (qt) {
+        uint32_t *px = vita2d_texture_get_datap(qt);
+        unsigned st = vita2d_texture_get_stride(qt) / 4;
+        for (int r = 0; r < n; r++)
+          for (int c = 0; c < n; c++) px[r * st + c] = qrcodegen_getModule(qr, c, r) ? RGBA(0, 0, 0, 255) : RGBA(255, 255, 255, 255);
+        vita2d_texture_set_filters(qt, SCE_GXM_TEXTURE_FILTER_POINT, SCE_GXM_TEXTURE_FILTER_POINT); // (sharp squares)
+      }
+    }
   }
   if (!ok) return;
   int n = qrcodegen_getSize(qr);
@@ -34,9 +47,11 @@ static void draw_qr(const char *text, int x, int y, int size) {
   if (m < 1) m = 1;
   int full = m * (n + 8);
   rrect(x, y, full, full, 10, RGBA(255, 255, 255, 255));
-  for (int r = 0; r < n; r++)
-    for (int c = 0; c < n; c++)
-      if (qrcodegen_getModule(qr, c, r)) vita2d_draw_rectangle(x + (c + 4) * m, y + (r + 4) * m, m, m, RGBA(0, 0, 0, 255));
+  if (qt) vita2d_draw_texture_scale(qt, x + 4 * m, y + 4 * m, m, m);
+  else
+    for (int r = 0; r < n; r++)
+      for (int c = 0; c < n; c++)
+        if (qrcodegen_getModule(qr, c, r)) vita2d_draw_rectangle(x + (c + 4) * m, y + (r + 4) * m, m, m, RGBA(0, 0, 0, 255));
 }
 
 // After a sync of the open vault: Drive's copies folded in and the vault read again.

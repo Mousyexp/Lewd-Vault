@@ -78,9 +78,20 @@ static void mg_push(int kind, int a, int b, const char *url) {
   pthread_cond_signal(&mgcv);
   pthread_mutex_unlock(&mgmx);
 }
+// (the Comics tab left: the covers waiting to be fetched dropped, asked again when it's back)
+static void mg_drop_covers(void) {
+  pthread_mutex_lock(&mgmx);
+  int kept = 0;
+  for (int k = 0; k < nmjobs; k++) {
+    if (mjobs[k].kind == MJ_COVER) { if (mg.cstate && mjobs[k].gen == mg_gen && mjobs[k].a >= 0 && mjobs[k].a < mg.nbooks) mg.cstate[mjobs[k].a] = 0; }
+    else mjobs[kept++] = mjobs[k];
+  }
+  nmjobs = kept;
+  pthread_mutex_unlock(&mgmx);
+}
 static void mg_done(MDone *d) {
   pthread_mutex_lock(&mgmx);
-  while (nmdone == 16 && worker_run) { pthread_mutex_unlock(&mgmx); sceKernelDelayThread(5000); pthread_mutex_lock(&mgmx); }
+  while (nmdone == 16 && worker_run) pthread_cond_wait(&mgcv, &mgmx); // (woken when some are taken, not looking every 5 ms)
   mdone[nmdone++] = *d;
   pthread_mutex_unlock(&mgmx);
 }
@@ -509,6 +520,7 @@ static void mg_take(void) {
   memcpy(got, mdone, n * sizeof *got);
   memmove(mdone, mdone + n, (nmdone - n) * sizeof *mdone);
   nmdone -= n;
+  if (n) pthread_cond_broadcast(&mgcv); // (room again: a worker waiting to hand one over carries on)
   pthread_mutex_unlock(&mgmx);
   for (int k = 0; k < n; k++) {
     MDone *d = &got[k];
@@ -592,7 +604,7 @@ static vita2d_texture *mg_cover(int i) {
 }
 static void draw_manga(void) {
   mg_take();
-  vita2d_draw_rectangle(0, 0, W, H, BG);
+  // (the background: the frame is cleared to it already)
   const int cols = 6, gap = 12, x0 = (W - cols * MG_CW - (cols - 1) * gap) / 2;
   int rows = (mg.nbooks + cols - 1) / cols;
   float content = rows * (MG_CH + 52) + 20, view_h = H - TOP - BAR + 40;
@@ -685,7 +697,7 @@ static void draw_manga(void) {
 // ---------- a book ----------
 static void draw_book(void) {
   mg_take();
-  vita2d_draw_rectangle(0, 0, W, H, BG);
+  // (the background: the frame is cleared to it already)
   if (mg.book < 0 || mg.book >= mg.nbooks) { screen = S_MANGA; return; }
   LvBook *b = &mg.books[mg.book];
   // the cover, big, on the left
@@ -806,7 +818,10 @@ static void draw_reader(void) {
     mg_push(MJ_PAGES, mg.book, mg.chapter, url);
   }
   // the page shown and the next two, asked for
-  if (mg.npages) {
+  // (looked at when the page moves, and twice a second: not the queue under its lock every frame)
+  static int last_page = -1;
+  if (mg.npages && (mg.page != last_page || frame_no % 30 == 0)) {
+    last_page = mg.page;
     pthread_mutex_lock(&mgmx);
     int queued = 0;
     for (int k = 0; k < nmjobs; k++) if (mjobs[k].kind == MJ_PAGE) queued++;

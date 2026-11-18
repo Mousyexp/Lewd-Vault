@@ -98,9 +98,14 @@ void sfx_init(void) {
   for (int v = 0; v < VOICES; v++) voices[v].clip = -1;
   sceKernelCreateLwMutex(&mutex_work, "lv_sfx", 0, 0, NULL);
   wake = sceKernelCreateSema("lv_sfx_wake", 0, 0, 1, NULL);
+  ready = 1; // (the mixer, and its audio port, made with the first sound: none while sounds are off)
+}
+static void mixer_start(void) {
+  static int started;
+  if (started) return;
+  started = 1;
   SceUID t = sceKernelCreateThread("lv_sfx", mixer, 0x10000100 - 10, 0x4000, 0, SCE_KERNEL_CPU_MASK_USER_2, NULL);
   if (t >= 0) sceKernelStartThread(t, 0, NULL);
-  ready = 1;
 }
 // Another pack: its sounds loaded, the old ones let go (the mixer held off meanwhile). A pack missing a
 // sound keeps silence for it.
@@ -122,6 +127,7 @@ void sfx_volume(int percent) { volume = percent < 0 ? 0 : percent > 100 ? 100 : 
 void sfx(int id) {
   if (!ready || id < 0 || id >= SFX_COUNT || volume == 0) return;
   if (!clips_loaded) { for (int k = 0; k < SFX_COUNT; k++) load(k); clips_loaded = 1; } // (the first sound: the pack read now)
+  mixer_start();
   if (!clips[id].pcm) return;
   uint64_t now = sceKernelGetProcessTimeWide() / 1000;
   if (now - last[id] < (uint64_t)GAP[id]) return;

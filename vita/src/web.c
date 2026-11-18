@@ -15,7 +15,7 @@
 #include <psp2/io/devctl.h>
 #include "net.h"
 
-#define WSLOTS 120 // (atlas cells 120-239: main.c)
+#define WSLOTS 72 // (atlas cells 72-143, the Browser's four atlases: main.c. It was 120, past the end of them)
 #define MAX_POSTS 2000
 #define BOX_LONG 1920
 #define BOX_SHORT 1088
@@ -187,19 +187,28 @@ static int cmp_u64(const void *a, const void *b) {
   unsigned long long x = *(const unsigned long long *)a, y = *(const unsigned long long *)b;
   return x < y ? -1 : x > y;
 }
+static unsigned saved_ver; // (one more with each save: is_saved's answers kept until then)
 static void saved_build(void) {
   free(saved_src);
   capsaved = vault.n + 64;
   saved_src = malloc(capsaved * sizeof *saved_src);
   nsaved = 0;
   if (!saved_src) { capsaved = 0; return; } // (no ✓ marks then, rather than a crash)
+  saved_ver++;
   for (int i = 0; i < vault.n; i++) if (vault.items[i].source[0]) saved_src[nsaved++] = fnv64(vault.items[i].source);
   qsort(saved_src, nsaved, sizeof *saved_src, cmp_u64);
 }
 static int is_saved(const LvPost *p) {
   if (!saved_src) return 0;
+  // (asked for every card on screen every frame: the answer kept per post, keyed by its page string
+  //  and the saves' count; a hash and a search only when either changed)
+  static struct { const char *page; unsigned ver; signed char ans; } memo[256];
+  unsigned slot = ((uintptr_t)p->page >> 3) & 255;
+  if (memo[slot].page == p->page && memo[slot].ver == saved_ver) return memo[slot].ans;
   unsigned long long h = fnv64(p->page);
-  return bsearch(&h, saved_src, nsaved, sizeof h, cmp_u64) != NULL;
+  int ans = bsearch(&h, saved_src, nsaved, sizeof h, cmp_u64) != NULL;
+  memo[slot].page = p->page; memo[slot].ver = saved_ver; memo[slot].ans = (signed char)ans;
+  return ans;
 }
 static void saved_add(const char *src) {
   if (nsaved == capsaved) {
@@ -207,8 +216,14 @@ static void saved_add(const char *src) {
     if (!ns) return;
     saved_src = ns; capsaved = capsaved * 2 + 16;
   }
-  saved_src[nsaved++] = fnv64(src);
-  qsort(saved_src, nsaved, sizeof *saved_src, cmp_u64);
+  // (put in its place: the list stays in order with one move, not a sort of all of it per save)
+  unsigned long long h = fnv64(src);
+  int lo = 0, hi = nsaved;
+  while (lo < hi) { int m = (lo + hi) / 2; if (saved_src[m] < h) lo = m + 1; else hi = m; }
+  memmove(saved_src + lo + 1, saved_src + lo, (nsaved - lo) * sizeof *saved_src);
+  saved_src[lo] = h;
+  nsaved++;
+  saved_ver++;
 }
 
 // ---------- the threads ----------
@@ -330,7 +345,8 @@ static void *preview_main(void *arg) {
   LvHttp *h = lv_http_new();
   while (worker_run) {
     pthread_mutex_lock(&wmx);
-    while (worker_run && nwwant == 0) pthread_cond_wait(&wcv, &wmx);
+    // (asleep with nothing wanted, or while 20 finished ones wait to be taken: woken when they are)
+    while (worker_run && (nwwant == 0 || nwdone >= 20)) pthread_cond_wait(&wcv, &wmx);
     if (!worker_run) { pthread_mutex_unlock(&wmx); break; }
     int p = wwant[0], gen = wgen;
     memmove(wwant, wwant + 1, --nwwant * sizeof *wwant);
@@ -821,6 +837,7 @@ static void web_take_results(void) {
   memcpy(got, wdone, n * sizeof *got);
   memmove(wdone, wdone + n, (nwdone - n) * sizeof *wdone);
   nwdone -= n;
+  if (n && nwwant) pthread_cond_broadcast(&wcv); // (room again for the preview threads)
   pthread_mutex_unlock(&wmx);
   for (int k = 0; k < n; k++) {
     WDone *d = &got[k];
@@ -1365,11 +1382,20 @@ static void srcstat_save(void) {
 // (read on the drawing thread while the checking thread writes: under its lock)
 static int src_state(int tab, const char *name) {
   if (!srcstat_loaded) srcstat_load();
-  pthread_mutex_lock(&ssmx);
-  SrcStat *s = srcstat_of(tab, name, 0);
-  int st = s ? s->st : 0;
-  pthread_mutex_unlock(&ssmx);
-  return st;
+  // (the sources window asks three or four times per tile per frame: the states copied once a frame
+  //  under the lock, then looked up in the copy)
+  static SrcStat snap[64];
+  static int nsnap;
+  static unsigned at = ~0u;
+  if (at != frame_no) {
+    at = frame_no;
+    pthread_mutex_lock(&ssmx);
+    nsnap = nsrcstat;
+    memcpy(snap, srcstat, nsnap * sizeof *snap);
+    pthread_mutex_unlock(&ssmx);
+  }
+  for (int k = 0; k < nsnap; k++) if (snap[k].tab == tab && !strcmp(snap[k].name, name)) return snap[k].st;
+  return 0;
 }
 static int src_failing(int tab, const char *name) { return src_state(tab, name) == 3; }
 static int src_asking(int tab, const char *name) { return src_state(tab, name) == 1; }
@@ -1683,9 +1709,9 @@ static int nwtags;
 // The tags most found in the loaded posts (not those already searched for)
 static void wcount_tags(void) {
   enum { CAP = 4096 };
-  WTagCount *tab = calloc(CAP, sizeof *tab);
+  static WTagCount tab[CAP]; // (one table kept, cleared each time: not 200 KB asked of the heap for every count)
+  memset(tab, 0, sizeof tab);
   nwtags = 0;
-  if (!tab) return;
   for (int k = 0; k < nposts; k++) {
     for (const char *t = posts[k].tags; t && *t;) {
       while (*t == ' ') t++;
@@ -1711,7 +1737,6 @@ static void wcount_tags(void) {
     wtags[at] = tab[i];
     while (at > 0 && wtags[at].n > wtags[at - 1].n) { WTagCount x = wtags[at]; wtags[at] = wtags[at - 1]; wtags[at - 1] = x; at--; }
   }
-  free(tab);
 }
 enum { SR_TYPE, SR_MARK, SR_CLEAR, SR_HEAD, SR_TAG, SR_RECENT, SR_BMARK, SR_CHIPS, SR_AC };
 // ---- completing the last word typed: the tags it could be (from these results' tags and the words of
@@ -2153,7 +2178,7 @@ static int big_btn(int x, int y, int w, int h, const char *label, unsigned bg, u
 }
 static void draw_save_wizard(void) {
   const LvPost *p = &posts[wv];
-  vita2d_draw_rectangle(0, 0, W, H, BG);
+  // (the background: the frame is cleared to it already)
   sw_anim += (1 - sw_anim) * 0.3f;
   // the picture, on the left
   vita2d_texture *t = wv_tex_post == wv && wv_tex ? wv_tex : preview_of(wv);
@@ -2522,13 +2547,18 @@ static int wv_episode_card(const LvPost *p) {
   const float x = 30, y = 74, w = 430, h = 150;
   rrect(x, y, w, h, 18, RGBA(0, 0, 0, 170));
   rrect(x, y, 5, h, 3, ACC);
-  char t[400];
+  // (its name split into two lines once per post, kept: not measured word by word every frame)
+  static char t[400], l1[400];
+  static const char *l2;
+  static const LvPost *made_for;
+  static const char *made_page;
+  if (made_for != p || made_page != p->page) {
+  made_for = p; made_page = p->page;
   post_title(p, t, sizeof t);
   // (two lines at most)
   int cut = (int)strlen(t);
   while (cut > 0 && text_w(19, t) > (w - 40) * 2 - 30) { cut = cut * 9 / 10; t[cut] = 0; }
-  char l1[400];
-  const char *l2 = NULL;
+  l2 = NULL;
   snprintf(l1, sizeof l1, "%s", t);
   if (text_w(19, l1) > w - 40) {
     // (the first line: up to the last space where it still fits; the rest on the second)
@@ -2542,6 +2572,7 @@ static int wv_episode_card(const LvPost *p) {
     if (cut > 0) { snprintf(l1, sizeof l1, "%.*s", cut, t); l2 = t + cut + 1; }
     else snprintf(l1, sizeof l1, "%s", t);
   }
+  }
   text_fit((int)x + 20, (int)y + 32, TEXT, 19, l1, (int)w - 40);
   if (l2) text_fit((int)x + 20, (int)y + 56, TEXT, 19, l2, (int)w - 40);
   char meta[120], len[24] = "";
@@ -2549,7 +2580,7 @@ static int wv_episode_card(const LvPost *p) {
   snprintf(meta, sizeof meta, "%s%s%s", len, len[0] ? "  \u00b7  " : "", LV_SITES[wv_site()].name);
   text((int)x + 20, (int)y + (l2 ? 80 : 58), DIM, 14, meta);
   // the pills
-  int fav = fav_find(0, p->page) >= 0, saved = is_saved(p);
+  int fav = fav_find(0, p->page) >= 0, saved = is_saved(p); // (both remembered, not searched each frame)
   const char *f1 = fav ? "\u2665 Favorite" : "\u2661 Favorite";
   const char *f2 = saved ? "\u2713 Offline" : saving ? "Saving\u2026" : fav_offline_next == wv + 1 ? "Offline when here" : "\u2193 Offline";
   float py = y + h - 54, pw1 = text_w(17, f1) + 40, pw2 = text_w(17, f2) + 40;

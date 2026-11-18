@@ -94,6 +94,10 @@ int json_parse(Json *j, const char *text, size_t len) {
   memset(j, 0, sizeof *j);
   j->text = text;
   P p = {text, len, 0, j, 0};
+  // (room for the tokens guessed from its size, about one per 12 bytes of a booru's answer: a few
+  //  doublings and copies of a large array saved)
+  int guess = (int)(len / 12) + 64;
+  if (guess > 256) { j->t = malloc(guess * sizeof *j->t); if (j->t) p.cap = guess; }
   if (value(&p, 0) < 0) { json_free(j); return -1; }
   skip(&p);
   if (p.at != len) { json_free(j); return -1; }

@@ -39,7 +39,7 @@ static char vs_name[VSRC_MAX][48], vs_tags[VSRC_MAX][64];
 static void vsrc_build(void) {
   // (the video browser's thread reads the list, under its lock: rebuilt under it too)
   pthread_mutex_lock(&vbmx);
-  vsrc_built = 1;
+  vsrc_built = 2; // (2: rebuilt, vsource_site's answers forgotten)
   // (the switcher's icons are kept by place: the places may have moved)
   for (int k = 32; k < 32 + VSRC_MAX; k++) { if (site_tex[k]) release_tex(site_tex[k]); site_tex[k] = NULL; site_tex_tried[k] = 0; }
   NVSRC = 0;
@@ -119,8 +119,13 @@ static const char *vsource_tags(int k) { return k >= 0 && k < NVSRC && VSRC[k].t
 static int vsource_blocked(int k) { return VSRC[k].blocked; }
 static int vsource_site(int k) {
   if (k < 0 || k >= NVSRC) return -1;
-  for (int s = 0; VSRC[k].site && s < LV_NSITES; s++) if (!strcmp(LV_SITES[s].name, VSRC[k].site)) return s;
-  return -1;
+  // (asked every frame: found by name once per source, until the list or the sites change)
+  static int memo[VSRC_MAX], memo_n = -1, memo_sites = -1;
+  if (memo_n != NVSRC || memo_sites != LV_NSITES || vsrc_built == 2) { for (int j = 0; j < VSRC_MAX; j++) memo[j] = -2; memo_n = NVSRC; memo_sites = LV_NSITES; if (vsrc_built == 2) vsrc_built = 1; }
+  if (memo[k] != -2) return memo[k];
+  int r = -1;
+  for (int s = 0; VSRC[k].site && s < LV_NSITES; s++) if (!strcmp(LV_SITES[s].name, VSRC[k].site)) { r = s; break; }
+  return memo[k] = r;
 }
 
 #define VB_ROWS 5
@@ -163,7 +168,7 @@ static struct { int row, gen; LvPost *p; int n; char err[96]; int ready, append;
 // (the worker hands a row's posts to the drawing thread: the whole list, or a part to add to it)
 static void vb_publish(int row, int gen, LvPost *p, int n, const char *err, int append) {
   pthread_mutex_lock(&vbmx);
-  while (vb_list.ready && worker_run) { pthread_mutex_unlock(&vbmx); sceKernelDelayThread(10000); pthread_mutex_lock(&vbmx); }
+  while (vb_list.ready && worker_run) pthread_cond_wait(&vbcv, &vbmx); // (woken when it's taken, not looking every 10 ms)
   vb_list.row = row; vb_list.gen = gen; vb_list.p = p; vb_list.n = n; vb_list.ready = 1; vb_list.append = append;
   snprintf(vb_list.err, sizeof vb_list.err, "%s", err ? err : "");
   pthread_mutex_unlock(&vbmx);
@@ -394,6 +399,13 @@ static void vb_play(int r, int k) {
   wv_show(k);
 }
 
+// (the video browser left: the previews waiting dropped, asked again when it's back)
+static void vb_drop_wants(void) {
+  pthread_mutex_lock(&vbmx);
+  for (int k = 0; k < nvb_want; k++) { int r = vb_want[k].row, c = vb_want[k].card; if (r >= 0 && r < VB_ROWS && c >= 0 && c < VB_PER && vrows[r].ts[c] == 1) vrows[r].ts[c] = 0; }
+  nvb_want = 0;
+  pthread_mutex_unlock(&vbmx);
+}
 static void vb_ask(int r, int k) {
   if (r < 0 || r >= VB_ROWS || k < 0 || k >= vrows[r].n || k >= VB_PER || vrows[r].ts[k]) return;
   pthread_mutex_lock(&vbmx);
@@ -427,7 +439,7 @@ static void draw_videos(void) {
     float u = 0.5f - 0.5f * cosf(frame_no * 6.2832f / 1500), z = 1.1f;
     float pw = tw / z, ph = th / z;
     vita2d_draw_texture_part_scale(vb_hero, 0, y0, (tw - pw) * u, (th - ph) * 0.4f, pw, ph, W / pw, HERO_H / ph);
-  } else rrect(0, y0, W, HERO_H, 0, RGBA(30, 20, 30, 255));
+  } else if (y0 + HERO_H > 0) rrect(0, y0, W, HERO_H, 0, RGBA(30, 20, 30, 255));
   grad(0, y0 + HERO_H - 120, W, 120, RGBA(8, 6, 10, 255), 15, 255, 0);
   grad(0, y0, 360, HERO_H, RGBA(8, 6, 10, 255), 190, 0, 1);
   text(30, y0 + 70, ACC, 15, src->name);

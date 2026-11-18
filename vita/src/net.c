@@ -4,6 +4,7 @@
 #include <psp2/net/net.h>
 #include <psp2/net/netctl.h>
 #include <psp2/sysmodule.h>
+#include <psp2/kernel/processmgr.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -84,8 +85,15 @@ static int net_init_locked(void) {
 int lv_net_online(void) {
   int state = 0;
   if (lv_net_base() < 0) return 0;
-  if (sceNetCtlInetGetState(&state) < 0) return proxy[0] != 0;
-  return state == SCE_NETCTL_STATE_CONNECTED || proxy[0];
+  // (every request asks: the answer kept for a second, not a system call for each one)
+  static volatile uint64_t at;
+  static volatile int last;
+  uint64_t now = sceKernelGetProcessTimeWide();
+  if (at && now - at < 1000000) return last;
+  if (sceNetCtlInetGetState(&state) < 0) { last = proxy[0] != 0; at = now; return last; }
+  last = state == SCE_NETCTL_STATE_CONNECTED || proxy[0];
+  at = now;
+  return last;
 }
 
 struct LvHttp { CURL *c; int gen; };
@@ -116,6 +124,7 @@ typedef struct {
   int too_big;
   volatile int64_t *have, *total; // (a file played as it comes: what's on the card, and the whole)
   size_t flushed;                  // (written through to the card up to here)
+  CURL *curl;                      // (its request: the size it said, for the first allocation)
 } Sink;
 
 static size_t on_data(char *p, size_t sz, size_t nm, void *u) {
@@ -133,6 +142,12 @@ static size_t on_data(char *p, size_t sz, size_t nm, void *u) {
   }
   if (s->n + n + 1 > s->cap) {
     size_t cap = s->cap ? s->cap : 64 * 1024;
+    // (the first time, room for all of it when the server said how much: one allocation, not a
+    //  doubling and a copy at each)
+    if (!s->cap && s->curl) {
+      curl_off_t len = -1;
+      if (curl_easy_getinfo(s->curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &len) == CURLE_OK && len > 0 && (size_t)len < s->max) cap = (size_t)len + 1;
+    }
     while (cap < s->n + n + 1) cap *= 2;
     uint8_t *b = realloc(s->b, cap);
     if (!b) return 0;
@@ -262,6 +277,7 @@ static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const
   }
   Sink *s = sp;
   CURL *c = h->c;
+  s->curl = c;
   curl_easy_reset(c); // (the connection itself stays open for the next request)
   curl_easy_setopt(c, CURLOPT_URL, url);
   curl_easy_setopt(c, CURLOPT_USERAGENT, UA);

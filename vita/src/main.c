@@ -184,14 +184,14 @@ static int has_wide(const char *s) {
 // Widths measured once: the same labels are measured every frame (the headers, the buttons, the
 // chips), and measuring walks the font's glyphs. A small table by the text and its size.
 #define TW_CACHE 512
-static struct { unsigned h; short size, w; char s[48]; } tw_cache[TW_CACHE];
+static struct { unsigned h; short size, w; char s[160]; } tw_cache[TW_CACHE]; // (hints are long: kept too)
 static int text_w_raw(int size, const char *s) {
   if (pgf && has_wide(s)) return vita2d_pgf_text_width(pgf, size / 17.0f, s);
   return vita2d_font_text_width(font, size, s);
 }
 static int text_w(int size, const char *s) {
   size_t n = strlen(s);
-  if (n >= 48) return text_w_raw(size, s);
+  if (n >= 160) return text_w_raw(size, s);
   unsigned h = 2166136261u ^ (unsigned)size;
   for (size_t k = 0; k < n; k++) h = (h ^ (unsigned char)s[k]) * 16777619u;
   int at = h & (TW_CACHE - 1);
@@ -231,6 +231,19 @@ static void text_fit(int x, int y, unsigned col, int size, const char *s, int ma
   if (text_w(size, s) <= max_w) { text(x, y, col, size, s); return; }
   char b[512];
   size_t n = strlen(s);
+  // (where it's cut, remembered: the same line cut the same way every frame was measured anew)
+  static struct { unsigned h; short size, maxw, cut; } fit_cache[64];
+  unsigned h = 2166136261u ^ (unsigned)size * 31u ^ (unsigned)max_w * 131u;
+  for (size_t k = 0; k < n; k++) h = (h ^ (unsigned char)s[k]) * 16777619u;
+  int slot = h & 63;
+  if (fit_cache[slot].h == h && fit_cache[slot].size == size && fit_cache[slot].maxw == max_w && (size_t)fit_cache[slot].cut <= n) {
+    size_t lo = (size_t)fit_cache[slot].cut;
+    if (lo > sizeof b - 4) lo = sizeof b - 4;
+    memcpy(b, s, lo);
+    memcpy(b + lo, "\u2026", 4);
+    text(x, y, col, size, b);
+    return;
+  }
   if (n > sizeof b - 4) n = sizeof b - 4;
   // (the longest start that fits with "…" after it: found by halving, a few measures, not one per
   //  letter; whole UTF-8 characters)
@@ -243,6 +256,7 @@ static void text_fit(int x, int y, unsigned col, int size, const char *s, int ma
     if (text_w_raw(size, b) <= max_w) lo = mid; else hi = mid - 1;
   }
   while (lo > 0 && ((unsigned char)s[lo] & 0xC0) == 0x80) lo--;
+  fit_cache[slot].h = h; fit_cache[slot].size = (short)size; fit_cache[slot].maxw = (short)max_w; fit_cache[slot].cut = (short)lo;
   memcpy(b, s, lo);
   memcpy(b + lo, "…", 4);
   text(x, y, col, size, b);
@@ -353,8 +367,12 @@ static void skeleton(float x, float y, float w, float h, float r) {
   if (mid > b0 && mid < x + w) grad(b0, y + 2, fminf(mid, x + w) - b0, h - 4, TEXT, 0, 18, 1);
   if (b1 > mid && mid > x) grad(fmaxf(mid, x), y + 2, b1 - fmaxf(mid, x), h - 4, TEXT, 18, 0, 1);
 }
+static vita2d_texture *ui_icon(const char *name);
 static void heart(float cx, float cy, float s, unsigned c) {
   DRAW_GUARD(cx, cy, s);
+  // (the icon's filled heart, scaled: one quad, not two circles and a dozen one-pixel lines)
+  vita2d_texture *hf = ui_icon("heart_fill");
+  if (hf) { float sc = s * 2.3f / vita2d_texture_get_width(hf); vita2d_draw_texture_tint_scale(hf, cx - s * 1.15f, cy - s * 1.1f, sc, sc, c); return; }
   circle(cx - s * 0.5f, cy - s * 0.2f, s * 0.55f, c);
   circle(cx + s * 0.5f, cy - s * 0.2f, s * 0.55f, c);
   for (int i = 0; i < (int)(s * 1.3f); i++) {
@@ -512,7 +530,13 @@ static void cfg_load(void) {
   if (cfg.sounds < 0 || cfg.sounds > 100) cfg.sounds = 70;
   if (cfg.wspan < 0 || cfg.wspan >= LV_NSPANS) cfg.wspan = 0;
 }
-static void cfg_save(void) {
+static unsigned cfg_dirty_at; // (a change waiting to be written: when the last one was)
+static void cfg_write(void);
+// (every change marks it; it's written a second after the last one, not on every press of a held
+//  button, and at once before the app is put away: flush_settings)
+static void cfg_save(void) { cfg_dirty_at = frame_no ? frame_no : 1; }
+static void cfg_write(void) {
+  cfg_dirty_at = 0;
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
   fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\n",
@@ -588,6 +612,8 @@ static float lib_aspect(int k) {
 
 static int cap_shown;
 static void lhero_build(void); // (the hero row over All: after the grid is made, it goes below it)
+static void lhero_offset(void);
+static int refilter_wanted; // (items came in: the Library filtered again at the next frame)
 static void refilter(void) {
   // (the list's room kept from one filter to the next: grown only when the vault has grown)
   if (!shown || cap_shown < vault.n + 1) {
@@ -658,7 +684,7 @@ static void cover_size(const uint8_t *b, size_t n, int *mw, int *mh) {
   *mh = CELL_H;
 }
 
-static int cache_broken;
+static int cache_broken, cache_proven; // (the encoder found wrong, or found right three times)
 // The average difference of a sample of pixels, small enough for a lossy copy of the same picture.
 static int pixels_close(const LvPixels *a, const LvPixels *b) {
   long long diff = 0, n = 0;
@@ -723,12 +749,15 @@ static int thumb_pixels(int i, LvPixels *px, int want_w, int want_h) {
   if (!cache_broken) {
     size_t en = 0;
     uint8_t *enc = lv_encode_jpeg(px, 85, &en);
-    LvPixels back;
-    if (enc && lv_decode(enc, en, px->w, px->h, &back) == 0) {
-      int ok = back.w == px->w && back.h == px->h && pixels_close(px, &back);
-      free(back.rgba);
-      if (ok) lv_write_all(cp, lv_key(&vault), enc, en);
-      else cache_broken = 1;
+    if (enc && cache_proven >= 3) lv_write_all(cp, lv_key(&vault), enc, en); // (the encoder's been right: no decoding again to check)
+    else {
+      LvPixels back;
+      if (enc && lv_decode(enc, en, px->w, px->h, &back) == 0) {
+        int ok = back.w == px->w && back.h == px->h && pixels_close(px, &back);
+        free(back.rgba);
+        if (ok) { lv_write_all(cp, lv_key(&vault), enc, en); cache_proven++; }
+        else cache_broken = 1;
+      }
     }
     free(enc);
   }
@@ -739,7 +768,9 @@ static void *worker(void *arg) {
   pin_to_core(1); // (off the drawing thread's core)
   while (worker_run) {
     pthread_mutex_lock(&mx);
-    while (worker_run && big_ask.item < 0 && nwant == 0) pthread_cond_wait(&cv, &mx);
+    // (asleep with nothing to do, or while its finished ones haven't been taken: the drawing thread
+    //  wakes it when it takes some, rather than it looking every few milliseconds)
+    while (worker_run && big_ask.item < 0 && (nwant == 0 || ndone >= (int)(sizeof done / sizeof *done))) pthread_cond_wait(&cv, &mx);
     if (!worker_run) { pthread_mutex_unlock(&mx); break; }
     int item = -1, big = 0, gen = 0, mw = 0, mh = 0;
     if (big_ask.item >= 0) {
@@ -761,7 +792,10 @@ static void *worker(void *arg) {
     if (big) {
       LvItem *it = &vault.items[item];
       size_t n = 0;
-      uint8_t *b = it->path ? lv_read_all(it->path, lv_key(&vault), &n) : NULL;
+      // (a video's or a GIF's own file isn't a picture to decode: reading it whole, maybe hundreds of
+      //  megabytes, only to fail was slow and could run the memory out; its thumbnail is the picture)
+      int moving = !strcmp(it->kind, "video") || !strcmp(it->kind, "gif");
+      uint8_t *b = it->path && !moving ? lv_read_all(it->path, lv_key(&vault), &n) : NULL;
       if (b) { r = lv_decode(b, n, mw, mh, &px); free(b); }
       if (r != 0) { b = lv_thumb_bytes(&vault, it, &n); if (b) { r = lv_decode(b, n, mw, mh, &px); free(b); } }
     } else {
@@ -817,13 +851,16 @@ static vita2d_texture *upload(const LvPixels *px) {
 #define ACOLS 3
 #define AROWS 6
 #define CELLS_PER_ATLAS (ACOLS * AROWS)
-#define ATLASES 8 // (cells 0-71 the Library's, 72-143 the Browser's)
+#define ATLASES 8 // (cells 0-71 the Library's, 72-143 the Browser's: WSLOTS, web.c, is 72)
 static vita2d_texture *atlas[ATLASES];
 static vita2d_texture cells[ATLASES * CELLS_PER_ATLAS];
-static void atlas_init(void) {
-  for (int a = 0; a < ATLASES; a++) {
+// (each atlas made the first time a cell of it is used: the Browser's four, 16 MB of video memory,
+//  only once the Browser shows something)
+static void atlas_make(int a) {
+  if (a < 0 || a >= ATLASES || atlas[a]) return;
+  {
     atlas[a] = tex_new(1024, 1024);
-    if (!atlas[a]) continue;
+    if (!atlas[a]) return;
     uint8_t *d = vita2d_texture_get_datap(atlas[a]);
     unsigned stride = vita2d_texture_get_stride(atlas[a]);
     for (int k = 0; k < CELLS_PER_ATLAS; k++) {
@@ -836,9 +873,12 @@ static void atlas_init(void) {
     }
   }
 }
+static void atlas_init(void) { atlas_make(0); } // (the first of the Library's at the start; the rest as needed)
 // A thumbnail into its cell, whole: it was decoded to fit CELL_W x CELL_H, so it's copied as it is
 // (scaled down only if it somehow isn't), and the cell's view takes its size.
 static vita2d_texture *put_cell(int cell, const LvPixels *px) {
+  if (cell < 0 || cell >= ATLASES * CELLS_PER_ATLAS) return NULL; // (never past the atlases: it used to be)
+  atlas_make(cell / CELLS_PER_ATLAS);
   vita2d_texture *at = atlas[cell / CELLS_PER_ATLAS];
   if (!at || !px->rgba || px->w <= 0 || px->h <= 0) return NULL;
   int k = cell % CELLS_PER_ATLAS;
@@ -922,6 +962,7 @@ static void take_results(void) {
   memcpy(got, done, n * sizeof *got);
   memmove(done, done + n, (ndone - n) * sizeof *done);
   ndone -= n;
+  if (n && nwant) pthread_cond_signal(&cv); // (room again: the worker carries on)
   pthread_mutex_unlock(&mx);
   uint64_t t0 = sceKernelGetProcessTimeWide();
   for (int k = 0; k < n; k++) {
@@ -1262,6 +1303,7 @@ static int nsjobs;
 static volatile int saver_busy, saver_failed;
 static pthread_mutex_t smx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t scv = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t scv_done = PTHREAD_COND_INITIALIZER; // (the saver: a job finished, room or all written)
 static int saver_started;
 static void *saver_main(void *arg) {
   pin_to_core(2); // (off the drawing thread's core)
@@ -1279,7 +1321,10 @@ static void *saver_main(void *arg) {
     if (lv_write_all(p, j.has_key ? j.key : NULL, j.data, j.n) != 0) saver_failed = 1;
     free(j.data);
     memset(j.key, 0, sizeof j.key);
+    pthread_mutex_lock(&smx);
     saver_busy = 0;
+    pthread_cond_broadcast(&scv_done); // (whoever waits for room, or for everything to be written)
+    pthread_mutex_unlock(&smx);
   }
   return NULL;
 }
@@ -1309,7 +1354,7 @@ static void save_async(const char *name, char *data) {
   int k = 0;
   for (; k < nsjobs; k++) if (!strcmp(sjobs[k].name, name) && !strcmp(sjobs[k].root, vault.root)) { free(sjobs[k].data); break; }
   if (k == nsjobs) {
-    if (nsjobs == 4) { pthread_mutex_unlock(&smx); while (nsjobs == 4) sceKernelDelayThread(2000); pthread_mutex_lock(&smx); k = nsjobs; }
+    if (nsjobs == 4) { while (nsjobs == 4) pthread_cond_wait(&scv_done, &smx); k = nsjobs; } // (waits for room, asleep)
     nsjobs++;
   }
   SaveJob *j = &sjobs[k];
@@ -1323,7 +1368,13 @@ static void save_async(const char *name, char *data) {
   pthread_mutex_unlock(&smx);
 }
 static void saver_flush(void) {
-  for (int k = 0; k < 2000 && (nsjobs || saver_busy); k++) sceKernelDelayThread(2000);
+  // (asleep until everything's written, at most 4 s, rather than looking every 2 ms)
+  struct timespec until;
+  clock_gettime(CLOCK_REALTIME, &until);
+  until.tv_sec += 4;
+  pthread_mutex_lock(&smx);
+  while (nsjobs || saver_busy) if (pthread_cond_timedwait(&scv_done, &smx, &until) != 0) break;
+  pthread_mutex_unlock(&smx);
 }
 // views.csv, when it has changed
 static void views_save_async(void) {
@@ -1556,12 +1607,15 @@ static char wf_last[160];  //  and the last file, or why it stopped)
 // ----- the library -----
 static void open_viewer(int k, int slideshow);
 // ---------- the app's icons (vita/ui/*.png, tools/make-ui-icons.mjs): white glyphs, tinted when drawn ----------
-static struct { const char *name; vita2d_texture *t; int tried; } ui_icons[48];
+// (found by a hash of the name: one or two compares, not a walk past every icon before it; room for
+//  128, there are fifty-odd)
+#define UI_ICONS 128
+static struct { const char *name; vita2d_texture *t; int tried; } ui_icons[UI_ICONS];
 static vita2d_texture *ui_icon(const char *name) {
-  int k = 0;
-  // (the same literal is the same pointer: no string compare for the icons drawn every frame)
-  for (; k < 48 && ui_icons[k].name; k++) if (ui_icons[k].name == name || !strcmp(ui_icons[k].name, name)) break;
-  if (k == 48) return NULL;
+  unsigned h = 2166136261u;
+  for (const char *c = name; *c; c++) h = (h ^ (unsigned char)*c) * 16777619u;
+  int k = h & (UI_ICONS - 1), probes = 0;
+  while (ui_icons[k].name && ui_icons[k].name != name && strcmp(ui_icons[k].name, name)) { k = (k + 1) & (UI_ICONS - 1); if (++probes == UI_ICONS) return NULL; }
   if (!ui_icons[k].name) ui_icons[k].name = name;
   if (!ui_icons[k].tried) {
     ui_icons[k].tried = 1;
@@ -1845,7 +1899,10 @@ static void lhero_build(void) {
   if (!nlhero) lhero_on = 0;
   if (lhero_sel >= nlhero) lhero_sel = nlhero ? nlhero - 1 : 0;
   if (nlhero != had) lhero_x = 0;
-  // the grid below it
+  lhero_offset();
+}
+// (the grid moved down under the row: also after a relayout, which doesn't need the row worked out again)
+static void lhero_offset(void) {
   if (nlhero) {
     for (int k = 0; k < lgrid.n; k++) lgrid.r[k].y += LHERO_H;
     lgrid.height += LHERO_H;
@@ -1970,7 +2027,7 @@ static void draw_library(void) {
           }
           if (anchor < 0) anchor = sel;
           lf.size = ns;
-          refilter();
+          relayout(); // (the same cards, a new size: not filtered and sorted again)
           if (anchor >= 0 && anchor < lgrid.n) { scroll = TOP + 6 + lgrid.r[anchor].y - ay; sel = anchor; }
           sfx(SFX_TOGGLE);
           say(SIZES[ns]);
@@ -2626,7 +2683,10 @@ static void draw_viewer(void) {
   // the thumbnails wanted here: this one (its glow) and the filmstrip's
   {
     int want_t[16], nwt = 0;
-    for (int d = 0; d < 11 && nwt < 16; d++) {
+    // (this one and the next and last always, to show at once on a swipe; the rest of the filmstrip's
+    //  only while it can show: not in a slideshow, a video, or with the controls hidden)
+    int strip = !slideshow && !(vid && !vid_clip) && frame_no < chrome_until;
+    for (int d = 0; d < (strip ? 11 : 3) && nwt < 16; d++) {
       int k = vk + (d % 2 ? (d + 1) / 2 : -(d / 2));
       if (k >= 0 && k < nshown && !thumb_of(shown[k]) && tstate[shown[k]] != 3) want_t[nwt++] = shown[k];
     }
@@ -3086,8 +3146,7 @@ static void draw_wheel(void) {
       }
     vita2d_texture_set_filters(wheel_tex, SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
   }
-  vita2d_draw_rectangle(0, 0, W, H, with_alpha(BG, 255));
-  text(30, 44, TEXT, 26, "Your colour");
+  text(30, 44, TEXT, 26, "Your colour"); // (the background: the frame's clear colour already)
   text(30 + text_w(26, "Your colour") + 16, 44, FAINT, 13, "Touch the wheel  \u00b7  \u2190\u2192 hue  \u00b7  \u2191\u2193 colourfulness  \u00b7  L R brightness  \u00b7  \u25cb done");
   const float cx = 250, cy = 290, R = D / 2.f;
   if (wheel_tex) vita2d_draw_texture_tint(wheel_tex, cx - R, cy - R, hsv(0, 0, cfg.acc_v / 100.f));
@@ -3134,7 +3193,10 @@ static void draw_wheel(void) {
   if (held & SCE_CTRL_RTRIGGER) { cfg.acc_v = cfg.acc_v < 100 ? cfg.acc_v + 1 : 100; ch = 1; }
   if (held & SCE_CTRL_LTRIGGER) { cfg.acc_v = cfg.acc_v > 25 ? cfg.acc_v - 1 : 25; ch = 1; }
   if (ch) apply_theme();
-  if (in.pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_CROSS)) { sfx(SFX_CLOSE); wheel_open = 0; cfg_save(); }
+  if (in.pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_CROSS)) {
+    sfx(SFX_CLOSE); wheel_open = 0; cfg_save();
+    if (wheel_tex) { free_later(wheel_tex); wheel_tex = NULL; } // (its 190 KB of video memory back; made again if it's opened again)
+  }
 }
 
 static void draw_settings(void) {
@@ -3408,7 +3470,6 @@ static void draw_onboarding(void) {
     {"info", "Three fingers, or SELECT: the calculator covers it"},
     {"tag", "Hold L and R: touch lock"},
   };
-  vita2d_draw_rectangle(0, 0, W, H, BG);
   static int was_touching;
   if (in.touching) slide -= in.drag_dx / (float)(W - 120);
   else {
@@ -3478,9 +3539,24 @@ static void draw_cover_screen(void) {
 
 // The Vita going to sleep and waking: afterwards the network's connections and the video player's
 // open file may be dead, so the videos close and the connections start afresh.
-static volatile int woke;
+static volatile int woke, going_away;
+static pthread_mutex_t settings_mx = PTHREAD_MUTEX_INITIALIZER;
+// (the settings and the slideshow's plan written now if they're waiting: the app may be frozen, or
+//  closed from the LiveArea, any moment after the PS button)
+static void flush_settings(void) {
+  pthread_mutex_lock(&settings_mx);
+  if (cfg_dirty_at) cfg_write();
+  if (show_dirty_at) show_write();
+  pthread_mutex_unlock(&settings_mx);
+}
 static int power_cb(int notify_id, int count, int arg, void *user) {
   if (arg & (SCE_POWER_CB_SYSTEM_RESUME | SCE_POWER_CB_APP_RESUME)) woke = 1;
+  // the PS button, or the app or the system about to be suspended: what's unsaved written at once,
+  // and the main loop pauses the videos and saves the rest (it may still run a few frames)
+  if (arg & (SCE_POWER_CB_BUTTON_PS_PRESS | SCE_POWER_CB_APP_SUSPEND | SCE_POWER_CB_SYSTEM_SUSPEND)) {
+    flush_settings();
+    going_away = 1;
+  }
   return 0;
 }
 static int power_main(SceSize args, void *argp) {
@@ -3505,7 +3581,9 @@ static void library_grew(int before) {
   if (zw && zh) for (int i = before; i <= vault.n; i++) tsize_w[i] = tsize_h[i] = 0;
   pthread_mutex_unlock(&mx);
   if (picked) { unsigned char *pk = realloc(picked, vault.n + 64); if (pk) { picked = pk; memset(picked + before, 0, vault.n + 64 - before); } }
-  refilter();
+  // (filtered and sorted again once at the next frame, not for each item: a chapter or a Wi-Fi
+  //  batch adds dozens in a row)
+  refilter_wanted = 1;
 }
 
 #include "web.c"
@@ -3617,6 +3695,15 @@ int main(void) {
       if (last_wall && now_wall - last_wall > 6) woke = 1;
       last_wall = now_wall;
     }
+    if (going_away) {
+      // (the PS button: nothing keeps playing behind the LiveArea, and nothing is left unsaved)
+      going_away = 0;
+      if (vid && !lv_video_paused(vid)) lv_video_pause(vid, 1);
+      if (wv_vid && !lv_video_paused(wv_vid)) lv_video_pause(wv_vid, 1);
+      slideshow = 0;
+      if (loaded_vault) { save_edits_now(); views_save_async(); resume_save(); }
+      flush_settings();
+    }
     if (woke) {
       woke = 0;
       lv_net_reset();
@@ -3628,8 +3715,11 @@ int main(void) {
     }
     // (a video playing, or a slideshow: the Vita doesn't dim or sleep)
     if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow) || drive.state == DRV_SYNCING || drive.state == DRV_CODE || wf_run ||
-        dl_post >= 0 || msave_on || conv_on) // (and while a video downloads or a chapter is saved: sleep would cut the Wi-Fi)
-      sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
+        dl_post >= 0 || msave_on || conv_on) { // (and while a video downloads or a chapter is saved: sleep would cut the Wi-Fi)
+      // (once a second: the dimming and sleep timers are minutes long, a call every frame is wasted)
+      static unsigned tick_at;
+      if (frame_no - tick_at >= 60) { tick_at = frame_no; sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND); }
+    }
     // (an offline copy being saved, a chapter, a conversion: the PS button is held until it's done,
     //  since leaving suspends the app and cuts the download; it works again as soon as it finishes)
     {
@@ -3650,6 +3740,15 @@ int main(void) {
     if (loaded_vault) wf_take();
     msave_take();
     conv_take();
+    if (refilter_wanted && loaded_vault) {
+      refilter_wanted = 0;
+      int keep = sel >= 0 && sel < nshown ? shown[sel] : -1; // (the card chosen stays chosen)
+      int keep_v = vk >= 0 && vk < nshown ? shown[vk] : -1;  // (and the one open in the full view)
+      refilter();
+      for (int k = 0; k < nshown; k++) { if (shown[k] == keep) sel = k; if (shown[k] == keep_v) vk = k; }
+      if (vk >= nshown) vk = nshown ? nshown - 1 : 0;
+      if (sel >= nshown) sel = nshown ? nshown - 1 : 0;
+    }
     // (the header and the tab bar: tucked only while the Library or the Browser scrolls down)
     if (screen != S_LIBRARY && screen != S_WEB) chrome_target = 0;
     chrome_hide += (chrome_target - chrome_hide) * 0.25f;
@@ -3684,6 +3783,22 @@ int main(void) {
       if (r == 1 && ime_for == 2) { lsheet = LS_NONE; snprintf(query, sizeof query, "%s", got); cat = -1; refilter(); sel = 0; scroll = 0; screen = S_LIBRARY; }
       if (r != 0) memset(&in, 0, sizeof in);
       else in.pressed = 0, in.tap = 0;
+    }
+    // (a screen left: the pictures it had asked for and no other screen shows are dropped, not
+    //  fetched and decoded for nothing in the background)
+    {
+      static int last_screen = -1;
+      if (screen != last_screen && last_screen >= 0) {
+        int was = last_screen, now = screen;
+        int lib_was = was == S_LIBRARY || was == S_VIEWER || was == S_SHOW || was == S_SETTINGS;
+        int lib_now = now == S_LIBRARY || now == S_VIEWER || now == S_SHOW || now == S_SETTINGS;
+        if (lib_was && !lib_now && loaded_vault) ask_thumbs(NULL, 0);
+        if ((was == S_WEB || was == S_WEBVIEW) && now != S_WEB && now != S_WEBVIEW && web_started) ask_previews(NULL, 0);
+        if (was == S_MANGA && now != S_MANGA) mg_drop_covers();
+        if (was == S_VIDEOS && now != S_VIDEOS) vb_drop_wants();
+        if ((was == S_FAVS || was == S_VIDEOS) && now != S_FAVS && now != S_VIDEOS) fav_drop_wants();
+      }
+      last_screen = screen;
     }
     // three fingers tapped together: the calculator, from anywhere, at once
     if (in.panic && screen != S_CALC && screen != S_UNLOCKING && screen != S_PICK) {
@@ -3804,7 +3919,10 @@ int main(void) {
     static unsigned cfg_tick;
     if ((screen == S_WEB || screen == S_WEBVIEW) && ++cfg_tick % 600 == 0) cfg_save();
     // views reach the card now and then while looking (and always when leaving the full view)
-    if (loaded_vault && vault.views_dirty && ++idle_save > 60 * 30) { views_save_async(); idle_save = 0; }
+    // (views.csv: every two minutes while it has changed, not every thirty seconds; and when the
+    //  viewer closes, a vault is left or the app is put away)
+    if (loaded_vault && vault.views_dirty && ++idle_save > 60 * 120) { views_save_async(); idle_save = 0; }
+    if ((cfg_dirty_at && frame_no - cfg_dirty_at > 60) || (show_dirty_at && frame_no - show_dirty_at > 60)) flush_settings();
     if (saver_failed) { saver_failed = 0; sfx(SFX_ERROR); say("The changes couldn't be written to the card"); }
   }
   return 0;

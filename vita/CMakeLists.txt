@@ -115,6 +115,30 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE ui/chev_r.png ui/chev_r.png
   FILE ui/refresh.png ui/refresh.png
   FILE ui/all.png ui/all.png
+  FILE ui/album.png ui/album.png
+  FILE ui/bookmark.png ui/bookmark.png
+  FILE ui/direction.png ui/direction.png
+  FILE ui/eraser.png ui/eraser.png
+  FILE ui/eye.png ui/eye.png
+  FILE ui/eye_off.png ui/eye_off.png
+  FILE ui/flame.png ui/flame.png
+  FILE ui/grid.png ui/grid.png
+  FILE ui/history.png ui/history.png
+  FILE ui/hourglass.png ui/hourglass.png
+  FILE ui/newest.png ui/newest.png
+  FILE ui/oldest.png ui/oldest.png
+  FILE ui/pages.png ui/pages.png
+  FILE ui/rotate.png ui/rotate.png
+  FILE ui/save.png ui/save.png
+  FILE ui/scroll.png ui/scroll.png
+  FILE ui/shuffle.png ui/shuffle.png
+  FILE ui/sparkle.png ui/sparkle.png
+  FILE ui/stack.png ui/stack.png
+  FILE ui/star.png ui/star.png
+  FILE ui/swipe.png ui/swipe.png
+  FILE ui/tap.png ui/tap.png
+  FILE ui/touchpad.png ui/touchpad.png
+  FILE ui/zoom.png ui/zoom.png
   FILE ui/tag.png ui/tag.png
   FILE ui/wifi.png ui/wifi.png
   FILE ui/back.png ui/back.png

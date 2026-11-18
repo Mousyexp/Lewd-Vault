@@ -59,13 +59,18 @@ static void favs_save(void) {
 }
 static int fav_find(int kind, const char *page) {
   if (!favs_loaded) favs_load();
-  for (int k = 0; k < nfavs; k++) if (favs[k].kind == kind && !strcmp(favs[k].page, page)) return k;
-  return -1;
+  // (the full view asks for the same post's page several times a frame: the last answer kept until
+  //  the favourites change or another page is asked about)
+  static char m_page[600]; static int m_kind = -1, m_ans; static unsigned m_ver = ~0u;
+  if (kind == m_kind && m_ver == favs_ver && !strcmp(page, m_page)) return m_ans; // (one compare, not one per favourite)
+  snprintf(m_page, sizeof m_page, "%s", page); m_kind = kind; m_ver = favs_ver;
+  for (int k = 0; k < nfavs; k++) if (favs[k].kind == kind && !strcmp(favs[k].page, page)) return m_ans = k;
+  return m_ans = -1;
 }
 static void fav_remove(int k) {
   if (k < 0 || k >= nfavs) return;
   memmove(&favs[k], &favs[k + 1], (nfavs - k - 1) * sizeof *favs);
-  nfavs--;
+  nfavs--; favs_ver++;
   favs_save();
 }
 // (newest first)
@@ -73,7 +78,7 @@ static Fav *fav_add(void) {
   if (!favs_loaded) favs_load();
   if (!favs || nfavs >= FAV_MAX) { sfx(SFX_ERROR); say("Three hundred favourites at most"); return NULL; }
   memmove(&favs[1], &favs[0], nfavs * sizeof *favs);
-  nfavs++;
+  nfavs++; favs_ver++;
   memset(&favs[0], 0, sizeof *favs);
   return &favs[0];
 }
@@ -178,6 +183,13 @@ static void fav_ask(int k, int w, int h) {
     fav_ts[k] = 1;
     pthread_cond_signal(&fvcv);
   }
+  pthread_mutex_unlock(&fvmx);
+}
+// (Favourites and the video browser left: the previews waiting dropped)
+static void fav_drop_wants(void) {
+  pthread_mutex_lock(&fvmx);
+  for (int k = 0; k < nfav_jobs; k++) { int sl = fav_jobs[k].slot; if (sl >= 0 && sl < FAV_MAX && fav_ts[sl] == 1) fav_ts[sl] = 0; }
+  nfav_jobs = 0;
   pthread_mutex_unlock(&fvmx);
 }
 static void fav_take(void) {
@@ -338,8 +350,11 @@ static void fav_read(int at, int offline) {
 static void draw_favs(void) {
   fav_take();
   if (!favs_loaded) favs_load();
-  vita2d_draw_rectangle(0, 0, W, H, BG);
-  int list[FAV_MAX], m = fav_list(fav_tab, list);
+  // (the background: the frame is cleared to it already)
+  // (the tab's list: made again only when the favourites or the tab change)
+  static int list[FAV_MAX], m, l_tab = -1;
+  static unsigned l_ver = ~0u;
+  if (l_ver != favs_ver || l_tab != fav_tab) { m = fav_list(fav_tab, list); l_ver = favs_ver; l_tab = fav_tab; }
   int comic = fav_tab == 1;
   int cw = comic ? FAV_BW : FAV_CW, ch = comic ? FAV_BH : FAV_CH, gap = 12;
   int cols = (W - 24 + gap) / (cw + gap), x0 = (W - (cols * cw + (cols - 1) * gap)) / 2;

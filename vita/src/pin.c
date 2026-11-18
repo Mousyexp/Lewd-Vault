@@ -126,7 +126,7 @@ static void pin_try(void) {
 }
 
 static void draw_pin(void) {
-  vita2d_draw_rectangle(0, 0, W, H, BG);
+  // (the background: the frame is cleared to it already)
   float shake = pin_fail_shake > 0 ? sinf(pin_fail_shake * 1.7f) * pin_fail_shake * 0.8f : 0;
   if (pin_fail_shake > 0) pin_fail_shake--;
   text_center(W / 2 - 230, 150, TEXT, 26, "Lewd Vault");
@@ -170,14 +170,31 @@ static void draw_pin(void) {
 // ---------- stats ----------
 static void draw_stats(void) {
   text(30, 44, TEXT, 26, "Your stats");
-  long long views = 0, hearts = 0;
-  double secs = 0;
-  int kinds[3] = {0, 0, 0}, never = 0;
-  for (int i = 0; i < vault.n; i++) {
-    kinds[vault.hot[i].kind < 3 ? vault.hot[i].kind : 0]++;
-    if (!lv_views_of(&vault, &vault.items[i])) never++;
+  // (the totals: worked out on opening, and again only if the vault changed, not every frame over
+  //  every item)
+  static long long views, hearts;
+  static double secs;
+  static int kinds[3], never, top[5], s_n = -1, s_nviews = -1, s_vgen = -1;
+  static unsigned s_frame;
+  int fresh = frame_no - s_frame > 2 || s_n != vault.n || s_nviews != vault.nviews || s_vgen != vgen;
+  s_frame = frame_no;
+  if (fresh) {
+    s_n = vault.n; s_nviews = vault.nviews; s_vgen = vgen;
+    views = hearts = 0; secs = 0; never = 0; kinds[0] = kinds[1] = kinds[2] = 0;
+    for (int i = 0; i < vault.n; i++) {
+      kinds[vault.hot[i].kind < 3 ? vault.hot[i].kind : 0]++;
+      if (!lv_views_of(&vault, &vault.items[i])) never++;
+    }
+    for (int k = 0; k < vault.nviews; k++) { views += vault.views[k].views; hearts += vault.views[k].likes; secs += vault.views[k].seconds; }
+    for (int k = 0; k < 5; k++) top[k] = -1;
+    for (int i = 0; i < vault.n; i++) {
+      long long v = lv_views_of(&vault, &vault.items[i]);
+      if (!v) continue;
+      for (int k = 0; k < 5; k++) {
+        if (top[k] < 0 || v > lv_views_of(&vault, &vault.items[top[k]])) { memmove(&top[k + 1], &top[k], (4 - k) * sizeof *top); top[k] = i; break; }
+      }
+    }
   }
-  for (int k = 0; k < vault.nviews; k++) { views += vault.views[k].views; hearts += vault.views[k].likes; secs += vault.views[k].seconds; }
   char b[160];
   int y = 92;
   struct { const char *name; char v[64]; } tiles[6];
@@ -198,14 +215,6 @@ static void draw_stats(void) {
   // the most opened, and the categories
   y += 200;
   text(30, y, DIM, 16, "Most opened");
-  int top[5] = {-1, -1, -1, -1, -1};
-  for (int i = 0; i < vault.n; i++) {
-    long long v = lv_views_of(&vault, &vault.items[i]);
-    if (!v) continue;
-    for (int k = 0; k < 5; k++) {
-      if (top[k] < 0 || v > lv_views_of(&vault, &vault.items[top[k]])) { memmove(&top[k + 1], &top[k], (4 - k) * sizeof *top); top[k] = i; break; }
-    }
-  }
   for (int k = 0; k < 5 && top[k] >= 0; k++) {
     const LvItem *it = &vault.items[top[k]];
     snprintf(b, sizeof b, "%lld×", lv_views_of(&vault, it));
