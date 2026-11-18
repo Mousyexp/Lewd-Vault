@@ -339,9 +339,29 @@ new is asked for, and the next screenful is fetched in the direction it's going.
 screen's size instead; textures keep 8 MB of video memory and 16 MB of main memory free, going to main
 memory when video memory is short, and not made at all rather than crash (`tex_new` in `src/main.c`).
 
+The highlight ring that follows the buttons hides once the screen is touched, and comes back with the
+next button press or push of the stick.
+
 The tab bar is a pill floating over the bottom, with icons in the manner of iOS's symbols
 (`tools/make-ui-icons.mjs`, drawn at exactly their size); buttons, chips and rows are at least 36 px
 high and every touch target has a few pixels of slack.
+
+**Each part on its own.** The app's parts (the Library, its full view, the Browser and its full view,
+the video browser, Comics, Favourites, Settings) each hold what they show: textures, a screen buffer or
+three, connections. So they don't add up over a session, a part that's been left gives them back
+(`janitor` in `src/main.c`): the full views' screen buffers and Settings' colour wheel at once, the
+others after a minute away (the Browser's 16 MB of preview atlases, the video browser's cards, the
+comics' covers, pages and strips, Favourites' covers), and all of them sooner when memory runs short,
+the Library's own thumbnails too; their lists stay, so coming back only fetches what's on screen. Each
+worker closes its connection after 20 s with nothing to do (`wait_work`), Google Drive after each job,
+and the Wi-Fi server stops with its page. Icons and other small textures live in main memory, in 4 KiB
+pages, not a 256 KiB granule of video memory each (fifty icons and forty site tiles were ~22 MB of
+it). Debug builds log what's held at every change of screen (`res` lines in the log).
+
+**Webtoon strips in a small budget.** A strip (700 x 23,000 pixels) is cut into page-sized bands
+without ever being decoded whole: a JPEG a row at a time (a progressive one's coefficients, which
+libjpeg keeps for the whole picture, are held compressed in RAM by our own backing store, ~7 MB
+instead of ~50), a WebP a few bands per pass, a PNG in one pass (`lv_decode_bands` in `src/image.c`).
 
 The drawing thread has the first CPU core to itself (every worker is pinned to the other two), the
 clocks are at their highest (444 / 222 / 222 / 166 MHz), and the network starts on a thread of its

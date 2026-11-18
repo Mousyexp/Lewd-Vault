@@ -372,7 +372,11 @@ static void ring9(float x, float y, float w, float h, unsigned c) {
 // breathing a little. Called after drawing, with the chosen thing's rectangle.
 static struct { float x, y, w, h; int scr; unsigned at; } fring = {0, 0, 0, 0, -1, 0};
 static int screen_now(void);
+// (the screen touched: the ring hides until a button or the stick is used again, as the PS Vita's
+//  own menus do: it's for finding your place with the buttons, not in the way of a finger)
+static int touch_mode;
 static void focus_ring(float x, float y, float w, float h) {
+  if (touch_mode) return;
   DRAW_GUARD(x, y, w, h);
   int scr = screen_now();
   if (fring.scr != scr || frame_no - fring.at > 3) { fring.x = x; fring.y = y; fring.w = w; fring.h = h; fring.scr = scr; }
@@ -3680,7 +3684,7 @@ static int area_of(int s) {
   }
   return A_NONE;
 }
-static unsigned area_seen[A_N];
+static uint64_t area_seen[A_N]; // (when each was last on screen: µs, the real time, whatever the frame rate)
 static unsigned char area_held[A_N];
 static void scr_set_free(int set) {
   for (int k = set * 3; k < set * 3 + 3; k++) if (scr_buf[k]) { free_later(scr_buf[k]); scr_buf[k] = NULL; }
@@ -3749,10 +3753,11 @@ static void area_release(int a) {
 }
 static void janitor(void) {
   int a = area_of(screen);
-  area_seen[a] = frame_no; area_held[a] = 1;
+  uint64_t now = sceKernelGetProcessTimeWide();
+  area_seen[a] = now; area_held[a] = 1;
   // (the full view belongs with what it was opened from: the Browser, or the video browser)
-  if (a == A_WEBVIEW) { int b = wv_back == S_VIDEOS ? A_VIDEOS : A_WEB; area_seen[b] = frame_no; }
-  if (a == A_VIEWER || a == A_SETTINGS) area_seen[A_LIB] = frame_no;
+  if (a == A_WEBVIEW) { int b = wv_back == S_VIDEOS ? A_VIDEOS : A_WEB; area_seen[b] = now; }
+  if (a == A_VIEWER || a == A_SETTINGS) area_seen[A_LIB] = now;
   if (frame_no % 30) return; // (twice a second is plenty)
   drive_reap();
   int fu = 0, fc = 0;
@@ -3760,13 +3765,13 @@ static void janitor(void) {
   for (int k = A_LIB; k < A_N; k++) {
     if (k == a || !area_held[k]) continue;
     if (k == A_LIB && (!low || a == A_VIEWER || a == A_SETTINGS)) continue; // (the home screen's: only when memory is short)
-    unsigned idle = frame_no - area_seen[k];
+    unsigned idle = (unsigned)((now - area_seen[k]) / 1000000); // (seconds)
     // Settings' wheel and the full views' buffers are quick to make again: let go as soon as they're left
     int quick = k == A_SETTINGS || k == A_VIEWER || k == A_WEBVIEW;
-    if ((quick && idle > 30) || idle > 60 * 60 || (low && idle > 30)) {
+    if (quick || idle >= 60 || (low && idle >= 1)) {
       area_release(k);
       area_held[k] = 0;
-      LOG("released %s (%s, idle %us)\n", A_NAME[k], low ? "memory short" : "left", idle / 60);
+      LOG("released %s (%s, idle %us)\n", A_NAME[k], low ? "memory short" : "left", idle);
     }
   }
 }
@@ -3865,6 +3870,8 @@ int main(void) {
     read_input();
     PT("read_input");
     if (frame_no < splash_until) { in.pressed = 0; in.tap = 0; in.touching = 0; } // (nothing happens under the loading screen)
+    if (in.touching || in.tap) touch_mode = 1;
+    else if (in.pressed || fabsf(in.lx) > 0.5f || fabsf(in.ly) > 0.5f) touch_mode = 0;
     // touch lock: nothing gets through but SELECT (the disguise still works)
     if (screen != S_PIN && screen != S_CALC && touch_lock_filter()) {
       in.pressed &= SCE_CTRL_SELECT;
