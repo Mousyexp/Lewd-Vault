@@ -44,6 +44,7 @@ const SITES = {
   '3hentai': ['#a29bfe', '#3d2c8d', '3H'],
   hentaihand: ['#fab1a0', '#a3361f', 'HH'],
   manhwa18: ['#74b9ff', '#2d3fa0', '18'],
+  hentaiwebtoon: ['#e056fd', '#5f1a7a', 'HW'],
   mangadistrict: ['#81ecec', '#13626b', 'DS'],
   multporn: ['#ff7675', '#7a1616', 'MP'],
   freeadultcomix: ['#ffeaa7', '#a3691a', 'FA'],

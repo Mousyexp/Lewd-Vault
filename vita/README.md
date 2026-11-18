@@ -155,10 +155,15 @@ vault as a comic: its pages as they are, the category Comics, the book's tags an
 collection, so it's a book in the Library's Comics mode). Each comic source's tile says what it has:
 **MANGA** (MangaDex: manga of all kinds), **H MANGA** (E-Hentai, HentaiFox, AsmHentai, HentaiEra,
 nhentai.xxx, HentaiZap, HentaiEnvy, 3Hentai, HentaiHand: doujinshi and hentai manga, one gallery a
-book), **H WEBTOON** (Manhwa18, MangaDistrict: adult webtoons, a series with its chapters) or **SHORT
+book), **H WEBTOON** (Manhwa18, HentaiWebtoon, MangaDistrict: adult webtoons, a series with its chapters, read as one continuous strip) or **SHORT
 COMICS** (Multporn, FreeAdultComix: short adult comics on one page). They're read from the sites'
 own pages as a browser would get them (`LV_MSRC` in `src/manga.c`), with the app's own User-Agent; a
-gallery tagged as something never shown isn't opened (its own tags, not its "related" ones). MangaDex
+gallery tagged as something never shown isn't opened (its own tags, not its "related" ones). A webtoon's chapter can come as a few strips, each 700 x 20,000 pixels or more: it's never decoded whole.
+Where the page gives a strip's size, it's read as bands of about a page's shape (`#lvband=` in its
+address): the strip is downloaded once and cut top to bottom in one pass (`lv_decode_bands` in
+`src/image.c`), each band kept as a small JPEG for the last two strips, and the reader asks for one band
+at a time; Save keeps the bands as the chapter's pages. Comics are always 18+ (there's no switch).
+MangaDex
 chapters only published officially elsewhere have no pages on MangaDex: when a book has no English
 chapter to read there, its chapters in every language are listed instead. Sites behind a Cloudflare
 check (nhentai.net, IMHentai, Hentai2Read, Toonily, ...), ones that are only a JavaScript app, and ones

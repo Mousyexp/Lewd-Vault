@@ -99,5 +99,18 @@ int main(void) {
     CHECK(got == 2, "manhwa18 pages: %d", got);
     lv_strings_free(u, got);
   }
+  // a webtoon's strip with its size: bands about a page's shape; a plain page stays one
+  {
+    char **u = NULL;
+    const char *st = "<img src=\"/assets/images/chapters/x/chapter-1/0001.webp\" width=\"700\" height=\"900\">"
+                     "<img src=\"/assets/images/chapters/x/chapter-1/reader-strip-0002.jpg\" width=\"700\" height=\"23450\">";
+    int got = lv_ms_parse_pages(MS_HWEBTOON, st, &u);
+    CHECK(got == 1 + 23, "strip bands: %d", got);
+    char base[300]; int k = -1, rows = 0, total = 0;
+    CHECK(got > 2 && !strstr(u[0], "#lvband") && lv_band_of(u[2], base, sizeof base, &k, &rows, &total) && k == 1 && rows == 1020 && total == 23450
+          && !strcmp(base, "https://hentaiwebtoon.com/assets/images/chapters/x/chapter-1/reader-strip-0002.jpg"), "band: %s", got > 2 ? u[2] : "");
+    CHECK(!lv_band_of("https://a.example/1.jpg", base, sizeof base, &k, &rows, &total), "a plain page");
+    lv_strings_free(u, got);
+  }
   return fails != 0;
 }

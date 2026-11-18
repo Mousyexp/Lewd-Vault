@@ -19,6 +19,7 @@ typedef struct {
   int (*now)(void);                // the page shown now (a source may not have moved: pages still coming)
   void (*close)(void);
   const char *title;
+  int strip;                       // (a webtoon's: read as a continuous strip, whatever the setting)
 } ComicSrc;
 
 static const char *const RD_MODE[] = {"Pages", "Continuous strip"};
@@ -90,7 +91,7 @@ static struct {
   unsigned anim_at, chrome_until;
   float back_sw;                 // (the rear touchpad's swipe so far)
 } rd;
-#define RD_GAP 8
+#define RD_GAP (s->strip ? 0 : 8) // (between pages in a strip; a webtoon's bands meet)
 static int rd_portrait(void) { return cfg.corient == 1; }
 static float rd_rw(void) { return rd_portrait() ? H : W; } // (the reading space: across)
 static float rd_rh(void) { return rd_portrait() ? W : H; } // (and down)
@@ -140,7 +141,7 @@ static int comic_reader(ComicSrc *s) {
   int top_band = in.tap && in.tap_y < 56 && frame_no < rd.chrome_until; // (the controls' own taps)
 
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 255));
-  if (cfg.cmode == 1) {
+  if (cfg.cmode == 1 || s->strip) {
     // ===== a continuous strip =====
     if (in.touching) { rd.off += rdy; rd.vel = 0; }
     else if (in.flicked && fabsf(rfy) > fabsf(rfx)) rd.vel = rfy * 1.5f;
@@ -258,7 +259,7 @@ static int comic_reader(ComicSrc *s) {
     if (fabsf(rd.back_sw) > 150) {
       int dir = rd.back_sw < 0 ? 1 : -1;
       rd.back_sw = 0;
-      if (cfg.cmode == 1) rd.vel = -dir * RH * 0.05f; else rd_turn(s, rtl ? -dir : dir);
+      if (cfg.cmode == 1 || s->strip) rd.vel = -dir * RH * 0.05f; else rd_turn(s, rtl ? -dir : dir);
     }
   }
   // the controls, along the top for a while after a tap (not turned: read in either hold)

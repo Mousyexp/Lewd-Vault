@@ -187,6 +187,7 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sites/3hentai.png sites/3hentai.png
   FILE sites/hentaihand.png sites/hentaihand.png
   FILE sites/manhwa18.png sites/manhwa18.png
+  FILE sites/hentaiwebtoon.png sites/hentaiwebtoon.png
   FILE sites/mangadistrict.png sites/mangadistrict.png
   FILE sites/multporn.png sites/multporn.png
   FILE sites/freeadultcomix.png sites/freeadultcomix.png

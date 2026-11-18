@@ -13,7 +13,7 @@
 static const char *MD_ORDER[3] = {"Popular", "Latest", "New"};
 
 static struct {
-  int src, order, adult;
+  int src, order;
   char query[128];
   LvBook *books;
   int nbooks, total, more, loading;
@@ -40,7 +40,7 @@ static struct {
   int ptex_page[3];
   float zoom, pan_x, pan_y, swipe;
   int tall_top; // (a tall page just turned to: it starts at its top)
-} mg = {.adult = 1, .book = -1, .page = 0, .zoom = 1, .tall_top = 1};
+} mg = {.book = -1, .page = 0, .zoom = 1, .tall_top = 1};
 static int manga_back = S_WEB;
 static int nmsources(void) { return MS_N; }
 static const char *msource_name(int k) { return k >= 0 && k < MS_N ? LV_MSRC[k].name : ""; }
@@ -102,8 +102,81 @@ static int mg_get(LvHttp *h, const char *url, uint8_t **b, size_t *n, size_t max
 // A page's picture. E-Hentai: the picture page first, for the picture's address; a picture server
 // that doesn't answer: the page again, asking for another server (its "reload"), twice at most.
 // Stops early when *gen moves on from gen.
+// ----- a webtoon's strip (700 x 23000, a chapter in three or four): cut into page-sized bands once,
+//       top to bottom, each kept as a small JPEG; the reader and Save ask for one band at a time -----
+typedef struct { char url[640]; int nb; uint8_t **jpg; size_t *len; } Strip;
+static Strip strips[2];   // (the last two strips cut: a chapter's pages go strip by strip)
+static int strip_next;
+static pthread_mutex_t strip_mx = PTHREAD_MUTEX_INITIALIZER;     // (the two above)
+static pthread_mutex_t strip_cut_mx = PTHREAD_MUTEX_INITIALIZER; // (one strip cut at a time: the most memory it takes)
+static void strip_free(Strip *s) {
+  for (int k = 0; k < s->nb && s->jpg; k++) free(s->jpg[k]);
+  free(s->jpg); free(s->len);
+  memset(s, 0, sizeof *s);
+}
+// band k of a strip cut already: 1 copied, -1 the strip's here without it, 0 not cut
+static int strip_copy(const char *url, int k, uint8_t **b, size_t *n) {
+  int r = 0;
+  pthread_mutex_lock(&strip_mx);
+  for (int i = 0; i < 2 && !r; i++) {
+    Strip *s = &strips[i];
+    if (!s->jpg || strcmp(s->url, url)) continue;
+    r = -1;
+    if (k < s->nb && s->jpg[k] && (*b = malloc(s->len[k]))) { memcpy(*b, s->jpg[k], s->len[k]); *n = s->len[k]; r = 1; }
+  }
+  pthread_mutex_unlock(&strip_mx);
+  return r;
+}
+static int strip_band(void *ctx, int k, LvPixels *px) {
+  Strip *s = ctx;
+  if (k < s->nb) s->jpg[k] = lv_encode_jpeg(px, 90, &s->len[k]);
+  free(px->rgba);
+  return k + 1 >= s->nb;
+}
+static int mg_fetch_band(LvHttp *h, const char *url, int k, int rows, int total, uint8_t **b, size_t *n, const char **err) {
+  int r = strip_copy(url, k, b, n);
+  if (r) return r > 0;
+  pthread_mutex_lock(&strip_cut_mx);
+  r = strip_copy(url, k, b, n); // (cut while this waited: the other thread asked for the same strip)
+  if (r) { pthread_mutex_unlock(&strip_cut_mx); return r > 0; }
+  uint8_t *raw = NULL; size_t rn = 0;
+  int iw = 0, ih = 0;
+  if (mg_get(h, url, &raw, &rn, 24u << 20, err) != 200 || !lv_image_size(raw, rn, &iw, &ih) || iw < 1 || ih < 1) {
+    free(raw); pthread_mutex_unlock(&strip_cut_mx); return 0;
+  }
+  // (its pixels whole, at most, while it's cut: a progressive JPEG keeps all its coefficients)
+  if (!heap_room((size_t)iw * ih * 4 + (8u << 20))) {
+    free(raw); pthread_mutex_unlock(&strip_cut_mx); *err = "Not enough memory for this strip"; return 0;
+  }
+  // (the bands as the page measured them, in the file's own rows)
+  int br = total > 0 ? (int)(((long long)rows * ih + total - 1) / total) : rows;
+  if (br < 16) br = 16;
+  Strip s;
+  memset(&s, 0, sizeof s);
+  snprintf(s.url, sizeof s.url, "%s", url);
+  s.nb = (ih + br - 1) / br;
+  s.jpg = calloc(s.nb, sizeof *s.jpg);
+  s.len = calloc(s.nb, sizeof *s.len);
+  int got = s.jpg && s.len ? lv_decode_bands(raw, rn, br, W, strip_band, &s) : -1;
+  free(raw);
+  LOG("strip %s: %dx%d, %d bands of %d rows -> %d\n", url, iw, ih, s.nb, br, got);
+  if (got <= 0) { strip_free(&s); pthread_mutex_unlock(&strip_cut_mx); *err = "This strip couldn't be read"; return 0; }
+  pthread_mutex_lock(&strip_mx);
+  strip_free(&strips[strip_next]);
+  strips[strip_next] = s;
+  strip_next ^= 1;
+  pthread_mutex_unlock(&strip_mx);
+  pthread_mutex_unlock(&strip_cut_mx);
+  return strip_copy(url, k, b, n) > 0;
+}
+
 static int mg_fetch_page(LvHttp *h, int src, const char *url, volatile int *genp, int gen, uint8_t **b, size_t *n, const char **err) {
   *b = NULL; *n = 0;
+  {
+    char base[700];
+    int bk, brows, btot;
+    if (lv_band_of(url, base, sizeof base, &bk, &brows, &btot)) return mg_fetch_band(h, base, bk, brows, btot, b, n, err);
+  }
   if (src != MS_EHENTAI) {
     if (mg_get(h, url, b, n, 16u << 20, err) == 200) return 1;
     // (a gallery site's page that isn't the kind its thumbnail was: the others tried)
@@ -475,7 +548,7 @@ static void mg_drop_textures(void) {
 static void mg_list_more(void) {
   if (mg.loading || !mg.more) return;
   char url[1600];
-  if (mg.src == MS_MANGADEX) lv_md_list_url(mg.query, mg.adult, mg.order, mg.nbooks, url, sizeof url);
+  if (mg.src == MS_MANGADEX) lv_md_list_url(mg.query, 1 /* (always 18+) */, mg.order, mg.nbooks, url, sizeof url);
   else if (mg.src == MS_EHENTAI) lv_eh_list_url(mg.query, mg.total, url, sizeof url); // (E-Hentai: total counts the pages read)
   else lv_ms_list_url(mg.src, mg.query, mg.total + 1, url, sizeof url); // (the others too: pages from 1)
   mg.loading = 1;
@@ -532,7 +605,7 @@ static void mg_open_book(int k) {
   mg_push(MJ_BIGCOVER, k, 0, mg.books[k].cover);
   if (mg.src == MS_MANGADEX) {
     char url[600];
-    lv_md_feed_url(mg.books[k].id, mg.adult, 0, url, sizeof url);
+    lv_md_feed_url(mg.books[k].id, 1 /* (always 18+) */, 0, url, sizeof url);
     mg.ch_loading = 1;
     mg_push(MJ_CHAPTERS, k, 0, url);
   } else if (mg_chapters(mg.src)) {
@@ -636,7 +709,7 @@ static void mg_take(void) {
           else if (d->n == 0 && d->b == 0 && mg.src == MS_MANGADEX && d->a >= 0 && d->a < mg.nbooks) {
             // (no English chapter with its pages on MangaDex: every language's, then)
             char url[600];
-            lv_md_feed_url_lang(mg.books[d->a].id, mg.adult, 0, 1, url, sizeof url);
+            lv_md_feed_url_lang(mg.books[d->a].id, 1 /* (always 18+) */, 0, 1, url, sizeof url);
             mg.ch_loading = 1;
             mg_push(MJ_CHAPTERS, d->a, 1, url);
           }
@@ -738,7 +811,7 @@ static void draw_manga(void) {
     else text_center(W / 2, TOP + 150, DIM, 17, mg.err[0] ? mg.err : "Nothing found");
   } else if (mg.loading) spinner(W / 2, H - BAR - 20, 12);
 
-  // the top: back, the source (its tab of the sites window), the search, the order, 18+
+  // the top: back, the source (its tab of the sites window), the search, the order
   vita2d_draw_rectangle(0, 0, W, TOP, with_alpha(BG, 250));
   rrect(16, 8, 44, 36, 18, SURF2);
   icon("back", 38, 26, TEXT);
@@ -751,8 +824,6 @@ static void draw_manga(void) {
   if (hit(70, 8, sw, 36) || (in.pressed & SCE_CTRL_START)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 2; sheet_sel = mg.src; sites_scroll = 0; return; }
   int rx = W - 16, hb;
   if (mg.src == MS_MANGADEX) {
-    rx -= head_button(rx, NULL, mg.adult ? "18+ on" : "18+ off", mg.adult ? with_alpha(ACC, 110) : SURF2, &hb) + 10;
-    if (hb || (in.pressed & SCE_CTRL_SQUARE)) { sfx(SFX_TOGGLE); mg.adult = !mg.adult; mg_search(); }
     rx -= head_button(rx, "sort", MD_ORDER[mg.order], SURF2, &hb) + 10;
     if (hb || (in.pressed & SCE_CTRL_TRIANGLE)) { sfx(SFX_TOGGLE); mg.order = (mg.order + 1) % 3; mg_search(); }
   }
@@ -917,6 +988,7 @@ static void draw_reader(void) {
   if (src.n < 1) src.n = 1;
   src.cur = mg.page; src.tex = mg_rd_tex; src.aspect = mg_rd_aspect; src.go = mg_rd_go; src.now = mg_rd_now; src.close = mg_rd_close;
   src.title = mg.book >= 0 && mg.book < mg.nbooks ? mg.books[mg.book].title : "";
+  src.strip = LV_MSRC[mg.src].kind == MK_HWEBTOON; // (webtoons: one long strip, as they're made)
   if (!mg.npages && mg.err[0]) { text_center(W / 2, H / 2, ACC2, 16, mg.err); if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); mg_rd_close(); } return; }
   if (comic_reader(&src)) return;
   // (zoomed in: the page again at twice the screen, once)

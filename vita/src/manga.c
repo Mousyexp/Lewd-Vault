@@ -295,7 +295,7 @@ void lv_strings_free(char **s, int n) {
 // ======================= the other sites =======================
 const char *const LV_MK_NAME[MK_N] = {"MANGA", "H MANGA", "H WEBTOON", "SHORT COMICS"};
 const LvMSrc LV_MSRC[MS_N] = {
-  {"MangaDex", "mangadex", "Manga of all kinds (18+ as chosen)", MF_MANGADEX, MK_MANGA},
+  {"MangaDex", "mangadex", "Manga of all kinds, 18+ included", MF_MANGADEX, MK_MANGA},
   {"E-Hentai", "ehentai", "Doujinshi, hentai manga, CG", MF_EHENTAI, MK_HMANGA},
   {"HentaiFox", "hentaifox", "Hentai manga and doujinshi", MF_GALLERY, MK_HMANGA, "https://hentaifox.com", "/?page=%d", "/search/?q=%s&page=%d", "/gallery/"},
   {"AsmHentai", "asmhentai", "Doujinshi, many in English", MF_GALLERY, MK_HMANGA, "https://asmhentai.com", "/?page=%d", "/search/?q=%s&page=%d", "/g/"},
@@ -306,6 +306,7 @@ const LvMSrc LV_MSRC[MS_N] = {
   {"3Hentai", "3hentai", "Doujinshi, lots in English", MF_GALLERY, MK_HMANGA, "https://3hentai.net", "/%d", "/search?q=%s&page=%d", "/d/"},
   {"HentaiHand", "hentaihand", "Hentai manga, a huge library", MF_HHAND, MK_HMANGA, "https://hentaihand.com", "/api/comics?page=%d", "/api/comics?q=%s&page=%d"},
   {"Manhwa18", "manhwa18", "Adult webtoons (manhwa)", MF_SERIES, MK_HWEBTOON, "https://manhwa18.cc", "/page/%d", "/search?q=%s&page=%d", "/webtoon/", NULL, "/chapters/|/uploads/"},
+  {"HentaiWebtoon", "hentaiwebtoon", "Webtoons, adult ones among them", MF_SERIES, MK_HWEBTOON, "https://hentaiwebtoon.com", NULL, "/manga/?q=%s", "/manga/", NULL, "/assets/images/chapters/"},
   {"MangaDistrict", "mangadistrict", "Adult manhwa and manga", MF_SERIES, MK_HWEBTOON, "https://mangadistrict.com", "/page/%d/", "/page/%d/?s=%s&post_type=wp-manga", "/series/", NULL, "/publication/manga_", 0, 1},
   {"Multporn", "multporn", "Short hentai and western comics", MF_SERIES, MK_SHORT, "https://multporn.net", "/updated_comics?page=%d", "/search?search_api_views_fulltext=%s&page=%d", "/comics/", "/hentai_manga/", "/juicebox_medium/", 1, 0, 1},
   {"FreeAdultComix", "freeadultcomix", "Short adult comics", MF_SERIES, MK_SHORT, "https://freeadultcomix.com", "/page/%d/", "/page/%d/?s=%s", "*", NULL, "/wp-content/uploads/", 1},
@@ -688,10 +689,23 @@ int lv_ms_parse_pages(int src, const char *html, char ***urls) {
     char full[700];
     lv_ms_url(src, a, full, sizeof full);
     int dup = 0;
-    for (int k = 0; k < n && !dup; k++) dup = !strcmp(u[k], full);
+    size_t fl = strlen(full);
+    for (int k = 0; k < n && !dup; k++) dup = !strncmp(u[k], full, fl) && (!u[k][fl] || u[k][fl] == '#');
     if (dup) continue;
-    if (n == cap) { char **nu = realloc(u, (cap *= 2) * sizeof *u); if (!nu) break; u = nu; }
-    u[n++] = strdup(full);
+    // (a webtoon's strip, many screens tall, with its size given: bands of about a page's shape,
+    //  as even as they can be, each read as a page of its own)
+    char ws[16] = "", hs[16] = "";
+    attr(p, "width", ws, sizeof ws);
+    attr(p, "height", hs, sizeof hs);
+    int iw = atoi(ws), ih = atoi(hs), nb = 1, rows = 0;
+    if (iw > 0 && ih > iw * 2.5f) { nb = (int)((ih + iw * 1.5f - 1) / (iw * 1.5f)); rows = (ih + nb - 1) / nb; }
+    for (int k = 0; k < nb; k++) {
+      if (n == cap) { char **nu = realloc(u, (cap *= 2) * sizeof *u); if (!nu) break; u = nu; }
+      char one[760];
+      if (rows) snprintf(one, sizeof one, "%s#lvband=%d,%d,%d", full, k, rows, ih);
+      else snprintf(one, sizeof one, "%s", full);
+      u[n++] = strdup(one);
+    }
   }
   if (!n) { free(u); return -1; }
   *urls = u;
@@ -741,4 +755,12 @@ int lv_hh_parse_images(const char *json, size_t n, char ***urls) {
   if (!got) { free(u); return -1; }
   *urls = u;
   return got;
+}
+
+int lv_band_of(const char *url, char *base, size_t cap, int *k, int *rows, int *total) {
+  const char *f = strstr(url, "#lvband=");
+  *total = 0;
+  if (!f || sscanf(f + 8, "%d,%d,%d", k, rows, total) < 2 || *k < 0 || *rows < 16) return 0;
+  snprintf(base, cap, "%.*s", (int)(f - url), url);
+  return 1;
 }

@@ -6,10 +6,10 @@
 #include <stddef.h>
 
 enum { MS_MANGADEX, MS_EHENTAI, MS_HENTAIFOX, MS_ASMHENTAI, MS_HENTAIERA, MS_NHXXX, MS_HENTAIZAP, MS_HENTAIENVY, MS_3HENTAI,
-       MS_HENTAIHAND, MS_MANHWA18, MS_MDISTRICT, MS_MULTPORN, MS_FAC, MS_N };
+       MS_HENTAIHAND, MS_MANHWA18, MS_HWEBTOON, MS_MDISTRICT, MS_MULTPORN, MS_FAC, MS_N };
 // How a source is read: its own code (MangaDex, E-Hentai), or one of three kinds of site
 enum { MF_MANGADEX, MF_EHENTAI, MF_GALLERY, MF_HHAND, MF_SERIES };
-// What it has, shown on its tile: manga (all kinds, 18+ as chosen), hentai manga, hentai webtoons, short comics
+// What it has, shown on its tile: manga (all kinds, 18+ included), hentai manga, hentai webtoons, short comics
 enum { MK_MANGA, MK_HMANGA, MK_HWEBTOON, MK_SHORT, MK_N };
 extern const char *const LV_MK_NAME[MK_N];
 typedef struct {
@@ -83,3 +83,8 @@ int lv_eh_parse_page(const char *html, char *out, size_t cap);
 // Its "reload from another server" key (nl('...')): 0 and the key, or -1.
 int lv_eh_parse_reload(const char *html, char *out, size_t cap);
 void lv_strings_free(char **s, int n);
+
+// A webtoon's tall strip is read in bands (a page each): "<address>#lvband=<k>,<rows>,<total>" is
+// band k, of <rows> rows of the <total> the page said it has. Returns 1 and fills them (base: the
+// address without it), 0 for a plain address.
+int lv_band_of(const char *url, char *base, size_t cap, int *k, int *rows, int *total);
