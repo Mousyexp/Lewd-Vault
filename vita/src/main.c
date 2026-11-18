@@ -733,6 +733,9 @@ static int cap_shown;
 static void lhero_build(void); // (the hero row over All: after the grid is made, it goes below it)
 static void lhero_offset(void);
 static int refilter_wanted; // (items came in: the Library filtered again at the next frame)
+static int smart; // (a smart collection chosen: lib.c)
+static int smart_pass(int i);
+static int cmp_views_desc(const void *a, const void *b);
 static void refilter(void) {
   // (the list's room kept from one filter to the next: grown only when the vault has grown)
   if (!shown || cap_shown < vault.n + 1) {
@@ -746,10 +749,12 @@ static void refilter(void) {
   for (int i = 0; i < vault.n; i++) {
     if (cat >= 0 && vault.hot[i].cat != cat) continue;
     if (!mode_pass(i) || !lib_pass(i)) continue;
+    if (smart && !smart_pass(i)) continue;
     shown[nshown++] = i;
   }
   sort_mode = cfg.sort;
-  if (cfg.sort == 6) sort_foryou();
+  if (smart == 3) qsort(shown, nshown, sizeof *shown, cmp_views_desc); // (Most viewed: by its views)
+  else if (cfg.sort == 6) sort_foryou();
   else if (cfg.sort == 5) {
     for (int k = nshown - 1; k > 0; k--) { int j = rnd() % (k + 1), t = shown[k]; shown[k] = shown[j]; shown[j] = t; }
   } else {
@@ -1444,7 +1449,7 @@ static int ime_poll(char *out, int cap) {
 }
 
 // ---------- screens ----------
-enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI, S_CALC, S_CLEAN, S_HEALTH, S_VIDEOS, S_MANGA, S_BOOK, S_READER, S_FAVS, S_TEST };
+enum { S_PICK, S_LOCKED, S_UNLOCKING, S_LIBRARY, S_VIEWER, S_SETTINGS, S_COVER, S_WEB, S_WEBVIEW, S_SHOW, S_DRIVE, S_PIN, S_STATS, S_WIFI, S_CALC, S_CLEAN, S_HEALTH, S_VIDEOS, S_MANGA, S_BOOK, S_READER, S_FAVS, S_TEST, S_DUPES };
 static int screen = S_PICK, cover_return = S_LIBRARY;
 static int screen_now(void) { return screen; }
 static char found[16][512];
@@ -1885,7 +1890,7 @@ static int tab_of_screen(void) {
     case S_WEB: case S_VIDEOS: case S_MANGA: return 1;
     case S_SHOW: return 2;
     case S_STATS: return stats_back == S_LIBRARY ? 0 : 3;
-    case S_SETTINGS: case S_DRIVE: case S_WIFI: case S_HEALTH: return 3;
+    case S_SETTINGS: case S_DRIVE: case S_WIFI: case S_HEALTH: case S_DUPES: return 3;
   }
   return -1;
 }
@@ -2105,6 +2110,7 @@ static int text_wrap(int x, int y, unsigned c, int size, const char *s, int w, i
 #include "pin.c"
 #include "privacy.c"
 #include "clean.c"
+#include "dupes.c"
 #include "livearea.c"
 
 // ----- the hero row over All: Continue watching, then Recently appreciated (♥) -----
@@ -2239,6 +2245,16 @@ static int lhero_draw(float y, int *want, int nwant_max) {
 }
 
 static int last_top_row = -1;
+// the card under a point on the screen, or -1
+static int lib_card_at(int px, int py) {
+  for (int k = grid_first(&lgrid, scroll - 8); k < lgrid.n && k < nshown; k++) {
+    Rect r = lgrid.r[k];
+    float ry = TOP + 6 + r.y - scroll;
+    if (ry > H) break;
+    if (px >= r.x && px < r.x + r.w && py >= ry && py < ry + r.h) return k;
+  }
+  return -1;
+}
 static void draw_library(void) {
   float content = lgrid.height + 12;
   float view_h = H - TOP - BAR;
@@ -2288,6 +2304,21 @@ static void draw_library(void) {
   }
   // (a sideways drag in the hero row moves it, not the page)
   int hero_drag = nlhero && in.touching && in.down_y > TOP + 6 - scroll + 24 && in.down_y < TOP + 6 - scroll + 24 + LHERO_CH && abs(in.tx - in.down_x) > abs(in.ty - in.down_y);
+  // (choosing many: a drag that starts sideways on a card paints the choice over every card it
+  //  crosses; up and down still scroll)
+  {
+    static int painting, paint_val;
+    if (!in.touching) painting = 0;
+    else if (selecting && picked && !painting && in.moved && fabsf((float)(in.tx - in.down_x)) > 14 && fabsf((float)(in.tx - in.down_x)) > 1.5f * fabsf((float)(in.ty - in.down_y))) {
+      int k0 = lib_card_at(in.down_x, in.down_y);
+      if (k0 >= 0) { painting = 1; paint_val = !picked[shown[k0]]; picked[shown[k0]] = paint_val; npicked += paint_val ? 1 : -1; sfx(SFX_TOGGLE); }
+    }
+    if (painting) {
+      int k = lib_card_at(in.tx, in.ty);
+      if (k >= 0 && picked[shown[k]] != paint_val) { picked[shown[k]] = paint_val; npicked += paint_val ? 1 : -1; sfx(SFX_TICK); }
+      in.drag_dy = 0; in.flicked = 0; in.tap = 0;
+    }
+  }
   if (in.touching && in.ty > TOP && in.ty < H - BAR && !hero_drag) { scroll -= in.drag_dy; scroll_v = 0; }
   if (in.flicked && in.down_y > TOP) scroll_v = -in.fvy * 1.6f;
   scroll += scroll_v * ft;
@@ -2455,10 +2486,10 @@ static void draw_library(void) {
     title_end = 10 + draw_modes(10, hy + 8) + 10;
     // the category: one button, its list opening under it
     char cl[80];
-    snprintf(cl, sizeof cl, "%s", cat < 0 ? "All categories" : vault.cats[cat]);
+    snprintf(cl, sizeof cl, "%s", smart ? SMART[smart - 1] : cat < 0 ? "All categories" : vault.cats[cat]);
     int cw = text_w(16, cl) + 44;
     if (cw > 180) cw = 180;
-    rrect(title_end, hy + 8, cw, 40, 20, cat < 0 ? SURF2 : with_alpha(ACC, 110));
+    rrect(title_end, hy + 8, cw, 40, 20, cat < 0 && !smart ? SURF2 : with_alpha(ACC, 110));
     text_fit(title_end + 16, hy + 34, TEXT, 16, cl, cw - 40);
     icon("chev_r", title_end + cw - 18, hy + 28, DIM);
     if (hit(title_end, hy + 4, cw, 48)) { sfx(SFX_OPEN); lsheet = LS_CATS; lsheet_sel = cat + 1; cats_x = title_end; }
@@ -3498,7 +3529,7 @@ static void draw_settings(void) {
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change"},
@@ -3524,6 +3555,7 @@ static void draw_settings(void) {
     {"Viewing pictures and videos", vview, "Fit, fill, original size or fit width; landscape or portrait (in the full view: ↑ or the size button)"},
     {"Text size", vtext, "\u2190\u2192: smaller or bigger, everywhere"},
     {"Accent from the picture", cfg.accpic ? "On" : "Off", "The accent colour takes the picture's own, as you look through them"},
+    {"Find duplicates", "", "The same picture more than once: one kept, the rest to the vault's trash"},
   };
   // In sections, each with a header: the rows in the order shown (set_sel stays a row's ST_ id)
   static const signed char ORDER[] = {
@@ -3532,7 +3564,7 @@ static void draw_settings(void) {
     -6, ST_COMICS,
     -3, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK,
     -4, ST_DRIVE, ST_WIFI, ST_CONV,
-    -5, ST_SEARCH, ST_STATS, ST_CLEAN, ST_HEALTH, ST_VAULT, ST_CACHE,
+    -5, ST_SEARCH, ST_STATS, ST_CLEAN, ST_DUPES, ST_HEALTH, ST_VAULT, ST_CACHE,
   };
   static int set_init;
   if (!set_init) { set_init = 1; set_sel = ST_THEME; } // (the first row shown)
@@ -3658,6 +3690,7 @@ static void draw_settings(void) {
         cfg_save(); sfx(SFX_TOGGLE);
         break;
       }
+      case ST_DUPES: if (cross) { sfx(SFX_OPEN); screen = S_DUPES; return; } break;
       case ST_ACCPIC: if (cross || d) { cfg.accpic = !cfg.accpic; if (!cfg.accpic) apply_theme(); cfg_save(); sfx(SFX_TOGGLE); } break;
       case ST_CACHE:
         if (cross) {
@@ -3984,7 +4017,7 @@ enum { A_NONE, A_LIB, A_VIEWER, A_WEB, A_WEBVIEW, A_VIDEOS, A_COMICS, A_FAVS, A_
 static const char *const A_NAME[A_N] = {"", "library", "viewer", "browser", "full view", "videos", "comics", "favourites", "settings"};
 static int area_of(int s) {
   switch (s) {
-    case S_LIBRARY: case S_SHOW: case S_STATS: case S_CLEAN: case S_HEALTH: return A_LIB;
+    case S_LIBRARY: case S_SHOW: case S_STATS: case S_CLEAN: case S_HEALTH: case S_DUPES: return A_LIB;
     case S_VIEWER: return A_VIEWER;
     case S_WEB: return A_WEB;
     case S_WEBVIEW: return A_WEBVIEW;
@@ -4346,6 +4379,8 @@ int main(void) {
       if (r == 1 && ime_for == 4 && screen == S_VIEWER && vk < nshown) { if (lv_item_set(&vault, shown[vk], "tags", got) == 0) { edited(); sfx(SFX_DONE); } }
       if (r == 1 && ime_for == 5 && got[0]) saved_add_current(got);
       if (r == 1 && ime_for == 6) batch_add_tag(got);
+      if (r == 1 && ime_for == 18) batch_collection(got);
+      if (r == 1 && ime_for == 19) mypre_save(got);
       if (r == 1 && ime_for == 7 && got[0]) { snprintf(drive_new_id, sizeof drive_new_id, "%s", got); drive_ask_secret = 1; }
       if (r == 1 && ime_for == 14 && got[0]) add_site_start(got);
       if (r == 1 && ime_for == 15) { snprintf(mg.query, sizeof mg.query, "%s", got); mg_search(); }
@@ -4378,6 +4413,7 @@ int main(void) {
         if (was == S_MANGA && now != S_MANGA) mg_drop_covers();
         if (was == S_VIDEOS && now != S_VIDEOS) vb_drop_wants();
         if ((was == S_FAVS || was == S_VIDEOS) && now != S_FAVS && now != S_VIDEOS) fav_drop_wants();
+        if (shown_custom && now != S_VIEWER) { shown_custom = 0; refilter(); } // (a slideshow of the chosen ones, done)
         // (the slideshow's list on its page and through a slideshow; the Library's own back after)
         if (loaded_vault && now == S_SHOW && !show_pool) { show_pool = 1; refilter(); }
         else if (loaded_vault && show_pool && now != S_SHOW && now != S_VIEWER) {
@@ -4437,6 +4473,7 @@ int main(void) {
       case S_DRIVE: draw_drive(); break;
       case S_PIN: draw_pin(); break;
       case S_STATS: draw_stats(); break;
+      case S_DUPES: draw_dupes(); break;
 #ifdef LV_TESTKIT
       case S_TEST: draw_test_menu(); break;
 #endif

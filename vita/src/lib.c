@@ -391,15 +391,49 @@ static int lsheet, lsheet_sel, quick_item = -1, delete_armed;
 static unsigned delete_armed_at;
 static unsigned char *picked; // per item: chosen (selecting many)
 static int npicked, selecting;
-// The categories: a list opening under their button, big chips that wrap (✕ or a tap picks, ○ closes)
+static int shown_custom; // (the list is a chosen few, for a slideshow: refiltered once it's done)
+// Smart collections: lists that keep themselves up to date, first in the categories' list
+static const char *const SMART[] = {"Unseen", "Hearted this month", "Most viewed", "Short clips", "New this week"};
+#define NSMART 5
+static long long smart_days_ago(int days) { // (yyyymmddhhmmss of that many days ago, as hot.added has it)
+  time_t t = time(NULL) - (time_t)days * 86400;
+  struct tm g;
+  gmtime_r(&t, &g);
+  return (long long)(g.tm_year + 1900) * 10000000000LL + (long long)(g.tm_mon + 1) * 100000000LL + g.tm_mday * 1000000LL + g.tm_hour * 10000 + g.tm_min * 100 + g.tm_sec;
+}
+static int smart_pass(int i) {
+  LvItem *it = &vault.items[i];
+  switch (smart) {
+    case 1: return lv_views_of(&vault, it) == 0;
+    case 2: {
+      if (it->view < 0 || it->view >= vault.nviews || !vault.views[it->view].last_like || !vault.views[it->view].last_like[0]) return 0;
+      char when[40];
+      time_t t = time(NULL) - 30 * 86400;
+      struct tm g;
+      gmtime_r(&t, &g);
+      strftime(when, sizeof when, "%Y-%m-%dT%H:%M:%S", &g);
+      return strcmp(vault.views[it->view].last_like, when) >= 0;
+    }
+    case 3: return lv_views_of(&vault, it) >= 3;
+    case 4: return vault.hot[i].kind == LV_GIF || (vault.hot[i].kind == LV_VIDEO && it->duration > 0 && it->duration <= 30);
+    case 5: return vault.hot[i].added >= smart_days_ago(7);
+  }
+  return 1;
+}
+static int cmp_views_desc(const void *a, const void *b) {
+  long long x = lv_views_of(&vault, &vault.items[*(const int *)a]), y = lv_views_of(&vault, &vault.items[*(const int *)b]);
+  return x < y ? 1 : x > y ? -1 : 0;
+}
+// The categories: a list opening under their button, big chips that wrap (✕ or a tap picks, ○ closes);
+// the smart collections first
 static void draw_cats_sheet(void) {
-  int n = vault.ncats + 1;
+  int n = vault.ncats + 1 + NSMART;
   int x0 = cats_x > W - 520 ? W - 520 : cats_x, y0 = TOP_FULL + 2, pw = 510;
   // (the chips laid out first, for the panel's height)
   int xs[65], ys[65], ws[65], x = 12, y = 12, rows = 1;
   for (int k = 0; k < n && k < 65; k++) {
-    const char *nm = k == 0 ? "All categories" : vault.cats[k - 1];
-    int w = text_w(17, nm) + 40;
+    const char *nm = k < NSMART ? SMART[k] : k == NSMART ? "All categories" : vault.cats[k - 1 - NSMART];
+    int w = text_w(17, nm) + 40 + (k < NSMART ? 16 : 0); // (a smart one: its icon too)
     if (w > pw - 24) w = pw - 24;
     if (x + w > pw - 12) { x = 12; y += 52; rows++; }
     xs[k] = x; ys[k] = y; ws[k] = w;
@@ -412,12 +446,13 @@ static void draw_cats_sheet(void) {
   if (lsheet_sel >= n) lsheet_sel = n - 1;
   for (int k = 0; k < n && k < 65; k++) {
     if (ys[k] + 48 > ph) break;
-    const char *nm = k == 0 ? "All categories" : vault.cats[k - 1];
-    int on = k == cat + 1, cur = k == lsheet_sel;
+    const char *nm = k < NSMART ? SMART[k] : k == NSMART ? "All categories" : vault.cats[k - 1 - NSMART];
+    int on = k < NSMART ? smart == k + 1 : !smart && k == cat + 1 + NSMART, cur = k == lsheet_sel;
     int cx = x0 + xs[k], cy = y0 + ys[k];
     if (cur) rrect(cx - 3, cy - 3, ws[k] + 6, 50, 25, with_alpha(TEXT, 60));
-    rrect(cx, cy, ws[k], 44, 22, on ? ACC : SURF2);
-    text_fit(cx + 20, cy + 29, on ? RGBA(20, 12, 16, 255) : TEXT, 17, nm, ws[k] - 32);
+    if (on) glass(cx, cy, ws[k], 44, 0); else rrect(cx, cy, ws[k], 44, 22, k < NSMART ? mix_col(with_alpha(SURF2, 255), ACC, 0.12f) : SURF2);
+    if (k < NSMART) icon("sparkle", cx + 18, cy + 22, on ? TEXT : ACC);
+    text_fit(cx + (k < NSMART ? 34 : 20), cy + 29, TEXT, 17, nm, ws[k] - (k < NSMART ? 46 : 32));
     if (hit(cx, cy, ws[k], 44)) { lsheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
   if (in.pressed & SCE_CTRL_RIGHT) { lsheet_sel = (lsheet_sel + 1) % n; sfx(SFX_TICK); }
@@ -433,7 +468,12 @@ static void draw_cats_sheet(void) {
     }
     lsheet_sel = best; sfx(SFX_TICK);
   }
-  if (in.pressed & SCE_CTRL_CROSS) { sfx(SFX_TAB); cat = lsheet_sel - 1; refilter(); sel = 0; scroll = 0; lsheet = LS_NONE; }
+  if (in.pressed & SCE_CTRL_CROSS) {
+    sfx(SFX_TAB);
+    if (lsheet_sel < NSMART) { smart = lsheet_sel + 1; cat = -1; }
+    else { smart = 0; cat = lsheet_sel - 1 - NSMART; }
+    refilter(); sel = 0; scroll = 0; lsheet = LS_NONE;
+  }
   else if ((in.pressed & SCE_CTRL_CIRCLE) || (in.tap && !(in.tap_x >= x0 && in.tap_x < x0 + pw && in.tap_y >= y0 && in.tap_y < y0 + ph))) { sfx(SFX_CLOSE); lsheet = LS_NONE; }
   in.pressed = 0; in.tap = 0;
 }
@@ -950,7 +990,7 @@ static void draw_quick_sheet(void) {
 
 // what to do with the ones chosen
 static void draw_batch_sheet(void) {
-  enum { B_STARS, B_LEVEL, B_CAT, B_TAG, B_DELETE, B_N };
+  enum { B_STARS, B_LEVEL, B_CAT, B_TAG, B_HEART, B_COLL, B_SHOW, B_ALL, B_DELETE, B_N };
   static int stars_v = 2, level_v = 5, cat_v = 0;
   int w = 440, x = W / 2 - w / 2, y = 70, rh = 44;
   sheet_frame(x, y, w, B_N * rh + 60);
@@ -965,6 +1005,10 @@ static void draw_batch_sheet(void) {
       case B_LEVEL: snprintf(v, sizeof v, "‹ %d ›  ✕ set", level_v); sheet_row(k, x, ry, w, rh, "NSFW level", v); break;
       case B_CAT: snprintf(v, sizeof v, "‹ %s ›  ✕ move", vault.ncats ? vault.cats[cat_v % vault.ncats] : "-"); sheet_row(k, x, ry, w, rh, "Category", v); break;
       case B_TAG: sheet_row(k, x, ry, w, rh, "Add a tag…", ""); break;
+      case B_HEART: sheet_row(k, x, ry, w, rh, "Give them a heart", ""); break;
+      case B_COLL: sheet_row(k, x, ry, w, rh, "Put them in a collection…", ""); break;
+      case B_SHOW: sheet_row(k, x, ry, w, rh, "A slideshow of them", ""); break;
+      case B_ALL: sheet_row(k, x, ry, w, rh, npicked < nshown ? "Choose all shown" : "Choose none", ""); break;
       case B_DELETE: sheet_row(k, x, ry, w, rh, delete_armed ? "Press again to delete them" : "Delete them", ""); break;
     }
   }
@@ -980,6 +1024,38 @@ static void draw_batch_sheet(void) {
   }
   if (in.pressed & SCE_CTRL_CROSS) {
     if (lsheet_sel == B_TAG) { if (!ime_open) ime_start(6, "A tag for all of them", "", 0); }
+    else if (lsheet_sel == B_COLL) { if (!ime_open) ime_start(18, "A collection for all of them", "", 0); }
+    else if (lsheet_sel == B_HEART) {
+      char now[40];
+      now_iso(now, sizeof now);
+      int n = 0;
+      for (int i = 0; i < vault.n; i++) if (picked && picked[i]) { lv_liked(&vault, &vault.items[i], now); n++; }
+      views_save_async();
+      sfx(SFX_DONE);
+      char m[48]; snprintf(m, sizeof m, "%d hearts given", n); say(m);
+    }
+    else if (lsheet_sel == B_ALL) {
+      int all = npicked < nshown;
+      if (picked) memset(picked, 0, vault.n + 1);
+      npicked = 0;
+      if (all && picked) for (int k = 0; k < nshown; k++) { picked[shown[k]] = 1; npicked++; }
+      sfx(SFX_TOGGLE);
+    }
+    else if (lsheet_sel == B_SHOW) {
+      // (the chosen ones, as the list, for the slideshow: the Library's own back when it ends)
+      int n = 0;
+      for (int k = 0; k < nshown; k++) if (picked[shown[k]]) shown[n++] = shown[k];
+      if (n) {
+        nshown = n; shown_custom = 1;
+        grid_build(&lgrid, nshown, lib_aspect);
+        selecting = 0; memset(picked, 0, vault.n + 1); npicked = 0;
+        lsheet = LS_NONE;
+        sfx(SFX_SLIDESHOW);
+        open_viewer(0, 1);
+        in.pressed = 0;
+        return;
+      }
+    }
     else if (lsheet_sel == B_DELETE) {
       if (delete_confirmed()) {
         saver_flush(); // (a queued write mustn't land after this one)
@@ -1008,6 +1084,16 @@ static void draw_batch_sheet(void) {
   }
   if (in.pressed & SCE_CTRL_CIRCLE) sheet_close();
   in.pressed = 0; in.tap = 0;
+}
+// the collection typed for all the chosen ones (an album: Library > the album filter)
+static void batch_collection(const char *name) {
+  if (!name || !name[0]) return;
+  int n = 0;
+  for (int i = 0; i < vault.n; i++) if (picked && picked[i] && lv_item_set(&vault, i, "collection", name) == 0) { edited(); n++; }
+  save_edits_now();
+  sfx(SFX_DONE);
+  char m[160]; snprintf(m, sizeof m, "%d put in \u201c%.100s\u201d", n, name); say(m);
+  lib_after_change();
 }
 // the tag typed for all the chosen ones
 static void batch_add_tag(const char *tag) {

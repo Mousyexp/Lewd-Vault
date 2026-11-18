@@ -349,6 +349,15 @@ The tab bar is a pill floating over the bottom, with icons in the manner of iOS'
 (`tools/make-ui-icons.mjs`, drawn at exactly their size); buttons, chips and rows are at least 36 px
 high and every touch target has a few pixels of slack.
 
+**Smart collections** (first in the categories' list): Unseen, Hearted this month, Most viewed (in
+that order), Short clips (GIFs and videos of 30 s or less) and New this week, kept up to date as the
+vault changes. **Find duplicates** (Settings, Library): each thumbnail made into a fingerprint (a
+difference hash), the ones that all but match grouped; the sharpest is kept, ✕ sends the rest to the
+vault's trash (`src/dupes.c`). **Choosing many** (hold a card): a sideways drag paints the choice over
+the cards it crosses; △ gives stars, the level, a category, a tag, a heart, a collection, a slideshow
+of just them, all or none, or the trash. The Slideshow page keeps **your own** settings under a name
+(+ Save or R; a tap or L to use one, held to let it go).
+
 **Each part on its own.** The app's parts (the Library, its full view, the Browser and its full view,
 the video browser, Comics, Favourites, Settings) each hold what they show: textures, a screen buffer or
 three, connections. Held and not drawn, that costs no time, so a part that's been left keeps it, and

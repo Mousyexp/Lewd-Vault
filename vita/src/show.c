@@ -181,6 +181,73 @@ static int is_locked(int i) {
   if (at != frame_no) { at = frame_no; lvl = unlocked_level(); }
   return vault.items[i].nsfw > lvl;
 }
+// ---------- your own presets: the settings as they are, kept under a name (slideshow_presets.txt) ----------
+typedef struct { char name[40]; int preset, lo, first, hi, below, motion, fade, sleep, lock, interval, shuffle; float minutes, s0, s1; } MyPre;
+#define NMYPRE 4
+static MyPre mypre[NMYPRE];
+static int nmypre, mypre_loaded, mypre_at = -1;
+static void mypre_write(void) {
+  FILE *f = fopen(DATA "/slideshow_presets.txt", "w");
+  if (!f) return;
+  for (int k = 0; k < nmypre; k++) {
+    MyPre *m = &mypre[k];
+    fprintf(f, "%s\t%d %d %d %d %d %d %d %d %d %d %d %.2f %.2f %.2f\n", m->name, m->preset, m->lo, m->first, m->hi, m->below, m->motion, m->fade,
+            m->sleep, m->lock, m->interval, m->shuffle, m->minutes, m->s0, m->s1);
+  }
+  fclose(f);
+}
+static void mypre_load(void) {
+  if (mypre_loaded) return;
+  mypre_loaded = 1;
+  FILE *f = fopen(DATA "/slideshow_presets.txt", "r");
+  if (!f) return;
+  char line[256];
+  while (nmypre < NMYPRE && fgets(line, sizeof line, f)) {
+    char *t = strchr(line, '\t');
+    if (!t) continue;
+    *t++ = 0;
+    MyPre *m = &mypre[nmypre];
+    snprintf(m->name, sizeof m->name, "%s", line);
+    if (sscanf(t, "%d %d %d %d %d %d %d %d %d %d %d %f %f %f", &m->preset, &m->lo, &m->first, &m->hi, &m->below, &m->motion, &m->fade, &m->sleep,
+               &m->lock, &m->interval, &m->shuffle, &m->minutes, &m->s0, &m->s1) == 14) nmypre++;
+  }
+  fclose(f);
+}
+static void mypre_save(const char *name) {
+  mypre_load();
+  if (!name || !name[0]) return;
+  int k = nmypre < NMYPRE ? nmypre++ : NMYPRE - 1; // (full: the last one replaced)
+  MyPre *m = &mypre[k];
+  snprintf(m->name, sizeof m->name, "%s", name);
+  for (char *p = m->name; *p; p++) if (*p == '\t' || *p == '\n') *p = ' ';
+  m->preset = so.preset; m->lo = so.lo; m->first = so.first; m->hi = so.hi; m->below = so.below; m->motion = so.motion; m->fade = so.fade;
+  m->sleep = so.sleep; m->lock = so.lock; m->minutes = so.minutes; m->s0 = so.s0; m->s1 = so.s1; m->interval = cfg.interval; m->shuffle = cfg.shuffle;
+  mypre_write();
+  mypre_at = k;
+  sfx(SFX_SAVED);
+  say("Kept as one of yours");
+}
+static void mypre_use(int k) {
+  if (k < 0 || k >= nmypre) return;
+  if (ss.on) { say("End the session to change its kind"); return; }
+  MyPre *m = &mypre[k];
+  so.preset = m->preset; so.lo = m->lo; so.first = m->first; so.hi = m->hi; so.below = m->below; so.motion = m->motion; so.fade = m->fade;
+  so.sleep = m->sleep; so.lock = m->lock; so.minutes = m->minutes; so.s0 = m->s0; so.s1 = m->s1;
+  if (m->interval >= 2 && m->interval <= 60) cfg.interval = m->interval;
+  cfg.shuffle = m->shuffle != 0;
+  cfg_save(); show_save();
+  mypre_at = k;
+  sfx(SFX_TOGGLE);
+}
+static void mypre_delete(int k) {
+  if (k < 0 || k >= nmypre) return;
+  memmove(mypre + k, mypre + k + 1, (nmypre - k - 1) * sizeof *mypre);
+  nmypre--;
+  mypre_at = -1;
+  mypre_write();
+  sfx(SFX_DELETE);
+  say("Taken out of yours");
+}
 static void show_load(void) {
   FILE *f = fopen(DATA "/slideshow.txt", "r");
   if (!f) return;
@@ -380,11 +447,33 @@ static void draw_show_plan(void) {
     int y = text_wrap(cx + 16, ky + (levels ? 128 : 92), FAINT, 14, ABOUT[so.preset], cw - 32, 20);
     char cnt[64];
     snprintf(cnt, sizeof cnt, "%d in the Library now", nshown);
-    if (y < cy + ch - 70) text(cx + 16, y + 4, DIM, 14, cnt);
+    if (y < cy + ch - 112) text(cx + 16, y + 4, DIM, 14, cnt); // (above the row of yours)
   }
   // Start (or carry on), and end the session
   const char *go = ss.on && levels ? "▶  Carry on" : "▶  Start";
   int bw = ss.on ? (cw - 24 - 10) / 2 : cw - 24, by = cy + ch - 56;
+  // yours: the settings kept under a name (R keeps them, L goes round them; held: let go of one)
+  {
+    mypre_load();
+    int px = cx + 12, py = by - 42;
+    text(px, py + 21, FAINT, 13, "Mine");
+    px += text_w(13, "Mine") + 10;
+    for (int k = 0; k < nmypre; k++) {
+      int pw = text_w(14, mypre[k].name) + 26;
+      if (pw > 120) pw = 120;
+      if (px + pw > cx + cw - 70) break;
+      if (k == mypre_at) glass(px, py + 2, pw, 30, 0); else rrect(px, py + 2, pw, 30, 10, SURF2);
+      text_fit(px + 13, py + 22, k == mypre_at ? TEXT : DIM, 14, mypre[k].name, pw - 20);
+      if (in.touching && !in.moved && frame_no - in.down_frame == 40 && in.down_x >= px && in.down_x < px + pw && in.down_y >= py && in.down_y < py + 32) { mypre_delete(k); in.moved = 1; break; }
+      if (hit(px, py + 2, pw, 30)) mypre_use(k);
+      px += pw + 6;
+    }
+    int aw = text_w(14, "+ Save") + 24;
+    rrect(px, py + 2, aw, 30, 10, mix_col(with_alpha(SURF2, 255), ACC, 0.15f));
+    text(px + 12, py + 22, ACC, 14, "+ Save");
+    if ((hit(px, py + 2, aw, 30) || (in.pressed & SCE_CTRL_RTRIGGER)) && !ime_open) { char d[24]; snprintf(d, sizeof d, "Mine %d", nmypre + 1); ime_start(19, "A name for these settings", d, 0); }
+    if ((in.pressed & SCE_CTRL_LTRIGGER) && nmypre) mypre_use((mypre_at + 1) % nmypre);
+  }
   rrect(cx + 12, by, bw, 44, 22, ACC);
   text_center(cx + 12 + bw / 2, by + 29, RGBA(20, 12, 16, 255), 18, go);
   if (plan_sel == nf - 1) focus_ring(cx + 12, by, bw, 44);
