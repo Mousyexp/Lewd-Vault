@@ -144,7 +144,47 @@ static void pin_finish(void) {
 static float pin_clamp01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 static float pin_out(float t) { t = pin_clamp01(t); return 1 - (1 - t) * (1 - t) * (1 - t); }             // (ease out)
 static float pin_back(float t) { t = pin_clamp01(t); float c = 1.9f; return 1 + (c + 1) * powf(t - 1, 3) + c * powf(t - 1, 2); } // (a little past, then back)
+// The keys' pictures, made once at the size they're drawn (no scaling, so their edges stay smooth):
+// the key (a disc), its rim (light from above: bright at the top, faint at the bottom) and its sheen
+// (a soft glow across its top half). White, tinted as they're drawn.
+#define PIN_KD 80 // (a key's diameter)
+static vita2d_texture *pin_key_tex, *pin_rim_tex, *pin_sheen_tex;
+static void pin_make_keys(void) {
+  if (pin_key_tex) return;
+  const int S = PIN_KD + 4;
+  pin_key_tex = tex_new(S, S); pin_rim_tex = tex_new(S, S); pin_sheen_tex = tex_new(S, S);
+  if (!pin_key_tex || !pin_rim_tex || !pin_sheen_tex) return;
+  vita2d_texture *ts[3] = {pin_key_tex, pin_rim_tex, pin_sheen_tex};
+  for (int t = 0; t < 3; t++) {
+    uint8_t *d = vita2d_texture_get_datap(ts[t]);
+    unsigned stride = vita2d_texture_get_stride(ts[t]);
+    for (int y = 0; y < S; y++)
+      for (int x = 0; x < S; x++) {
+        float dx = x + 0.5f - S / 2.0f, dy = y + 0.5f - S / 2.0f, r = PIN_KD / 2.0f, dist = sqrtf(dx * dx + dy * dy);
+        float inside = fminf(fmaxf(r - dist + 0.5f, 0), 1); // (one pixel of soft edge)
+        float al = 0;
+        if (t == 0) al = inside;
+        else if (t == 1) { // (a 1.5 px ring, brighter at the top)
+          float ring = fminf(fmaxf(1.5f - fabsf(dist - (r - 1.0f)) + 0.5f, 0), 1);
+          al = ring * (0.35f + 0.65f * fminf(fmaxf(0.5f - dy / (2 * r), 0), 1));
+        } else { // (a soft glow in the top half, falling away to nothing by the middle)
+          float up = fminf(fmaxf(-dy / r, 0), 1);
+          al = inside * up * up * 0.9f;
+        }
+        uint8_t *px = d + y * stride + x * 4;
+        px[0] = px[1] = px[2] = 255;
+        px[3] = (uint8_t)(al * 255);
+      }
+    vita2d_texture_set_filters(ts[t], SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
+  }
+}
+static void pin_tex_at(vita2d_texture *t, float cx, float cy, float sc, unsigned col) {
+  if (!t) return;
+  float S = vita2d_texture_get_width(t);
+  vita2d_draw_texture_tint_scale(t, cx - S * sc / 2, cy - S * sc / 2, sc, sc, col);
+}
 static void draw_pin(void) {
+  pin_make_keys();
   // (the background: the frame is cleared to it already) soft lights drifting behind it all
   for (int k = 0; k < 7; k++) {
     float ph = frame_no * (0.004f + k * 0.0011f) + k * 1.7f;
@@ -159,7 +199,8 @@ static void draw_pin(void) {
   if (pin_fail_shake > 0) pin_fail_shake--;
   float fade = pin_ok_at ? 1 - pin_out((ok_t - 0.45f) / 0.55f) : 1; // (the page fading as it opens)
   int a = (int)(255 * in_t * fade);
-  float lx = W / 2 - 230, rise = (1 - in_t) * 30;
+  // Centred, as a phone's: the heart, the title and the dots along the top, the pad below
+  const float cx = W / 2.0f, rise = (1 - in_t) * 24;
   // a heart above the title: breathing; a beat when a digit goes in; a bigger one as it opens
   {
     int n0 = (int)strlen(pin_typed);
@@ -167,59 +208,63 @@ static void draw_pin(void) {
     for (int k = 0; k < n0 && k < 6; k++) if (pin_dot_at[k] > last) last = pin_dot_at[k];
     float beat = last ? fmaxf(0, 1 - (frame_no - last) / 12.0f) : 0;
     float sc = 1 + 0.05f * sinf(frame_no * 0.06f) + 0.18f * beat + (pin_ok_at ? 0.6f * pin_out(ok_t) : 0);
-    circle(lx, 92 + rise, 34 * sc, with_alpha(ACC, (int)(40 * in_t * fade)));
-    heart(lx, 92 + rise, 15 * sc, with_alpha(ACC, a));
+    circle(cx, 38 + rise, 22 * sc, with_alpha(ACC, (int)(36 * in_t * fade)));
+    icon("heart_fill", cx, 38 + rise, with_alpha(ACC, a)); // (the icon at its own size: crisp)
   }
-  text_center(lx, 150 + rise, with_alpha(TEXT, a), 26, "Lewd Vault");
-  text_center(lx, 186 + rise, with_alpha(DIM, a), 17, pin_ok_at ? "Welcome back" : "Enter your PIN");
+  const char *title = pin_ok_at ? "Welcome back" : frame_no < pin_wait_until ? "Too many tries" : "Enter your PIN";
+  text_center(cx, 84 + rise, with_alpha(TEXT, a), 20, title);
   // the dots: each pops in when typed, drops away when taken back or wrong; lit in turn when right
   int n = (int)strlen(pin_typed);
+  const float dy0 = 112 + rise, dgap = 24;
   for (int k = 0; k < 6; k++) {
-    float cx = lx - 75 + k * 30 + shake, cy = 236 + rise;
-    int filled = k < n || (pin_ok_at && k < 6);
-    circle(cx, cy, 8, with_alpha(TEXT, (int)(60 * in_t * fade)));
+    float dx = cx - dgap * 2.5f + k * dgap + shake;
+    int filled = k < n || pin_ok_at;
+    circle(dx, dy0, 6, with_alpha(TEXT, (int)(70 * in_t * fade)));
+    circle(dx, dy0, 4.5f, with_alpha(BG, a)); // (an open ring until it's typed)
     if (filled) {
       float pop = pin_dot_at[k] ? pin_back((frame_no - pin_dot_at[k]) / 10.0f) : 1;
       unsigned col = pin_fail_shake > 0 ? ACC2 : ACC;
       if (pin_ok_at) { float w = pin_clamp01(ok_t * 6 - k * 0.5f); pop = 1 + 0.35f * sinf(w * 3.14159f); col = mix_col(ACC, TEXT, w * 0.6f); }
-      circle(cx, cy, 9 * pop, with_alpha(col, a));
+      circle(dx, dy0, 7 * pop, with_alpha(col, a));
     } else if (pin_dot_gone_at[k] && frame_no - pin_dot_gone_at[k] < 14) {
       float g = (frame_no - pin_dot_gone_at[k]) / 14.0f;
-      circle(cx, cy + g * g * 26, 9 * (1 - g), with_alpha(pin_fail_shake > 0 ? ACC2 : ACC, (int)(a * (1 - g))));
+      circle(dx, dy0 + g * g * 22, 7 * (1 - g), with_alpha(pin_fail_shake > 0 ? ACC2 : ACC, (int)(a * (1 - g))));
     }
   }
   if (frame_no < pin_wait_until) {
-    // (a ring running down the wait)
+    // (a bar running down the wait, under the dots)
     float left = (pin_wait_until - frame_no) / (30.0f * 60);
-    for (int k = 0; k < 48; k++) {
-      float ang = -1.5708f + k / 48.0f * 6.2832f;
-      circle(lx + cosf(ang) * 20, 300 + rise + sinf(ang) * 20, 2.2f, k / 48.0f < left ? with_alpha(ACC2, a) : with_alpha(TEXT, a / 6));
-    }
-    char m[64];
-    snprintf(m, sizeof m, "Too many tries: wait %u s", (pin_wait_until - frame_no) / 60 + 1);
-    text_center(lx, 350 + rise, with_alpha(ACC2, a), 16, m);
+    rrect_round(cx - 70, dy0 + 18, 140, 4, 2, with_alpha(TEXT, a / 6));
+    rrect_round(cx - 70, dy0 + 18, 140 * left, 4, 2, with_alpha(ACC2, a));
+    char m[48];
+    snprintf(m, sizeof m, "wait %u s", (pin_wait_until - frame_no) / 60 + 1);
+    text_center(cx, dy0 + 40, with_alpha(ACC2, a), 13, m);
   }
-  // the pad: 1-9, then back, 0, OK; the keys come in one after another, squash when pressed
+  // the pad: 1-9, then back, 0, OK; round glass keys that come in one after another and squash when pressed
   static const char *keys[12] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "OK"};
-  int px = W / 2 + 40, py = 70, kw = 110, kh = 92;
+  const float colx = 108, rowy = 90, top = 192;
   for (int k = 0; k < 12; k++) {
     float kin = pin_out((since - (k % 3) * 2 - (k / 3) * 3) / 18.0f);
-    int x = px + (k % 3) * (kw + 10), y = py + (k / 3) * (kh + 10) + (int)((1 - kin) * 40);
-    int on = k == pin_sel && !pin_ok_at;
+    float kcx = cx + ((k % 3) - 1) * colx, kcy = top + (k / 3) * rowy + (1 - kin) * 36;
+    int on = k == pin_sel && !pin_ok_at, digit = k != 9 && k != 11;
     float pr = pin_key_at[k] ? (frame_no - pin_key_at[k]) / 12.0f : 1; // (0 just pressed .. 1 done)
-    float sq = pr < 1 ? 1 - 0.08f * sinf(pin_clamp01(pr) * 3.14159f) : 1;
+    float sq = pr < 1 ? 1 - 0.07f * sinf(pin_clamp01(pr) * 3.14159f) : 1;
     int ka = (int)(255 * kin * fade);
-    // (round keys, as a phone's: a faint ring, the key, a ripple ring when pressed)
-    float kcx = x + kw / 2.0f, kcy = y + kh / 2.0f, kr = (kh / 2.0f - 2) * sq;
-    circle(kcx, kcy, kr + 1.5f, with_alpha(TEXT, ka / 9));
-    circle(kcx, kcy, kr, on ? with_alpha(ACC, ka * 210 / 255) : with_alpha(SURF2, ka));
     if (pr < 1) { // (a ripple from the key)
       float rr = pin_out(pr);
-      circle(kcx, kcy, kr + rr * 14, with_alpha(ACC, (int)(60 * (1 - pr) * kin)));
-      circle(kcx, kcy, kr, with_alpha(on ? TEXT : ACC, (int)(60 * (1 - pr))));
+      pin_tex_at(pin_key_tex, kcx, kcy, sq + rr * 0.35f, with_alpha(ACC, (int)(55 * (1 - pr) * kin)));
     }
-    text_center(x + kw / 2, y + kh / 2 + 11, with_alpha(on ? RGBA(20, 12, 16, 255) : TEXT, ka), 30, keys[k]);
-    if (!pin_ok_at && hit(x, y, kw, kh)) { pin_sel = k; in.pressed |= SCE_CTRL_CROSS; }
+    if (on) pin_tex_at(pin_key_tex, kcx, kcy, sq * 1.12f, with_alpha(ACC, ka / 5)); // (a glow round the chosen one)
+    if (digit || on) {
+      unsigned body = on ? mix_col(SURF2, ACC, 0.85f) : mix_col(SURF2, ACC, 0.10f);
+      if (pr < 1) body = mix_col(body, TEXT, 0.25f * (1 - pr));
+      pin_tex_at(pin_key_tex, kcx, kcy, sq, with_alpha(body, digit ? ka * 235 / 255 : ka * 200 / 255));
+      pin_tex_at(pin_sheen_tex, kcx, kcy, sq, with_alpha(TEXT, ka / 9));
+      pin_tex_at(pin_rim_tex, kcx, kcy, sq, with_alpha(TEXT, on ? ka / 2 : ka / 4));
+    }
+    unsigned tc = on ? RGBA(20, 12, 16, 255) : digit ? TEXT : DIM;
+    text_center(kcx, kcy + (digit ? 12 : 7), with_alpha(tc, ka), digit ? 32 : 19, keys[k]);
+    if (!pin_ok_at && in.tap && (in.tap_x - kcx) * (in.tap_x - kcx) + (in.tap_y - kcy) * (in.tap_y - kcy) < 44 * 44) { pin_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
   if (pin_ok_at) return; // (opening: no more keys)
   if (in.pressed & SCE_CTRL_RIGHT) pin_sel = pin_sel % 3 == 2 ? pin_sel - 2 : pin_sel + 1;

@@ -49,15 +49,23 @@ static char proxy[256], cafile[256] = "app0:cacert.pem";
 #define LOG(...) do { } while (0)
 #endif
 static pthread_mutex_t init_mx = PTHREAD_MUTEX_INITIALIZER;
-// The certificate list: read once with the Vita's own file calls and made into certificates by the
-// app itself (each PEM block decoded here, then d2i_X509), which are put into every connection's
-// trust store (CURLOPT_SSL_CTX_FUNCTION). OpenSSL reading the list itself fails on a real Vita, by
-// path ("error adding trust anchors from locations") and as a blob ("...from certificate blob: 77"),
-// though both work in Vita3K; this way one certificate it can't read is skipped, not all of them,
-// and what happened is kept (lv_net_ca_status, in the log and the test kit's reports).
-static X509 **ca_certs;
+// The certificate list: read once with the Vita's own file calls and kept as bytes (each one's DER
+// and the hash of its subject), never as OpenSSL certificates: on a real Vita each certificate
+// OpenSSL holds takes a lock, each lock is one of the system's objects, and a process has only so
+// many. Holding the whole list (by path, as a blob, or read here and kept) used them all up: the list
+// failed part way ("asn1_do_lock: malloc failure", "error adding trust anchors ... 77") and then
+// nothing else could have a lock either ("insufficient randomness"). Vita3K has no such limit.
+// So each connection's trust store gets a lookup instead (CURLOPT_SSL_CTX_FUNCTION): when a site's
+// chain asks for an issuer, the one certificate with that subject is made then (usually one or two
+// a connection), held by that connection's store and freed with it. What happened is kept
+// (lv_net_ca_status: the log and the test kit's diagnostics).
+typedef struct { unsigned long hash; unsigned off, len; } CaEnt;
+static uint8_t *ca_der;
+static CaEnt *ca_ent;
 static int ca_n, ca_bad, ca_tried;
+static volatile int ca_made, ca_found, ca_missed; // (certificates made on demand, issuers found, not found)
 static char ca_status[200];
+static X509_LOOKUP_METHOD *ca_meth;
 static pthread_mutex_t ca_mx = PTHREAD_MUTEX_INITIALIZER;
 static int b64v(int c) {
   if (c >= 'A' && c <= 'Z') return c - 'A';
@@ -66,6 +74,29 @@ static int b64v(int c) {
   if (c == '+') return 62;
   if (c == '/') return 63;
   return -1;
+}
+// (the lookup: the issuer a chain asks for, made from its bytes and put in the asking store)
+static int ca_by_subject(X509_LOOKUP *lu, X509_LOOKUP_TYPE type, X509_NAME *name, X509_OBJECT *ret) {
+  if (type != X509_LU_X509 || !name) return 0;
+  unsigned long h = X509_NAME_hash(name);
+  for (int k = 0; k < ca_n; k++) {
+    if (ca_ent[k].hash != h) continue;
+    const unsigned char *dp = ca_der + ca_ent[k].off;
+    X509 *x = d2i_X509(NULL, &dp, (long)ca_ent[k].len);
+    if (!x) continue;
+    ca_made++;
+    if (X509_NAME_cmp(X509_get_subject_name(x), name) != 0) { X509_free(x); continue; }
+    X509_STORE *st = X509_LOOKUP_get_store(lu);
+    // (references: 1 ours; the store's; ret's, which the caller treats as its own and never gives back,
+    //  as OpenSSL's own lookups arrange it: so ours and that one are let go, leaving the store's)
+    if (!st || !X509_STORE_add_cert(st, x) || !X509_OBJECT_set1_X509(ret, x)) { X509_free(x); ERR_clear_error(); return 0; }
+    X509_free(x);
+    X509_free(x);
+    ca_found++;
+    return 1;
+  }
+  ca_missed++;
+  return 0;
 }
 static int ca_load(void) {
   pthread_mutex_lock(&ca_mx);
@@ -84,20 +115,23 @@ static int ca_load(void) {
     }
     if (!pem || !got) snprintf(ca_status, sizeof ca_status, "certificates: %s couldn't be read (%08x)", cafile, (unsigned)fd);
     else {
-      int cap = 256;
-      ca_certs = calloc(cap, sizeof *ca_certs);
-      uint8_t *der = malloc(16384);
+      int cap = 0;
+      for (char *p = pem; (p = strstr(p, "-----BEGIN CERTIFICATE-----")); p += 27) cap++;
+      ca_ent = calloc(cap + 1, sizeof *ca_ent);
+      ca_der = malloc(got); // (DER is smaller than its base64)
+      size_t used = 0;
       unsigned long first_err = 0;
       int first_bad = -1, k = 0;
-      for (char *p = pem; ca_certs && der && (p = strstr(p, "-----BEGIN CERTIFICATE-----")); k++) {
+      for (char *p = pem; ca_ent && ca_der && ca_n < cap && (p = strstr(p, "-----BEGIN CERTIFICATE-----")); k++) {
         p += 27;
         char *e = strstr(p, "-----END CERTIFICATE-----");
         if (!e) break;
         // (base64 to DER, by hand)
+        uint8_t *der = ca_der + used;
         size_t dn = 0;
         unsigned acc = 0;
         int bits = 0;
-        for (char *q = p; q < e && dn < 16384; q++) {
+        for (char *q = p; q < e && used + dn < got; q++) {
           int v = b64v((unsigned char)*q);
           if (v < 0) continue;
           acc = (acc << 6) | (unsigned)v;
@@ -105,38 +139,46 @@ static int ca_load(void) {
           if (bits >= 8) { bits -= 8; der[dn++] = (uint8_t)(acc >> bits); }
         }
         p = e + 25;
+        // (made once, for its subject's hash, and let go at once: one lock at a time)
         const unsigned char *dp = der;
         ERR_clear_error();
         X509 *x = d2i_X509(NULL, &dp, (long)dn);
         if (!x) { ca_bad++; if (first_bad < 0) { first_bad = k; first_err = ERR_peek_error(); } continue; }
-        if (ca_n >= cap) { X509 **nc = realloc(ca_certs, (size_t)(cap *= 2) * sizeof *nc); if (!nc) { X509_free(x); break; } ca_certs = nc; }
-        ca_certs[ca_n++] = x;
+        ca_ent[ca_n].hash = X509_NAME_hash(X509_get_subject_name(x));
+        X509_free(x);
+        ca_ent[ca_n].off = (unsigned)used;
+        ca_ent[ca_n].len = (unsigned)dn;
+        ca_n++;
+        used += dn;
       }
-      free(der);
+      if (ca_n) {
+        ca_meth = X509_LOOKUP_meth_new("lewd vault certificates");
+        if (ca_meth) X509_LOOKUP_meth_set_get_by_subject(ca_meth, ca_by_subject);
+      }
       if (first_bad >= 0) {
         char eb[120];
         ERR_error_string_n(first_err, eb, sizeof eb);
         snprintf(ca_status, sizeof ca_status, "certificates: %d read, %d not (the first, #%d: %s)", ca_n, ca_bad, first_bad, eb);
-      } else snprintf(ca_status, sizeof ca_status, "certificates: all %d read", ca_n);
+      } else snprintf(ca_status, sizeof ca_status, "certificates: all %d read%s", ca_n, ca_meth ? "" : " (no lookup: out of memory)");
     }
     free(pem);
     LOG("%s\n", ca_status);
   }
   pthread_mutex_unlock(&ca_mx);
-  return ca_n > 0 ? 0 : -1;
+  return ca_n > 0 && ca_meth ? 0 : -1;
 }
 const char *lv_net_ca_status(void) {
   ca_load(); // (read now if nothing has asked yet)
   static char full[300];
-  snprintf(full, sizeof full, "%s  ·  %s", ca_status[0] ? ca_status : "certificates: not read", OpenSSL_version(OPENSSL_VERSION));
+  snprintf(full, sizeof full, "%s; used: %d found, %d not  ·  %s", ca_status[0] ? ca_status : "certificates: not read", ca_found, ca_missed,
+           OpenSSL_version(OPENSSL_VERSION));
   return full;
 }
-// (each new connection's trust store: the certificates read above)
+// (each new connection's trust store: the lookup above, nothing made until it's asked)
 static CURLcode ca_into_ctx(CURL *c, void *ssl_ctx, void *arg) {
   (void)c; (void)arg;
   X509_STORE *st = SSL_CTX_get_cert_store((SSL_CTX *)ssl_ctx);
-  if (!st) return CURLE_SSL_CACERT_BADFILE;
-  for (int k = 0; k < ca_n; k++) X509_STORE_add_cert(st, ca_certs[k]); // (a reference each; one already there is fine)
+  if (!st || !ca_meth || !X509_STORE_add_lookup(st, ca_meth)) return CURLE_SSL_CACERT_BADFILE;
   ERR_clear_error();
   return CURLE_OK;
 }
@@ -411,7 +453,7 @@ static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const
   // (the JSON comes compressed: a fraction of its size; if unpacking ever fails, everything after
   // comes plain, as Vita3K's zlib needs)
   if (!no_compress) curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "gzip");
-  if ((ca_tried && ca_n) || ca_load() == 0) {
+  if ((ca_tried && ca_meth) || ca_load() == 0) {
     curl_easy_setopt(c, CURLOPT_CAINFO, NULL);
     curl_easy_setopt(c, CURLOPT_CAPATH, NULL);
     curl_easy_setopt(c, CURLOPT_SSL_CTX_FUNCTION, ca_into_ctx);
