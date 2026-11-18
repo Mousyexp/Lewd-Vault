@@ -941,6 +941,7 @@ static const char *msource_name(int k);
 static const char *msource_icon(int k);
 static const char *msource_about(int k);
 static int nmsources(void);
+static int msource_kind(int k);
 static int mg_src_now(void);
 static void manga_open(int src);
 static int vb_cur = -1;
@@ -1415,7 +1416,12 @@ static void *check_main(void *arg) {
     int st = h ? lv_http_get(h, j->url, &b, &n, 6u << 20, NULL, NULL, &err) : -1;
     if (st == 200 && b) {
       if (j->tab == 2 && j->msrc == MS_MANGADEX) { LvBook *bk = calloc(40, sizeof *bk); int tot = 0; ok = bk && lv_md_parse_list((char *)b, n, bk, 40, &tot) > 0; free(bk); }
-      else if (j->tab == 2) { long long g[25]; char t[25][16]; ok = lv_eh_parse_list((char *)b, g, t, 25) > 0; }
+      else if (j->tab == 2 && j->msrc == MS_EHENTAI) { long long g[25]; char t[25][16]; ok = lv_eh_parse_list((char *)b, g, t, 25) > 0; }
+      else if (j->tab == 2) {
+        LvBook *bk = calloc(60, sizeof *bk);
+        ok = bk && (LV_MSRC[j->msrc].family == MF_HHAND ? lv_hh_parse_list((char *)b, n, bk, 60) : lv_ms_parse_list(j->msrc, (char *)b, bk, 60)) > 0;
+        free(bk);
+      }
       else { int np = 0; LvPost *p = lv_booru_parse(&j->site, (char *)b, n, LV_R_ALL, &np); ok = np > 0; lv_posts_free(p, np); }
     }
     free(b);
@@ -1445,7 +1451,9 @@ static void check_sources(int tab) {
     if (tab == 2) {
       j->msrc = k;
       snprintf(j->name, sizeof j->name, "%s", msource_name(k));
-      if (k == MS_MANGADEX) lv_md_list_url("", 1, 0, 0, j->url, sizeof j->url); else lv_eh_list_url("", 0, j->url, sizeof j->url);
+      if (k == MS_MANGADEX) lv_md_list_url("", 1, 0, 0, j->url, sizeof j->url);
+      else if (k == MS_EHENTAI) lv_eh_list_url("", 0, j->url, sizeof j->url);
+      else lv_ms_list_url(k, "", 1, j->url, sizeof j->url);
     } else {
       int site = tab ? vsource_site(k) : vis[k];
       snprintf(j->name, sizeof j->name, "%s", tab ? vsource_name(k) : LV_SITES[site].name);
@@ -1558,6 +1566,15 @@ static void draw_sites_sheet(void) {
     if (cur) { circle(x + tw - 16, y + 16, 10, ACC); text_center(x + tw - 16, y + 21, RGBA(20, 12, 16, 255), 13, "✓"); }
     if (sites_tab == 1 && !add && vsrc_is_added(k)) { rrect(x + 8, y + 8, 50, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 33, y + 23, DIM, 12, "\u25a1 off"); }
     // (an image site, not a booru: said so on its tile)
+    // (a comic source: what it has, in a colour each)
+    if (sites_tab == 2 && !add) {
+      static const unsigned KC[MK_N] = {RGBA(70, 150, 220, 230), RGBA(232, 70, 130, 230), RGBA(150, 90, 230, 230), RGBA(232, 150, 40, 230)};
+      int kd = msource_kind(k);
+      const char *kl = LV_MK_NAME[kd];
+      int lw = text_w(11, kl) + 12;
+      rrect(x + 8, y + 8, lw, 18, 9, KC[kd]);
+      text(x + 14, y + 21, TEXT, 11, kl);
+    }
     if (!sites_tab && !add && site >= 0 && !lv_site_is_booru(&LV_SITES[site])) { int lw = text_w(11, "IMAGE SITE") + 12; rrect(x + 8, y + 8, lw, 18, 9, RGBA(70, 150, 220, 220)); text(x + 14, y + 21, TEXT, 11, "IMAGE SITE"); }
     if (!sites_tab && !add && LV_SITES[site].needs_key && !wkeys[site][0]) { rrect(x + 8, y + 8, 36, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 26, y + 23, DIM, 12, "key"); }
     if (blocked) { rrect(x + 8, y + 8, 50, 20, 10, RGBA(0, 0, 0, 170)); text_center(x + 33, y + 23, DIM, 12, "locked"); }

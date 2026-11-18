@@ -108,7 +108,7 @@ static int fav_toggle_comic(const LvBook *b, int src) {
   Fav *v = fav_add();
   if (!v) return 0;
   v->kind = FAV_COMIC;
-  snprintf(v->site, sizeof v->site, "%s", src == MS_EHENTAI ? "E-Hentai" : "MangaDex");
+  snprintf(v->site, sizeof v->site, "%s", LV_MSRC[src >= 0 && src < MS_N ? src : 0].name);
   snprintf(v->title, sizeof v->title, "%s", b->title);
   snprintf(v->page, sizeof v->page, "%s", b->id);
   snprintf(v->preview, sizeof v->preview, "%s", b->cover);
@@ -328,7 +328,8 @@ static void fav_play(int at, int offline) {
 // A comic favourite: its book opens (the list holds it alone), as from the Comics tab.
 static void fav_read(int at, int offline) {
   const Fav *v = &favs[at];
-  int src = !strcmp(v->site, "E-Hentai") ? MS_EHENTAI : MS_MANGADEX;
+  int src = MS_MANGADEX;
+  for (int k = 0; k < MS_N; k++) if (!strcmp(v->site, LV_MSRC[k].name)) src = k; // (by its name, as kept)
   lv_net_base(); // (the rest on the worker that fetches)
   mg_start_thread();
   mg.src = src;

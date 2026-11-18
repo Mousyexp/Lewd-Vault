@@ -140,11 +140,21 @@ loads. The grid is the Library's; the site button is the tab bar (L/R step throu
 the ratings (General, Sensitive, Questionable, Explicit), the search and which category saves go into,
 and the sort is Latest, Hot (where the site has it), Top or Random. More results load as you scroll.
 The site button opens the sites window (`tools/make-site-icons.mjs` draws its icons). It has three
-tabs (L / R), each in pages of eighteen tiles (the arrows and dots at the top, or a swipe sideways): **Comics** (MangaDex and E-Hentai: covers, a book's chapters, and a reader that turns
+tabs (L / R), each in pages of eighteen tiles (the arrows and dots at the top, or a swipe sideways): **Comics** (MangaDex, E-Hentai and the sources below: covers, a book's chapters, and a reader that turns
 pages with ←/→, a tap at either side or a swipe, L / R for the chapters, ✕ to zoom; `src/manga.c`,
 `src/manga_ui.c`; △ or **Save chapter** puts the chapter, or the whole E-Hentai gallery, into the
 vault as a comic: its pages as they are, the category Comics, the book's tags and `comic`, one
-collection, so it's a book in the Library's Comics mode), **Pictures**, the sites, and **Videos**. Each
+collection, so it's a book in the Library's Comics mode). Each comic source's tile says what it has:
+**MANGA** (MangaDex: manga of all kinds), **H MANGA** (E-Hentai, HentaiFox, AsmHentai, HentaiEra,
+nhentai.xxx, HentaiZap, HentaiEnvy, 3Hentai, HentaiHand: doujinshi and hentai manga, one gallery a
+book), **H WEBTOON** (Manhwa18, MangaDistrict: adult webtoons, a series with its chapters) or **SHORT
+COMICS** (Multporn, FreeAdultComix: short adult comics on one page). They're read from the sites'
+own pages as a browser would get them (`LV_MSRC` in `src/manga.c`), with the app's own User-Agent; a
+gallery tagged as something never shown isn't opened (its own tags, not its "related" ones). MangaDex
+chapters only published officially elsewhere have no pages on MangaDex: when a book has no English
+chapter to read there, its chapters in every language are listed instead. Sites behind a Cloudflare
+check (nhentai.net, IMHentai, Hentai2Read, Toonily, ...), ones that are only a JavaScript app, and ones
+of AI-made comics aren't offered. **Pictures**, the sites, and **Videos**. Each
 tab ends in **+**, the **source finder**: it reads the lists other booru tools keep (gallery-dl's
 supported sites, the `booru` library's sites.json, Grabber's site lists: `src/discover.c`), keeps the
 sites of the kinds the Browser reads, leaves out what's never offered (sites for minors, furry,
@@ -397,7 +407,7 @@ times (`perf ...`) and any step over 4 ms (`pt ...`).
 | `src/privacy.c`, `src/clean.c` | The calculator disguise and touch lock; clean up and the health check |
 | `src/livearea.c` | The LiveArea's frames (which vault they open) and its numbers |
 | `src/vbrowse.c` | The video browser |
-| `src/manga.c`, `src/manga_ui.c` | Manga: MangaDex and E-Hentai, the covers, chapters and the reader, saving a chapter as a comic |
+| `src/manga.c`, `src/manga_ui.c` | Comics: MangaDex, E-Hentai and the other sources (`LV_MSRC`), the covers, chapters and the reader, saving a chapter as a comic |
 | `src/discover.c`, `tests/discover/` | The source finder's readers of the booru lists, and saved copies of those lists |
 | `tools/make-ui-icons.mjs` | The tab bar's and buttons' icons (`ui/`) |
 | `src/drive.c`, `src/drive_ui.c` | Google Drive: the sign-in, the sync, its screen |

@@ -83,5 +83,21 @@ int main(void) {
   CHECK(strstr(url, "f_cats=993") && strstr(url, "page=2") && strstr(url, "lolicon"), "e-hentai url: %s", url);
 
   printf(fails ? "%d FAILED\n" : "manga: all passed\n", fails);
+  // other sources: a gallery's own tags are checked, a "related" block's aren't
+  {
+    char **u = NULL;
+    const char *ok = "<div class=\"info\"><a href=\"/tag/milf/\">milf</a></div><div class=\"gthumb\"><img data-src=\"https://i.example/1/1t.jpg\"></div>"
+                     "<div class=\"related_galleries\"><a href=\"/tag/shotacon/\">shotacon</a></div>";
+    int got = lv_ms_parse_gallery(MS_HENTAIFOX, ok, &u);
+    CHECK(got != -2, "a related gallery's tag blocked this one");
+    lv_strings_free(u, got);
+    const char *bad = "<div class=\"info\"><a href=\"/tag/lolicon/\">lolicon</a></div><div class=\"related\"></div>";
+    CHECK(lv_ms_parse_gallery(MS_HENTAIFOX, bad, &u) == -2, "its own tag must block it");
+    // Manhwa18: pages under /chapters/ or /uploads/
+    const char *ch = "<img class=\"logo\" src=\"/images/logo.png\"><img data-src=\"https://img01.manhwa18.cc/uploads/1/1/1-5.jpg\"><img src=\"https://img22.manhwa18.cc/chapters/2/0/2-5.jpg\">";
+    got = lv_ms_parse_pages(MS_MANHWA18, ch, &u);
+    CHECK(got == 2, "manhwa18 pages: %d", got);
+    lv_strings_free(u, got);
+  }
   return fails != 0;
 }

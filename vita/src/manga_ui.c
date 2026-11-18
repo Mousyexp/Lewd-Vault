@@ -10,9 +10,6 @@
 #define MG_MAX 300  // (books in a list)
 #define MG_TEX 48   // (covers kept as textures: those on screen and about to be)
 
-static const char *MSRC_NAME[MS_N] = {"MangaDex", "E-Hentai"};
-static const char *MSRC_ICON[MS_N] = {"mangadex", "ehentai"};
-static const char *MSRC_ABOUT[MS_N] = {"Comics and hentai comics", "Doujinshi, comics, CG"};
 static const char *MD_ORDER[3] = {"Popular", "Latest", "New"};
 
 static struct {
@@ -45,12 +42,14 @@ static struct {
   int tall_top; // (a tall page just turned to: it starts at its top)
 } mg = {.adult = 1, .book = -1, .page = 0, .zoom = 1, .tall_top = 1};
 static int manga_back = S_WEB;
-// (per book of the list: 1 when its English chapters turned out to be only on the publisher's site)
-static unsigned char md_official[MG_MAX];
 static int nmsources(void) { return MS_N; }
-static const char *msource_name(int k) { return MSRC_NAME[k]; }
-static const char *msource_icon(int k) { return MSRC_ICON[k]; }
-static const char *msource_about(int k) { return MSRC_ABOUT[k]; }
+static const char *msource_name(int k) { return k >= 0 && k < MS_N ? LV_MSRC[k].name : ""; }
+static const char *msource_icon(int k) { return k >= 0 && k < MS_N ? LV_MSRC[k].icon : NULL; }
+static const char *msource_about(int k) { return k >= 0 && k < MS_N ? LV_MSRC[k].about : ""; }
+static int msource_kind(int k) { return k >= 0 && k < MS_N ? LV_MSRC[k].kind : MK_MANGA; } // (its label on its tile)
+// (a source whose books have chapters to choose from: MangaDex, the webtoon sites; the others are
+//  read straight through, one gallery each)
+static int mg_chapters(int src) { return src == MS_MANGADEX || (LV_MSRC[src].family == MF_SERIES && !LV_MSRC[src].single); }
 static int mg_src_now(void) { return mg.src; }
 
 // ---------- the worker ----------
@@ -105,7 +104,22 @@ static int mg_get(LvHttp *h, const char *url, uint8_t **b, size_t *n, size_t max
 // Stops early when *gen moves on from gen.
 static int mg_fetch_page(LvHttp *h, int src, const char *url, volatile int *genp, int gen, uint8_t **b, size_t *n, const char **err) {
   *b = NULL; *n = 0;
-  if (src != MS_EHENTAI) return mg_get(h, url, b, n, 16u << 20, err) == 200;
+  if (src != MS_EHENTAI) {
+    if (mg_get(h, url, b, n, 16u << 20, err) == 200) return 1;
+    // (a gallery site's page that isn't the kind its thumbnail was: the others tried)
+    if (LV_MSRC[src].family != MF_GALLERY) return 0;
+    static const char *const EXT[] = {"webp", "jpg", "png", "gif"};
+    char alt[700];
+    const char *dot = strrchr(url, '.');
+    if (!dot) return 0;
+    for (int k = 0; k < 4; k++) {
+      if (!strcmp(dot + 1, EXT[k])) continue;
+      free(*b); *b = NULL;
+      snprintf(alt, sizeof alt, "%.*s.%s", (int)(dot - url), url, EXT[k]);
+      if (mg_get(h, alt, b, n, 16u << 20, err) == 200) return 1;
+    }
+    return 0;
+  }
   char img[600], page_url[700];
   snprintf(page_url, sizeof page_url, "%s", url);
   for (int attempt = 0; attempt < 3 && *genp == gen; attempt++) {
@@ -147,6 +161,19 @@ static void *mg_main(void *arg) {
           st = mg_get(h, j.url, &b, &n, 4u << 20, &err);
           d.books = calloc(40, sizeof *d.books);
           d.n = st == 200 && d.books ? lv_md_parse_list((char *)b, n, d.books, 40, &d.total) : -1;
+        } else if (j.src != MS_EHENTAI) {
+          // the other sites: a page of their list, as HTML (or HentaiHand's JSON)
+          st = mg_get(h, j.url, &b, &n, 6u << 20, &err);
+          d.books = calloc(60, sizeof *d.books);
+          if (st == 200 && d.books) d.n = LV_MSRC[j.src].family == MF_HHAND ? lv_hh_parse_list((char *)b, n, d.books, 60) : lv_ms_parse_list(j.src, (char *)b, d.books, 60);
+          else d.n = -1;
+          if (st == 404) d.n = 0; // (past the last page)
+          if (b && st != 200 && strstr((char *)b, "Just a moment")) err = "The site is asking for a browser check";
+          // (anything AI-made by its name: not shown, as everywhere in the app)
+          int kept = 0;
+          for (int k = 0; d.books && k < d.n; k++) if (!lv_ai_made(d.books[k].title)) d.books[kept++] = d.books[k];
+          if (d.n > 0) d.n = kept;
+          d.total = 1 << 30;
         } else {
           // E-Hentai: the list's galleries, then their details from its API
           st = mg_get(h, j.url, &b, &n, 4u << 20, &err);
@@ -173,14 +200,33 @@ static void *mg_main(void *arg) {
           decode_exact(b, n, j.kind == MJ_COVER ? MG_CW : 220, j.kind == MJ_COVER ? MG_CH : 312, &d.px);
         break;
       case MJ_CHAPTERS:
-        st = mg_get(h, j.url, &b, &n, 4u << 20, &err);
-        d.ch = calloc(100, sizeof *d.ch);
-        d.n = st == 200 && d.ch ? lv_md_parse_feed((char *)b, n, d.ch, 100, &d.total) : -1;
+        if (j.src == MS_MANGADEX) {
+          st = mg_get(h, j.url, &b, &n, 4u << 20, &err);
+          d.ch = calloc(100, sizeof *d.ch);
+          d.n = st == 200 && d.ch ? lv_md_parse_feed((char *)b, n, d.ch, 100, &d.total) : -1;
+        } else {
+          // a series' page (its chapters on it), or its WordPress "ajax/chapters/" list (POST)
+          char book[200], url[700];
+          snprintf(book, sizeof book, "%s", j.url);
+          lv_ms_url(j.src, book, url, sizeof url);
+          if (LV_MSRC[j.src].ajax) {
+            char ajax[760];
+            snprintf(ajax, sizeof ajax, "%s%sajax/chapters/", url, url[strlen(url) - 1] == '/' ? "" : "/");
+            LvReq rq = {.method = "POST", .headers = MG_UA, .body = "", .body_len = 0};
+            st = lv_http_req(h, ajax, &rq, &b, &n, 4u << 20, NULL, &err);
+          } else st = mg_get(h, url, &b, &n, 6u << 20, &err);
+          d.ch = calloc(300, sizeof *d.ch);
+          d.n = st == 200 && d.ch ? lv_ms_parse_chapters(j.src, (char *)b, book, d.ch, 300) : -1;
+          if (d.n == -2) { d.n = -1; err = "Not shown here: tagged as something never shown"; }
+        }
         if (d.n < 0) snprintf(d.err, sizeof d.err, "%s", err && err[0] ? err : "The chapters couldn't be read");
         break;
       case MJ_PAGES:
         st = mg_get(h, j.url, &b, &n, 8u << 20, &err);
         if (st == 200 && j.src == MS_MANGADEX) d.n = lv_md_parse_pages((char *)b, n, &d.urls);
+        else if (st == 200 && LV_MSRC[j.src].family == MF_GALLERY) d.n = lv_ms_parse_gallery(j.src, (char *)b, &d.urls);
+        else if (st == 200 && LV_MSRC[j.src].family == MF_HHAND) d.n = lv_hh_parse_images((char *)b, n, &d.urls);
+        else if (st == 200 && LV_MSRC[j.src].family == MF_SERIES) d.n = lv_ms_parse_pages(j.src, (char *)b, &d.urls);
         else if (st == 200) {
           // (the gallery's number, from its address: https://e-hentai.org/g/<gid>/<token>/)
           char gid[24] = "";
@@ -189,6 +235,7 @@ static void *mg_main(void *arg) {
           d.n = lv_eh_parse_gallery((char *)b, gid, &d.urls);
         }
         else d.n = -1;
+        if (d.n == -2) { d.n = -1; err = "Not shown here: tagged as something never shown"; }
         if (d.n < 0) snprintf(d.err, sizeof d.err, "%s", err && err[0] ? err : "The pages couldn't be read");
         break;
       case MJ_PAGE: {
@@ -372,7 +419,7 @@ static void msave_start(void) {
   j->urls = calloc(mg.npages, sizeof *j->urls);
   if (!j->urls) { free(j); return; }
   for (int k = 0; k < mg.npages; k++) { j->urls[k] = strdup(mg.pages[k]); if (j->urls[k]) j->n++; else break; }
-  if (mg.src == MS_MANGADEX && mg.ch && mg.chapter < mg.nch) snprintf(j->coll, sizeof j->coll, "%.150s \u2013 %.40s", j->book.title, mg.ch[mg.chapter].label);
+  if (mg_chapters(mg.src) && mg.ch && mg.chapter < mg.nch) snprintf(j->coll, sizeof j->coll, "%.150s \u2013 %.40s", j->book.title, mg.ch[mg.chapter].label);
   else snprintf(j->coll, sizeof j->coll, "%.190s", j->book.title);
   // (no characters a file name can't have, no doubled or trailing spaces)
   {
@@ -429,7 +476,8 @@ static void mg_list_more(void) {
   if (mg.loading || !mg.more) return;
   char url[1600];
   if (mg.src == MS_MANGADEX) lv_md_list_url(mg.query, mg.adult, mg.order, mg.nbooks, url, sizeof url);
-  else lv_eh_list_url(mg.query, mg.total, url, sizeof url); // (E-Hentai: total counts the pages read)
+  else if (mg.src == MS_EHENTAI) lv_eh_list_url(mg.query, mg.total, url, sizeof url); // (E-Hentai: total counts the pages read)
+  else lv_ms_list_url(mg.src, mg.query, mg.total + 1, url, sizeof url); // (the others too: pages from 1)
   mg.loading = 1;
   mg_push(MJ_LIST, 0, 0, url);
 }
@@ -448,7 +496,6 @@ static void mg_search_cancel(void) {
   mg_drop_textures();
   free(mg.books); mg.books = NULL;
   free(mg.cstate); mg.cstate = NULL;
-  memset(md_official, 0, sizeof md_official);
   mg.nbooks = 0; mg.total = 0; mg.more = 0; mg.loading = 0; mg.err[0] = 0; mg.sel = 0; mg.scroll = 0;
 }
 static void mg_search(void) {
@@ -461,7 +508,6 @@ static void mg_search(void) {
   mg_drop_textures();
   free(mg.books); mg.books = NULL;
   free(mg.cstate); mg.cstate = NULL;
-  memset(md_official, 0, sizeof md_official);
   mg.nbooks = 0; mg.total = 0; mg.more = 1; mg.loading = 0; mg.err[0] = 0; mg.sel = 0; mg.scroll = 0;
   mg_list_more();
 }
@@ -489,6 +535,9 @@ static void mg_open_book(int k) {
     lv_md_feed_url(mg.books[k].id, mg.adult, 0, url, sizeof url);
     mg.ch_loading = 1;
     mg_push(MJ_CHAPTERS, k, 0, url);
+  } else if (mg_chapters(mg.src)) {
+    mg.ch_loading = 1;
+    mg_push(MJ_CHAPTERS, k, 0, mg.books[k].id); // (the book's path: the worker makes the address)
   } else mg.ch_loading = 0;
   screen = S_BOOK;
 }
@@ -502,7 +551,14 @@ static void mg_read(int chapter) {
   mg.pages_loading = 1;
   char url[600];
   if (mg.src == MS_MANGADEX) { lv_md_pages_url(mg.ch[chapter].id, url, sizeof url); mg.pages_total = mg.ch[chapter].pages; }
-  else { lv_eh_gallery_url(&mg.books[mg.book], 0, url, sizeof url); mg.pages_total = mg.books[mg.book].pages; }
+  else if (mg.src == MS_EHENTAI) { lv_eh_gallery_url(&mg.books[mg.book], 0, url, sizeof url); mg.pages_total = mg.books[mg.book].pages; }
+  else {
+    // the others: a gallery's page, HentaiHand's API, a series' chapter or a single gallery's page
+    const LvMSrc *ms = &LV_MSRC[mg.src];
+    if (ms->family == MF_HHAND) snprintf(url, sizeof url, "%s/api/comics/%s/images", ms->base, mg.books[mg.book].id);
+    else lv_ms_url(mg.src, mg_chapters(mg.src) && mg.ch && chapter < mg.nch ? mg.ch[chapter].id : mg.books[mg.book].id, url, sizeof url);
+    mg.pages_total = 0; // (counted when they come)
+  }
   mg_push(MJ_PAGES, mg.book, chapter, url);
   screen = S_READER;
 }
@@ -537,7 +593,19 @@ static void mg_take(void) {
           if (nb && nc) {
             for (int i = 0; i < d->n && mg.nbooks < MG_MAX; i++) { mg.books[mg.nbooks] = d->books[i]; mg.cstate[mg.nbooks++] = 0; }
             if (mg.src == MS_MANGADEX) mg.more = d->n > 0 && mg.nbooks < d->total && mg.nbooks < MG_MAX;
-            else { mg.total++; mg.more = d->n > 0 && mg.nbooks < MG_MAX; }
+            else {
+              mg.total++;
+              mg.more = d->n > 0 && mg.nbooks < MG_MAX;
+              // (a source whose list or search is one page only)
+              const LvMSrc *ms = &LV_MSRC[mg.src];
+              if (mg.src != MS_EHENTAI && (mg.query[0] ? !strstr(ms->search, "%d") : !ms->list)) mg.more = 0;
+              // (a page that brought nothing new: the site showing its first page again past its end)
+              if (mg.src != MS_EHENTAI && d->n > 0 && mg.nbooks >= d->n) {
+                int fresh = 0;
+                for (int i = 0; i < d->n && !fresh; i++) { fresh = 1; for (int q = 0; q < mg.nbooks - d->n && fresh; q++) if (!strcmp(mg.books[q].id, d->books[i].id)) fresh = 0; }
+                if (!fresh) mg.more = 0;
+              }
+            }
           }
         }
         free(d->books);
@@ -565,7 +633,13 @@ static void mg_take(void) {
         if (d->a == mg.book) {
           free(mg.ch); mg.ch = d->ch; mg.nch = d->n < 0 ? 0 : d->n;
           if (d->n < 0) snprintf(mg.err, sizeof mg.err, "%s", d->err);
-          else if (d->n == 0 && d->a >= 0 && d->a < MG_MAX) md_official[d->a] = 1;
+          else if (d->n == 0 && d->b == 0 && mg.src == MS_MANGADEX && d->a >= 0 && d->a < mg.nbooks) {
+            // (no English chapter with its pages on MangaDex: every language's, then)
+            char url[600];
+            lv_md_feed_url_lang(mg.books[d->a].id, mg.adult, 0, 1, url, sizeof url);
+            mg.ch_loading = 1;
+            mg_push(MJ_CHAPTERS, d->a, 1, url);
+          }
         }
         else free(d->ch);
         break;
@@ -648,11 +722,6 @@ static void draw_manga(void) {
       }
     }
     if (on) focus_ring(x, y, MG_CW, MG_CH);
-    if (i < MG_MAX && md_official[i]) {
-      vita2d_draw_rectangle(x, y, MG_CW, MG_CH, RGBA(10, 8, 12, 150));
-      rrect(x + 6, y + MG_CH - 26, MG_CW - 12, 20, 10, RGBA(0, 0, 0, 190));
-      text_center(x + MG_CW / 2, y + MG_CH - 11, DIM, 11, "Official release only");
-    }
     if (mg.books[i].pages) {
       char p[16];
       snprintf(p, sizeof p, "%dp", mg.books[i].pages);
@@ -675,7 +744,7 @@ static void draw_manga(void) {
   icon("back", 38, 26, TEXT);
   if (hit(16, 8, 44, 36)) { sfx(SFX_BACK); screen = manga_back; return; }
   char sl[64];
-  snprintf(sl, sizeof sl, "%s  ▾", MSRC_NAME[mg.src]);
+  snprintf(sl, sizeof sl, "%s  ▾", LV_MSRC[mg.src].name);
   int sw = text_w(17, sl) + 36;
   rrect(70, 8, sw, 36, 18, ACC);
   text(88, 32, RGBA(20, 12, 16, 255), 17, sl);
@@ -711,9 +780,9 @@ static void draw_book(void) {
   for (char *p = tags; *p; p++) if (*p == '|') *p = ',';
   text_fit(276, 122, FAINT, 13, tags, W - 300);
   int listy = 146;
-  if (mg.src == MS_EHENTAI) {
+  if (!mg_chapters(mg.src)) {
     char m[64];
-    snprintf(m, sizeof m, "%d pages", b->pages);
+    if (b->pages) snprintf(m, sizeof m, "%d pages", b->pages); else snprintf(m, sizeof m, "%s", LV_MK_NAME[LV_MSRC[mg.src].kind]);
     text(276, listy + 20, DIM, 16, m);
     rrect(276, listy + 40, 180, 46, 23, ACC);
     text_center(366, listy + 70, RGBA(20, 12, 16, 255), 18, "▶  Read");
@@ -721,16 +790,13 @@ static void draw_book(void) {
   } else if (mg.ch_loading) spinner(560, 260, 20);
   else if (!mg.nch && mg.err[0]) text(276, listy + 30, ACC2, 16, mg.err);
   else if (!mg.nch) {
-    // its English chapters are the publisher's: said plainly, with the way on
-    rrect(276, listy + 6, W - 306, 210, 18, SURF);
+    // (nothing with its pages here, in any language: said, with the way on)
+    rrect(276, listy + 6, W - 306, 170, 18, SURF);
     icon("book", 310, listy + 44, ACC);
-    text(334, listy + 51, TEXT, 20, "Published officially");
-    text_fit(300, listy + 86, DIM, 15, "Its English chapters are licensed: they're read on the publisher's", W - 350);
-    text_fit(300, listy + 108, DIM, 15, "own site or app, so MangaDex has no pages of them to give the Vita.", W - 350);
-    // the next title in the list that isn't known to be the same
-    int next = -1;
-    for (int k = mg.book + 1; k < mg.nbooks && next < 0; k++) if (k >= MG_MAX || !md_official[k]) next = k;
-    int bx = 300, by = listy + 140;
+    text(334, listy + 51, TEXT, 20, "No chapters to read here yet");
+    text_fit(300, listy + 86, DIM, 15, "None of its chapters has its pages on this site, in any language.", W - 350);
+    int next = mg.book + 1 < mg.nbooks ? mg.book + 1 : -1;
+    int bx = 300, by = listy + 106;
     if (next >= 0) {
       int bw = text_w(17, "Next title") + 64;
       rrect(bx, by, bw, 48, 24, ACC);
@@ -759,9 +825,11 @@ static void draw_book(void) {
       rrect(276, y, W - 306, rh - 6, 12, k == mg.ch_sel ? SURF2 : SURF);
       if (k == mg.ch_sel) rrect(276, y, 5, rh - 6, 3, ACC);
       text_fit(296, y + 28, TEXT, 16, mg.ch[k].label, W - 420);
-      char p[16];
-      snprintf(p, sizeof p, "%d pages", mg.ch[k].pages);
-      text(W - 46 - text_w(13, p), y + 28, FAINT, 13, p);
+      if (mg.ch[k].pages > 0) { // (the webtoon sites don't say: nothing shown, rather than "0 pages")
+        char p[16];
+        snprintf(p, sizeof p, "%d pages", mg.ch[k].pages);
+        text(W - 46 - text_w(13, p), y + 28, FAINT, 13, p);
+      }
       if (hit(276, (int)y, W - 306, rh - 6) && in.tap_y > listy) { mg.ch_sel = k; sfx(SFX_SELECT); mg_read(k); return; }
     }
     if (in.pressed & SCE_CTRL_DOWN) { mg.ch_sel = mg.ch_sel + 1 < mg.nch ? mg.ch_sel + 1 : mg.ch_sel; sfx(SFX_TICK); }
@@ -779,12 +847,12 @@ static void draw_book(void) {
     text(x2 + 18, 38, TEXT, 16, ol);
     if (hit(x1, 8, fw, 48) || (in.pressed & SCE_CTRL_SQUARE)) fav_toggle_comic(b, mg.src);
     if ((hit(x2, 8, ow, 48) || (in.pressed & SCE_CTRL_TRIANGLE)) && !msave_on) {
-      if (mg.src == MS_EHENTAI || (mg.nch && !mg.ch_loading)) { mg_offline_pending = 1; sfx(SFX_OPEN); mg_read(mg.src == MS_EHENTAI ? 0 : mg.ch_sel); return; }
+      if (!mg_chapters(mg.src) || (mg.nch && !mg.ch_loading)) { mg_offline_pending = 1; sfx(SFX_OPEN); mg_read(!mg_chapters(mg.src) ? 0 : mg.ch_sel); return; }
       else { sfx(SFX_ERROR); say(mg.ch_loading ? "The chapters are still coming" : "Nothing here to save"); }
     }
     // (opened from Favourites to be made available offline: as soon as there's something to save)
-    if (mg_offline_pending && screen == S_BOOK && (mg.src == MS_EHENTAI || (mg.nch && !mg.ch_loading))) { mg_read(mg.src == MS_EHENTAI ? 0 : mg.ch_sel); return; }
-    if (mg_offline_pending && mg.src == MS_MANGADEX && !mg.ch_loading && !mg.nch) mg_offline_pending = 0;
+    if (mg_offline_pending && screen == S_BOOK && (!mg_chapters(mg.src) || (mg.nch && !mg.ch_loading))) { mg_read(!mg_chapters(mg.src) ? 0 : mg.ch_sel); return; }
+    if (mg_offline_pending && mg_chapters(mg.src) && !mg.ch_loading && !mg.nch) mg_offline_pending = 0;
   }
   rrect(16, 12, 44, 36, 18, SURF2);
   icon("back", 38, 30, TEXT);
@@ -796,8 +864,8 @@ static void mg_turn(int d) {
   int np = mg.page + d;
   if (np < 0 || (np >= mg.npages && np >= mg.pages_total)) {
     // past the ends: the chapter before or after (MangaDex)
-    if (mg.src == MS_MANGADEX && np >= mg.npages && mg.chapter + 1 < mg.nch) { sfx(SFX_MORE); mg_read(mg.chapter + 1); }
-    else if (mg.src == MS_MANGADEX && np < 0 && mg.chapter > 0) { sfx(SFX_MORE); mg_read(mg.chapter - 1); }
+    if (mg_chapters(mg.src) && np >= mg.npages && mg.chapter + 1 < mg.nch) { sfx(SFX_MORE); mg_read(mg.chapter + 1); }
+    else if (mg_chapters(mg.src) && np < 0 && mg.chapter > 0) { sfx(SFX_MORE); mg_read(mg.chapter - 1); }
     return;
   }
   if (np >= mg.npages) return; // (still coming)
@@ -860,7 +928,7 @@ static void draw_reader(void) {
   if (!ro_open && (frame_no < rd.chrome_until || msave_on)) {
     char sl[64];
     if (msave_on) snprintf(sl, sizeof sl, "Saving %d / %d", msave_done, msave_total);
-    else snprintf(sl, sizeof sl, "Save %s  □", mg.src == MS_MANGADEX ? "chapter" : "gallery");
+    else snprintf(sl, sizeof sl, "Save %s  □", mg_chapters(mg.src) ? "chapter" : "gallery");
     int bw = text_w(15, sl) + 48, bx = W - 124 - bw;
     rrect(bx, 10, bw, 40, 20, RGBA(0, 0, 0, 170));
     if (msave_on) spinner(bx + 22, 30, 8); else icon("plus", bx + 22, 30, TEXT);
