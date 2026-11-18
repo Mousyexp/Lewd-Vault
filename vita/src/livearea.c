@@ -10,6 +10,8 @@
 static void close_viewer(void); // (main.c)
 static int launch_to; // 0 as usual, 1 the Drive vault, 2 the vault on the card
 static int la_from_frame; // (started by a frame: the test kit then skips its menu)
+static int la_events;      // (app events from the LiveArea, and the last one's text: the test kit's diagnostics)
+static char la_last_event[160];
 static int la_target(const char *param) {
   if (strstr(param, "drive")) return 1;
   if (strstr(param, "local")) return 2;
@@ -51,9 +53,12 @@ static void open_start_vault(void) {
 static void la_poll_events(void) {
   SceAppUtilAppEventParam ev;
   memset(&ev, 0, sizeof ev);
-  if (sceAppUtilReceiveAppEvent(&ev) < 0 || ev.type != 5 /* (from the LiveArea) */) return;
+  if (sceAppUtilReceiveAppEvent(&ev) < 0) return;
+  if (ev.type) { la_events++; snprintf(la_last_event, sizeof la_last_event, "type %d", (int)ev.type); LOG("app event type %d\n", (int)ev.type); }
+  if (ev.type != 5 /* (from the LiveArea) */) return;
   char b[1024] = "";
   sceAppUtilAppEventParseLiveArea(&ev, b);
+  snprintf(la_last_event, sizeof la_last_event, "type 5: %s", b);
   int t = la_target(b);
   LOG("livearea event: %s -> %d\n", b, t);
   if (!t || screen == S_PIN || screen == S_CALC || screen == S_COVER || screen == S_UNLOCKING || decoy_session) return;

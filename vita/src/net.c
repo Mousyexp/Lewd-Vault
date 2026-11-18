@@ -1,6 +1,9 @@
 #include <time.h>
 #include "net.h"
 #include <curl/curl.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
 #include <psp2/net/net.h>
 #include <psp2/net/netctl.h>
 #include <psp2/sysmodule.h>
@@ -40,30 +43,102 @@ static int up;
 static char proxy[256], cafile[256] = "app0:cacert.pem";
 
 #include <pthread.h>
+#ifdef LV_DEBUG
+#define LOG(...) do { char lb_[256]; int ln_ = snprintf(lb_, sizeof lb_, __VA_ARGS__); SceUID lf_ = sceIoOpen("ux0:data/LWDV00001/log.txt", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666); if (lf_ >= 0) { sceIoWrite(lf_, lb_, ln_ > 255 ? 255 : ln_); sceIoClose(lf_); } } while (0)
+#else
+#define LOG(...) do { } while (0)
+#endif
 static pthread_mutex_t init_mx = PTHREAD_MUTEX_INITIALIZER;
-// The certificate list, read once with the Vita's own file calls and handed to curl as bytes
-// (CURLOPT_CAINFO_BLOB): OpenSSL opening app0:cacert.pem itself fails on a real Vita ("error adding
-// trust anchors from locations"), though it works in Vita3K.
-static char *ca_pem;
-static size_t ca_pem_n;
+// The certificate list: read once with the Vita's own file calls and made into certificates by the
+// app itself (each PEM block decoded here, then d2i_X509), which are put into every connection's
+// trust store (CURLOPT_SSL_CTX_FUNCTION). OpenSSL reading the list itself fails on a real Vita, by
+// path ("error adding trust anchors from locations") and as a blob ("...from certificate blob: 77"),
+// though both work in Vita3K; this way one certificate it can't read is skipped, not all of them,
+// and what happened is kept (lv_net_ca_status, in the log and the test kit's reports).
+static X509 **ca_certs;
+static int ca_n, ca_bad, ca_tried;
+static char ca_status[200];
 static pthread_mutex_t ca_mx = PTHREAD_MUTEX_INITIALIZER;
+static int b64v(int c) {
+  if (c >= 'A' && c <= 'Z') return c - 'A';
+  if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+  if (c >= '0' && c <= '9') return c - '0' + 52;
+  if (c == '+') return 62;
+  if (c == '/') return 63;
+  return -1;
+}
 static int ca_load(void) {
   pthread_mutex_lock(&ca_mx);
-  if (!ca_pem) {
+  if (!ca_tried) {
+    ca_tried = 1;
+    char *pem = NULL;
+    size_t got = 0;
     SceUID fd = sceIoOpen(cafile, SCE_O_RDONLY, 0);
     if (fd >= 0) {
       SceOff n = sceIoLseek(fd, 0, SCE_SEEK_END);
       sceIoLseek(fd, 0, SCE_SEEK_SET);
-      char *b = n > 0 && n < (8 << 20) ? malloc((size_t)n + 1) : NULL;
-      size_t got = 0;
-      while (b && got < (size_t)n) { int r = sceIoRead(fd, b + got, (SceSize)((size_t)n - got)); if (r <= 0) break; got += (size_t)r; }
+      pem = n > 0 && n < (8 << 20) ? malloc((size_t)n + 1) : NULL;
+      while (pem && got < (size_t)n) { int r = sceIoRead(fd, pem + got, (SceSize)((size_t)n - got)); if (r <= 0) break; got += (size_t)r; }
       sceIoClose(fd);
-      if (b && got == (size_t)n) { b[got] = 0; ca_pem = b; ca_pem_n = got; }
-      else free(b);
+      if (pem) pem[got] = 0;
     }
+    if (!pem || !got) snprintf(ca_status, sizeof ca_status, "certificates: %s couldn't be read (%08x)", cafile, (unsigned)fd);
+    else {
+      int cap = 256;
+      ca_certs = calloc(cap, sizeof *ca_certs);
+      uint8_t *der = malloc(16384);
+      unsigned long first_err = 0;
+      int first_bad = -1, k = 0;
+      for (char *p = pem; ca_certs && der && (p = strstr(p, "-----BEGIN CERTIFICATE-----")); k++) {
+        p += 27;
+        char *e = strstr(p, "-----END CERTIFICATE-----");
+        if (!e) break;
+        // (base64 to DER, by hand)
+        size_t dn = 0;
+        unsigned acc = 0;
+        int bits = 0;
+        for (char *q = p; q < e && dn < 16384; q++) {
+          int v = b64v((unsigned char)*q);
+          if (v < 0) continue;
+          acc = (acc << 6) | (unsigned)v;
+          bits += 6;
+          if (bits >= 8) { bits -= 8; der[dn++] = (uint8_t)(acc >> bits); }
+        }
+        p = e + 25;
+        const unsigned char *dp = der;
+        ERR_clear_error();
+        X509 *x = d2i_X509(NULL, &dp, (long)dn);
+        if (!x) { ca_bad++; if (first_bad < 0) { first_bad = k; first_err = ERR_peek_error(); } continue; }
+        if (ca_n >= cap) { X509 **nc = realloc(ca_certs, (size_t)(cap *= 2) * sizeof *nc); if (!nc) { X509_free(x); break; } ca_certs = nc; }
+        ca_certs[ca_n++] = x;
+      }
+      free(der);
+      if (first_bad >= 0) {
+        char eb[120];
+        ERR_error_string_n(first_err, eb, sizeof eb);
+        snprintf(ca_status, sizeof ca_status, "certificates: %d read, %d not (the first, #%d: %s)", ca_n, ca_bad, first_bad, eb);
+      } else snprintf(ca_status, sizeof ca_status, "certificates: all %d read", ca_n);
+    }
+    free(pem);
+    LOG("%s\n", ca_status);
   }
   pthread_mutex_unlock(&ca_mx);
-  return ca_pem ? 0 : -1;
+  return ca_n > 0 ? 0 : -1;
+}
+const char *lv_net_ca_status(void) {
+  ca_load(); // (read now if nothing has asked yet)
+  static char full[300];
+  snprintf(full, sizeof full, "%s  ·  %s", ca_status[0] ? ca_status : "certificates: not read", OpenSSL_version(OPENSSL_VERSION));
+  return full;
+}
+// (each new connection's trust store: the certificates read above)
+static CURLcode ca_into_ctx(CURL *c, void *ssl_ctx, void *arg) {
+  (void)c; (void)arg;
+  X509_STORE *st = SSL_CTX_get_cert_store((SSL_CTX *)ssl_ctx);
+  if (!st) return CURLE_SSL_CACERT_BADFILE;
+  for (int k = 0; k < ca_n; k++) X509_STORE_add_cert(st, ca_certs[k]); // (a reference each; one already there is fine)
+  ERR_clear_error();
+  return CURLE_OK;
 }
 static int net_init_locked(void);
 static volatile int base_up;
@@ -336,13 +411,12 @@ static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const
   // (the JSON comes compressed: a fraction of its size; if unpacking ever fails, everything after
   // comes plain, as Vita3K's zlib needs)
   if (!no_compress) curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "gzip");
-  if (ca_pem || ca_load() == 0) {
-    struct curl_blob ca = {ca_pem, ca_pem_n, CURL_BLOB_NOCOPY}; // (kept for good: no copy)
-    curl_easy_setopt(c, CURLOPT_CAINFO_BLOB, &ca);
+  if ((ca_tried && ca_n) || ca_load() == 0) {
     curl_easy_setopt(c, CURLOPT_CAINFO, NULL);
     curl_easy_setopt(c, CURLOPT_CAPATH, NULL);
-  } else curl_easy_setopt(c, CURLOPT_CAINFO, cafile); // (couldn't be read: OpenSSL tries, and says why)
-  curl_easy_setopt(c, CURLOPT_CA_CACHE_TIMEOUT, 24L * 3600);
+    curl_easy_setopt(c, CURLOPT_SSL_CTX_FUNCTION, ca_into_ctx);
+  } else curl_easy_setopt(c, CURLOPT_CAINFO, cafile); // (none could be read: OpenSSL tries, and says why)
+  curl_easy_setopt(c, CURLOPT_CA_CACHE_TIMEOUT, 0L); // (the store is filled by ca_into_ctx: nothing of curl's to keep)
   curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
   curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 200L);
   curl_easy_setopt(c, CURLOPT_LOW_SPEED_TIME, 20L);

@@ -14,6 +14,8 @@
 
 #define TK_DIR DATA "/reports"
 #define TK_MARKER DATA "/testkit_marker.txt"
+#include <errno.h>
+static char tk_boot_param[160]; // (what the app was started with: the LiveArea's frames say)
 
 // ---------- the report being written ----------
 static char *rp;
@@ -111,7 +113,7 @@ enum { TK_NORMAL, TK_ALL, TK_LIB, TK_VIEW, TK_WEB, TK_VIDEOS, TK_COMICS, TK_WEBT
 static const char *const TK_NAME[TK_N] = {
   "Open the app normally", "Run every test", "Library: scrolling", "Full view: pictures", "Browser: loading, scrolling",
   "Video browser", "Comics: MangaDex", "Webtoon strips", "Memory: give back, come back", "Network: every source",
-  "Memory card speed", "Stress: five tours", "Video formats", "Google Drive", "Reports",
+  "Memory card speed", "Stress: five tours", "Video formats", "Google Drive", "Reports and diagnostics",
 };
 static const char *const TK_ABOUT[TK_N] = {
   "The app as usual: live numbers at the top, everything logged",
@@ -128,7 +130,7 @@ static const char *const TK_ABOUT[TK_N] = {
   "Five rounds of every screen: does memory creep up?",
   "H.264 in MKV and AVI, MPEG-4 AVI, VP9 WebM: plays?",
   "Favourites both ways, a report up (signed in)",
-  "Where the reports are, and sending them",
+  "Diagnostics: can it write, its certificates, the LiveArea",
 };
 static struct {
   int active, test, phase, queue_pos;
@@ -583,15 +585,76 @@ static void tk_save_report(const char *kind) {
   char name[96], path[200];
   snprintf(name, sizeof name, "%s-%04d%02d%02d-%02d%02d%02d.txt", kind, g.tm_year + 1900, g.tm_mon + 1, g.tm_mday, g.tm_hour, g.tm_min, g.tm_sec);
   snprintf(path, sizeof path, TK_DIR "/%s", name);
-  FILE *f = fopen(path, "wb");
-  if (f) { fwrite(rp, 1, rp_n, f); fclose(f); }
-  LOG("tk report saved: %s (%lu bytes)\n", path, (unsigned long)rp_n);
+  // (written with the Vita's own calls, and checked: it said "saved" whether it was or not)
+  SceUID fd = sceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+  int wrote = fd >= 0 ? sceIoWrite(fd, rp, (SceSize)rp_n) : (int)fd;
+  if (fd >= 0) sceIoClose(fd);
+  int saved_ok = fd >= 0 && wrote == (int)rp_n;
+  LOG("tk report saved: %s (%lu bytes) -> %08x\n", path, (unsigned long)rp_n, (unsigned)wrote);
   tk_send(name, rp, rp_n);
   // (signed in to Drive: up to "Lewd Vault (Vita)/Test reports" too, once Drive is free)
   if (drive_signed_in()) { snprintf(tk_drive_path, sizeof tk_drive_path, "%s", path); snprintf(tk_drive_name, sizeof tk_drive_name, "%s", name); }
-  snprintf(T.status, sizeof T.status, "Report saved: reports/%s%s%s", name, tk_url[0] ? " (and sent)" : "", drive_signed_in() ? " · to Drive" : "");
+  if (saved_ok) snprintf(T.status, sizeof T.status, "Report saved: %s/%s%s%s", TK_DIR, name, tk_url[0] ? " (and sent)" : "", drive_signed_in() ? " · to Drive" : "");
+  else snprintf(T.status, sizeof T.status, "The report COULDN'T be written (%08x): see Reports and diagnostics", (unsigned)wrote);
   free(rp); rp = NULL; rp_n = rp_cap = 0;
   tk_count_reports();
+}
+
+// ---------- diagnostics: on the screen, so they can be read even when nothing can be written ----------
+// (Reports in the menu: the data folder written to both ways the app writes, the reports folder,
+//  the log, the certificates, how the app was started and the last LiveArea event)
+static char tk_diag[16][160];
+static int tk_ndiag, tk_diag_open;
+static void tk_diag_add(const char *fmt, ...) {
+  if (tk_ndiag >= 16) return;
+  va_list a;
+  va_start(a, fmt);
+  vsnprintf(tk_diag[tk_ndiag], sizeof tk_diag[0], fmt, a);
+  va_end(a);
+  LOG("diag: %s\n", tk_diag[tk_ndiag]);
+  tk_ndiag++;
+}
+static void tk_diag_run(void) {
+  tk_ndiag = 0;
+  SceIoStat st;
+  int r = sceIoMkdir(DATA, 0777);
+  tk_diag_add("data folder %s: %s (mkdir %08x)", DATA, sceIoGetstat(DATA, &st) >= 0 ? "there" : "NOT THERE", (unsigned)r);
+  // (written with the Vita's own calls)
+  SceUID fd = sceIoOpen(DATA "/diag_sceio.txt", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+  int wr = fd >= 0 ? sceIoWrite(fd, "ok\n", 3) : -1;
+  if (fd >= 0) sceIoClose(fd);
+  int sz = sceIoGetstat(DATA "/diag_sceio.txt", &st) >= 0 ? (int)st.st_size : -1;
+  tk_diag_add("write (sceIo): open %08x, wrote %d, on the card %d bytes", (unsigned)fd, wr, sz);
+  sceIoRemove(DATA "/diag_sceio.txt");
+  // (written with C's stdio, as the reports are)
+  errno = 0;
+  FILE *f = fopen(DATA "/diag_stdio.txt", "wb");
+  int fe = errno;
+  size_t fw = f ? fwrite("ok\n", 1, 3, f) : 0;
+  int fc = f ? fclose(f) : -1;
+  sz = sceIoGetstat(DATA "/diag_stdio.txt", &st) >= 0 ? (int)st.st_size : -1;
+  tk_diag_add("write (stdio): %s (errno %d), wrote %d, closed %d, on the card %d bytes", f ? "opened" : "NOT OPENED", fe, (int)fw, fc, sz);
+  sceIoRemove(DATA "/diag_stdio.txt");
+  r = sceIoMkdir(TK_DIR, 0777);
+  tk_diag_add("reports folder: %s (mkdir %08x), %d reports", sceIoGetstat(TK_DIR, &st) >= 0 ? "there" : "NOT THERE", (unsigned)r, T.n_reports);
+  tk_diag_add("log.txt: %s", sceIoGetstat(DATA "/log.txt", &st) >= 0 ? "there" : "NOT THERE");
+  if (sceIoGetstat(DATA "/log.txt", &st) >= 0) tk_diag_add("log.txt: %d bytes", (int)st.st_size);
+  tk_diag_add("%s", lv_net_ca_status());
+  tk_diag_add("started with: %s", tk_boot_param[0] ? tk_boot_param : "(nothing: the bubble)");
+  tk_diag_add("LiveArea events: %d, the last: %s", la_events, la_last_event[0] ? la_last_event : "(none)");
+  { int fu = 0, fc = 0; mem_free(&fu, &fc); tk_diag_add("memory: heap %.1f MB used, main free %.1f MB, video free %.1f MB", heap_used() / 1048576.0, fu / 1048576.0, fc / 1048576.0); }
+}
+static void tk_diag_draw(void) {
+  vita2d_draw_rectangle(0, 0, W, H, BG);
+  text(30, 44, TEXT, 26, "Diagnostics");
+  text(30, 70, FAINT, 14, "What the app could and couldn't do on this Vita (a photo of this is a report too)  ·  ○ back  ✕ again");
+  for (int k = 0; k < tk_ndiag; k++) {
+    unsigned c = strstr(tk_diag[k], "NOT") || strstr(tk_diag[k], " not ") || strstr(tk_diag[k], "couldn't") ? ACC2 : TEXT;
+    text_fit(30, 110 + k * 28, c, 16, tk_diag[k], W - 60);
+  }
+  if (in.pressed & SCE_CTRL_CROSS) { sfx(SFX_SELECT); tk_diag_run(); }
+  if ((in.pressed & SCE_CTRL_CIRCLE) || in.tap) { sfx(SFX_BACK); tk_diag_open = 0; }
+  in.pressed = 0; in.tap = 0;
 }
 
 // ---------- starting and ending ----------
@@ -600,6 +663,8 @@ static void tk_start(int test) {
   if (test == TK_NORMAL) { T.active = 0; T.hud = 1; screen = S_LIBRARY; tk_mark("normal run"); LOG("tk: the app, normally\n"); return; }
   if (test == TK_REPORTS) {
     tk_count_reports();
+    tk_diag_run();
+    tk_diag_open = 1;
     snprintf(T.status, sizeof T.status, "%d reports in ux0:data/LWDV00001/reports  ·  Wi-Fi page: /reports  ·  %s", T.n_reports,
              tk_url[0] ? "sent to the address in report_url.txt" : "report_url.txt: an address to send them to");
     return;
@@ -672,6 +737,7 @@ static void tk_boot(void) {
 
 // ---------- the menu ----------
 static void draw_test_menu(void) {
+  if (tk_diag_open) { tk_diag_draw(); return; }
   vita2d_draw_rectangle(0, 0, W, H, BG);
   text(30, 44, TEXT, 26, "Lewd Vault test kit");
   text(30, 70, FAINT, 14, "Runs the app through its paces and writes what it measured to ux0:data/LWDV00001/reports");

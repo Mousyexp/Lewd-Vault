@@ -10,6 +10,8 @@ int lv_net_base(void);
 // The base started on a thread of its own, now; returns at once (the drawing thread never waits for it).
 void lv_net_warm(void); // the Vita's network only (quick): the online light, the Wi-Fi page's server
 int lv_net_online(void); // 1 when connected (Wi-Fi)
+// How the certificate list went ('certificates: all 140 read', or what failed): the log and reports
+const char *lv_net_ca_status(void);
 typedef struct LvHttp LvHttp;
 LvHttp *lv_http_new(void);
 void lv_http_free(LvHttp *h);

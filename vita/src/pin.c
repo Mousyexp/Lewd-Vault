@@ -209,12 +209,14 @@ static void draw_pin(void) {
     float pr = pin_key_at[k] ? (frame_no - pin_key_at[k]) / 12.0f : 1; // (0 just pressed .. 1 done)
     float sq = pr < 1 ? 1 - 0.08f * sinf(pin_clamp01(pr) * 3.14159f) : 1;
     int ka = (int)(255 * kin * fade);
-    float sw = kw * sq, sh = kh * sq, sx = x + (kw - sw) / 2, sy = y + (kh - sh) / 2;
-    rrect(sx, sy, sw, sh, 18, on ? with_alpha(ACC, ka * 200 / 255) : with_alpha(SURF, ka));
+    // (round keys, as a phone's: a faint ring, the key, a ripple ring when pressed)
+    float kcx = x + kw / 2.0f, kcy = y + kh / 2.0f, kr = (kh / 2.0f - 2) * sq;
+    circle(kcx, kcy, kr + 1.5f, with_alpha(TEXT, ka / 9));
+    circle(kcx, kcy, kr, on ? with_alpha(ACC, ka * 210 / 255) : with_alpha(SURF2, ka));
     if (pr < 1) { // (a ripple from the key)
       float rr = pin_out(pr);
-      rrect(sx - rr * 10, sy - rr * 10, sw + rr * 20, sh + rr * 20, 18 + rr * 10, with_alpha(ACC, (int)(70 * (1 - pr) * kin)));
-      rrect(sx, sy, sw, sh, 18, with_alpha(on ? TEXT : ACC, (int)(60 * (1 - pr))));
+      circle(kcx, kcy, kr + rr * 14, with_alpha(ACC, (int)(60 * (1 - pr) * kin)));
+      circle(kcx, kcy, kr, with_alpha(on ? TEXT : ACC, (int)(60 * (1 - pr))));
     }
     text_center(x + kw / 2, y + kh / 2 + 11, with_alpha(on ? RGBA(20, 12, 16, 255) : TEXT, ka), 30, keys[k]);
     if (!pin_ok_at && hit(x, y, kw, kh)) { pin_sel = k; in.pressed |= SCE_CTRL_CROSS; }

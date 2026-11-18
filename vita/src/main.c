@@ -211,7 +211,26 @@ static const char *SND_PACKS[4] = {"", "soft", "retro", "bubbly"};
 static const char *SND_NAMES[4] = {"The Vita's own", "Soft", "Retro (8-bit)", "Bubbly"};
 
 // ---------- text ----------
-static vita2d_font *font;
+// A font per size, all reading the one copy of font.ttf in memory: vita2d's font keeps each letter
+// once, at the first size it was drawn, and scales that for every other size (blurry big text,
+// ragged small text, its neighbours in the atlas bleeding in round the edges). One per size, each
+// letter is drawn at its own size, pixel for pixel. Made the first time a size is used.
+static vita2d_font *font; // (the first one made: for anything that wants "the" font)
+static uint8_t *font_mem;
+static size_t font_mem_n;
+#define FONT_SIZES 80
+static vita2d_font *font_sz[FONT_SIZES];
+static vita2d_font *font_at(int size) {
+  if (size < 6) size = 6;
+  if (size >= FONT_SIZES) size = FONT_SIZES - 1;
+  if (!font_sz[size]) {
+    if (!font_mem) font_mem = lv_read_all("app0:font.ttf", NULL, &font_mem_n);
+    font_sz[size] = font_mem ? vita2d_load_font_mem(font_mem, (unsigned)font_mem_n) : vita2d_load_font_file("app0:font.ttf");
+    if (!font_sz[size]) return font; // (out of memory: the one there is, scaled)
+    if (!font) font = font_sz[size];
+  }
+  return font_sz[size];
+}
 static vita2d_pgf *pgf; // the system's font (Japanese and more), where the firmware has it
 static int has_wide(const char *s) {
   for (; *s; s++) if ((unsigned char)*s >= 0xE3) return 1;
@@ -228,7 +247,7 @@ static int text_pct = 100;
 static int text_w_raw(int size, const char *s) {
   size = TS(size);
   if (pgf && has_wide(s)) return vita2d_pgf_text_width(pgf, size / 17.0f, s);
-  return vita2d_font_text_width(font, size, s);
+  return vita2d_font_text_width(font_at(size), size, s);
 }
 static int text_w(int size, const char *s) {
   size_t n = strlen(s);
@@ -258,7 +277,7 @@ static void text(int x, int y, unsigned col, int size, const char *s) {
   if (x < -4000 || x > 4000 || y < -4000 || y > 4000 || !s) return; // (off anywhere sensible: a bad number)
   size = TS(size);
   if (pgf && has_wide(s)) vita2d_pgf_draw_text(pgf, x, y, col, size / 17.0f, s);
-  else vita2d_font_draw_text(font, x, y, col, size, s);
+  else vita2d_font_draw_text(font_at(size), x, y, col, size, s);
 }
 static void textf(int x, int y, unsigned col, int size, const char *fmt, ...) {
   char b[512];
@@ -4241,7 +4260,7 @@ int main(void) {
   lv_video_release_texture = free_later;
   vita2d_set_clear_color(BG);
   vita2d_set_vblank_wait(0); // (main's loop waits with sceDisplayWaitVblankStartCB)
-  font = vita2d_load_font_file("app0:font.ttf");
+  font_at(16); // (the font read in, and its commonest size made)
   pgf = vita2d_load_default_pgf();
   rnd_state ^= (unsigned)time(NULL);
   cfg_load();
@@ -4274,6 +4293,9 @@ int main(void) {
     char param[1024] = "";
     if (sceAppMgrGetAppParam(param) >= 0) launch_to = la_target(param);
     la_from_frame = launch_to;
+#ifdef LV_TESTKIT
+    snprintf(tk_boot_param, sizeof tk_boot_param, "%s", param);
+#endif
     if (launch_to) LOG("started from the LiveArea: %s\n", param);
   }
   if (pin.on) pin_lock(-1);
@@ -4306,7 +4328,7 @@ int main(void) {
       static const unsigned char WARM[] = {13, 14, 15, 16, 17, 18, 20};
       static unsigned warmed;
       if (warmed < sizeof WARM && frame_no < splash_until && frame_no > 2)
-        vita2d_font_text_width(font, WARM[warmed++], "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,:;!?'\"()-+/%&");
+        text_w_raw(WARM[warmed++], "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,:;!?'\"()-+/%&");
     }
     // (and the icons: the app's own, then the sites', two a frame, read from the card now rather than
     //  the first time a screen shows them)
