@@ -4,6 +4,7 @@
 #include <psp2/net/net.h>
 #include <psp2/net/netctl.h>
 #include <psp2/sysmodule.h>
+#include <psp2/io/fcntl.h>
 #include <psp2/kernel/processmgr.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +41,30 @@ static char proxy[256], cafile[256] = "app0:cacert.pem";
 
 #include <pthread.h>
 static pthread_mutex_t init_mx = PTHREAD_MUTEX_INITIALIZER;
+// The certificate list, read once with the Vita's own file calls and handed to curl as bytes
+// (CURLOPT_CAINFO_BLOB): OpenSSL opening app0:cacert.pem itself fails on a real Vita ("error adding
+// trust anchors from locations"), though it works in Vita3K.
+static char *ca_pem;
+static size_t ca_pem_n;
+static pthread_mutex_t ca_mx = PTHREAD_MUTEX_INITIALIZER;
+static int ca_load(void) {
+  pthread_mutex_lock(&ca_mx);
+  if (!ca_pem) {
+    SceUID fd = sceIoOpen(cafile, SCE_O_RDONLY, 0);
+    if (fd >= 0) {
+      SceOff n = sceIoLseek(fd, 0, SCE_SEEK_END);
+      sceIoLseek(fd, 0, SCE_SEEK_SET);
+      char *b = n > 0 && n < (8 << 20) ? malloc((size_t)n + 1) : NULL;
+      size_t got = 0;
+      while (b && got < (size_t)n) { int r = sceIoRead(fd, b + got, (SceSize)((size_t)n - got)); if (r <= 0) break; got += (size_t)r; }
+      sceIoClose(fd);
+      if (b && got == (size_t)n) { b[got] = 0; ca_pem = b; ca_pem_n = got; }
+      else free(b);
+    }
+  }
+  pthread_mutex_unlock(&ca_mx);
+  return ca_pem ? 0 : -1;
+}
 static int net_init_locked(void);
 static volatile int base_up;
 // The Vita's own network, quickly (its module, sceNetInit, sceNetCtlInit): enough for the online
@@ -311,7 +336,12 @@ static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const
   // (the JSON comes compressed: a fraction of its size; if unpacking ever fails, everything after
   // comes plain, as Vita3K's zlib needs)
   if (!no_compress) curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "gzip");
-  curl_easy_setopt(c, CURLOPT_CAINFO, cafile);
+  if (ca_pem || ca_load() == 0) {
+    struct curl_blob ca = {ca_pem, ca_pem_n, CURL_BLOB_NOCOPY}; // (kept for good: no copy)
+    curl_easy_setopt(c, CURLOPT_CAINFO_BLOB, &ca);
+    curl_easy_setopt(c, CURLOPT_CAINFO, NULL);
+    curl_easy_setopt(c, CURLOPT_CAPATH, NULL);
+  } else curl_easy_setopt(c, CURLOPT_CAINFO, cafile); // (couldn't be read: OpenSSL tries, and says why)
   curl_easy_setopt(c, CURLOPT_CA_CACHE_TIMEOUT, 24L * 3600);
   curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
   curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 200L);

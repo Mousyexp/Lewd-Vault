@@ -19,6 +19,10 @@ static int pin_sel = 4;       // (the key the D-pad is on: 0-9 are the digits' k
 static int pin_return = -1;   // (the screen behind the lock; -1: the app starting)
 static unsigned pin_wait_until;
 static int pin_fail_shake;
+// (the animations: when the lock went up, when each dot and key last changed, the unlock's start)
+static unsigned pin_shown, pin_dot_at[6], pin_dot_gone_at[6], pin_key_at[12], pin_ok_at;
+static int pin_ok_kind; // (0 none; 1 the PIN, 2 the decoy's: what happens once the unlock has played)
+static void pin_finish(void);
 
 static void pin_hash(const char *p, const char *salt, char out[65]) {
   uint8_t d[32];
@@ -75,17 +79,20 @@ static void pin_lock(int from) {
   if (!pin.on) return;
   pin_return = from;
   pin_typed[0] = 0;
+  pin_shown = frame_no; pin_ok_at = 0; pin_ok_kind = 0;
+  memset(pin_dot_at, 0, sizeof pin_dot_at); memset(pin_dot_gone_at, 0, sizeof pin_dot_gone_at);
   pin_sel = 4;
   screen = S_PIN;
 }
 
 static void pin_try(void) {
-  if (frame_no < pin_wait_until) return;
+  if (frame_no < pin_wait_until || pin_ok_kind) return;
   char h[65];
   pin_hash(pin_typed, pin.salt, h);
   int ok = !strcmp(h, pin.hash), decoy = !ok && pin.decoy_hash[0] && !strcmp(h, pin.decoy_hash);
-  pin_typed[0] = 0;
   if (!ok && !decoy) {
+    for (int k = 0; k < (int)strlen(pin_typed) && k < 6; k++) pin_dot_gone_at[k] = frame_no; // (they fall away)
+    pin_typed[0] = 0;
     sfx(SFX_ERROR);
     pin_fail_shake = 20;
     pin.wrong++;
@@ -95,6 +102,14 @@ static void pin_try(void) {
     return;
   }
   sfx(SFX_START);
+  // (right: the dots light up in turn and the page fades, then the vault: pin_finish)
+  pin_ok_at = frame_no ? frame_no : 1;
+  pin_ok_kind = decoy ? 2 : 1;
+}
+static void pin_finish(void) {
+  int decoy = pin_ok_kind == 2;
+  pin_ok_kind = 0; pin_ok_at = 0;
+  pin_typed[0] = 0; // (the digits gone from memory once it's open)
   if (decoy) {
     // the decoy's vault, as if it were the one (wrong tries aren't told: whoever this is)
     decoy_session = 1;
@@ -126,46 +141,100 @@ static void pin_try(void) {
   } else screen = pin_return;
 }
 
+static float pin_clamp01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+static float pin_out(float t) { t = pin_clamp01(t); return 1 - (1 - t) * (1 - t) * (1 - t); }             // (ease out)
+static float pin_back(float t) { t = pin_clamp01(t); float c = 1.9f; return 1 + (c + 1) * powf(t - 1, 3) + c * powf(t - 1, 2); } // (a little past, then back)
 static void draw_pin(void) {
-  // (the background: the frame is cleared to it already)
+  // (the background: the frame is cleared to it already) soft lights drifting behind it all
+  for (int k = 0; k < 7; k++) {
+    float ph = frame_no * (0.004f + k * 0.0011f) + k * 1.7f;
+    float bx = W * (0.12f + 0.13f * k) + sinf(ph) * 40, by = H * (0.25f + 0.09f * (k % 5)) + cosf(ph * 1.3f) * 30;
+    circle(bx, by, 40 + (k % 3) * 22, with_alpha(ACC, 5 + (k % 3) * 2));
+  }
+  unsigned since = frame_no - pin_shown;
+  float in_t = pin_out(since / 24.0f); // (the page easing in)
+  float ok_t = pin_ok_at ? (frame_no - pin_ok_at) / 40.0f : 0; // (the unlock: 0 to 1)
+  if (pin_ok_at && ok_t >= 1) { pin_finish(); return; }
   float shake = pin_fail_shake > 0 ? sinf(pin_fail_shake * 1.7f) * pin_fail_shake * 0.8f : 0;
   if (pin_fail_shake > 0) pin_fail_shake--;
-  text_center(W / 2 - 230, 150, TEXT, 26, "Lewd Vault");
-  text_center(W / 2 - 230, 186, DIM, 17, "Enter your PIN");
+  float fade = pin_ok_at ? 1 - pin_out((ok_t - 0.45f) / 0.55f) : 1; // (the page fading as it opens)
+  int a = (int)(255 * in_t * fade);
+  float lx = W / 2 - 230, rise = (1 - in_t) * 30;
+  // a heart above the title: breathing; a beat when a digit goes in; a bigger one as it opens
+  {
+    int n0 = (int)strlen(pin_typed);
+    unsigned last = 0;
+    for (int k = 0; k < n0 && k < 6; k++) if (pin_dot_at[k] > last) last = pin_dot_at[k];
+    float beat = last ? fmaxf(0, 1 - (frame_no - last) / 12.0f) : 0;
+    float sc = 1 + 0.05f * sinf(frame_no * 0.06f) + 0.18f * beat + (pin_ok_at ? 0.6f * pin_out(ok_t) : 0);
+    circle(lx, 92 + rise, 34 * sc, with_alpha(ACC, (int)(40 * in_t * fade)));
+    heart(lx, 92 + rise, 15 * sc, with_alpha(ACC, a));
+  }
+  text_center(lx, 150 + rise, with_alpha(TEXT, a), 26, "Lewd Vault");
+  text_center(lx, 186 + rise, with_alpha(DIM, a), 17, pin_ok_at ? "Welcome back" : "Enter your PIN");
+  // the dots: each pops in when typed, drops away when taken back or wrong; lit in turn when right
+  int n = (int)strlen(pin_typed);
   for (int k = 0; k < 6; k++) {
-    int filled = k < (int)strlen(pin_typed);
-    circle(W / 2 - 230 - 75 + k * 30 + shake, 236, filled ? 9 : 8, filled ? ACC : with_alpha(TEXT, 60));
+    float cx = lx - 75 + k * 30 + shake, cy = 236 + rise;
+    int filled = k < n || (pin_ok_at && k < 6);
+    circle(cx, cy, 8, with_alpha(TEXT, (int)(60 * in_t * fade)));
+    if (filled) {
+      float pop = pin_dot_at[k] ? pin_back((frame_no - pin_dot_at[k]) / 10.0f) : 1;
+      unsigned col = pin_fail_shake > 0 ? ACC2 : ACC;
+      if (pin_ok_at) { float w = pin_clamp01(ok_t * 6 - k * 0.5f); pop = 1 + 0.35f * sinf(w * 3.14159f); col = mix_col(ACC, TEXT, w * 0.6f); }
+      circle(cx, cy, 9 * pop, with_alpha(col, a));
+    } else if (pin_dot_gone_at[k] && frame_no - pin_dot_gone_at[k] < 14) {
+      float g = (frame_no - pin_dot_gone_at[k]) / 14.0f;
+      circle(cx, cy + g * g * 26, 9 * (1 - g), with_alpha(pin_fail_shake > 0 ? ACC2 : ACC, (int)(a * (1 - g))));
+    }
   }
   if (frame_no < pin_wait_until) {
+    // (a ring running down the wait)
+    float left = (pin_wait_until - frame_no) / (30.0f * 60);
+    for (int k = 0; k < 48; k++) {
+      float ang = -1.5708f + k / 48.0f * 6.2832f;
+      circle(lx + cosf(ang) * 20, 300 + rise + sinf(ang) * 20, 2.2f, k / 48.0f < left ? with_alpha(ACC2, a) : with_alpha(TEXT, a / 6));
+    }
     char m[64];
     snprintf(m, sizeof m, "Too many tries: wait %u s", (pin_wait_until - frame_no) / 60 + 1);
-    text_center(W / 2 - 230, 290, ACC2, 16, m);
+    text_center(lx, 350 + rise, with_alpha(ACC2, a), 16, m);
   }
-  // the pad: 1-9, then back, 0, OK
+  // the pad: 1-9, then back, 0, OK; the keys come in one after another, squash when pressed
   static const char *keys[12] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "OK"};
   int px = W / 2 + 40, py = 70, kw = 110, kh = 92;
   for (int k = 0; k < 12; k++) {
-    int x = px + (k % 3) * (kw + 10), y = py + (k / 3) * (kh + 10);
-    int on = k == pin_sel;
-    rrect(x, y, kw, kh, 18, on ? with_alpha(ACC, 200) : SURF);
-    text_center(x + kw / 2, y + kh / 2 + 11, on ? RGBA(20, 12, 16, 255) : TEXT, 30, keys[k]);
-    if (hit(x, y, kw, kh)) { pin_sel = k; in.pressed |= SCE_CTRL_CROSS; }
+    float kin = pin_out((since - (k % 3) * 2 - (k / 3) * 3) / 18.0f);
+    int x = px + (k % 3) * (kw + 10), y = py + (k / 3) * (kh + 10) + (int)((1 - kin) * 40);
+    int on = k == pin_sel && !pin_ok_at;
+    float pr = pin_key_at[k] ? (frame_no - pin_key_at[k]) / 12.0f : 1; // (0 just pressed .. 1 done)
+    float sq = pr < 1 ? 1 - 0.08f * sinf(pin_clamp01(pr) * 3.14159f) : 1;
+    int ka = (int)(255 * kin * fade);
+    float sw = kw * sq, sh = kh * sq, sx = x + (kw - sw) / 2, sy = y + (kh - sh) / 2;
+    rrect(sx, sy, sw, sh, 18, on ? with_alpha(ACC, ka * 200 / 255) : with_alpha(SURF, ka));
+    if (pr < 1) { // (a ripple from the key)
+      float rr = pin_out(pr);
+      rrect(sx - rr * 10, sy - rr * 10, sw + rr * 20, sh + rr * 20, 18 + rr * 10, with_alpha(ACC, (int)(70 * (1 - pr) * kin)));
+      rrect(sx, sy, sw, sh, 18, with_alpha(on ? TEXT : ACC, (int)(60 * (1 - pr))));
+    }
+    text_center(x + kw / 2, y + kh / 2 + 11, with_alpha(on ? RGBA(20, 12, 16, 255) : TEXT, ka), 30, keys[k]);
+    if (!pin_ok_at && hit(x, y, kw, kh)) { pin_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
+  if (pin_ok_at) return; // (opening: no more keys)
   if (in.pressed & SCE_CTRL_RIGHT) pin_sel = pin_sel % 3 == 2 ? pin_sel - 2 : pin_sel + 1;
   if (in.pressed & SCE_CTRL_LEFT) pin_sel = pin_sel % 3 == 0 ? pin_sel + 2 : pin_sel - 1;
   if (in.pressed & SCE_CTRL_DOWN) pin_sel = (pin_sel + 3) % 12;
   if (in.pressed & SCE_CTRL_UP) pin_sel = (pin_sel + 9) % 12;
   if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_LEFT | SCE_CTRL_UP | SCE_CTRL_DOWN)) sfx(SFX_TICK);
-  int n = (int)strlen(pin_typed);
   if (in.pressed & SCE_CTRL_CROSS) {
-    if (pin_sel == 9) { if (n) pin_typed[n - 1] = 0; sfx(SFX_BACK); }
+    pin_key_at[pin_sel] = frame_no ? frame_no : 1;
+    if (pin_sel == 9) { if (n) { pin_dot_gone_at[n - 1] = frame_no; pin_typed[n - 1] = 0; } sfx(SFX_BACK); }
     else if (pin_sel == 11) pin_try();
-    else if (n < 6) { pin_typed[n] = (char)(pin_sel == 10 ? '0' : '1' + pin_sel); pin_typed[n + 1] = 0; sfx(SFX_TICK); }
+    else if (n < 6) { pin_typed[n] = (char)(pin_sel == 10 ? '0' : '1' + pin_sel); pin_typed[n + 1] = 0; pin_dot_at[n] = frame_no ? frame_no : 1; sfx(SFX_TICK); }
   }
-  if ((in.pressed & SCE_CTRL_CIRCLE) && n) { pin_typed[n - 1] = 0; sfx(SFX_BACK); }
+  if ((in.pressed & SCE_CTRL_CIRCLE) && n) { pin_dot_gone_at[n - 1] = frame_no; pin_typed[n - 1] = 0; pin_key_at[9] = frame_no ? frame_no : 1; sfx(SFX_BACK); }
   if (in.pressed & SCE_CTRL_START) pin_try();
-  // (six digits: tried at once)
-  if (strlen(pin_typed) == 6) pin_try();
+  // (six digits: tried at once, once its pop has shown)
+  if (strlen(pin_typed) == 6 && frame_no - pin_dot_at[5] > 6) pin_try();
 }
 
 // ---------- stats ----------

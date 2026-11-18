@@ -1,6 +1,5 @@
 // The LiveArea page (sce_sys/livearea/contents/template.xml): its left frame opens the Google Drive
-// vault and its right frame the vault on the card, straight away; the strip along the bottom shows
-// the vault's numbers. Compiled inside main.c (#include "livearea.c").
+// vault and its right frame the vault on the card, straight away. Compiled inside main.c (#include "livearea.c").
 //
 // A frame's target is psgm:play?titleid=LWDV00001&param=drive (or local): the system starts the app
 // with that param (sceAppMgrGetAppParam), or, when it's already running, sends it an app event.
@@ -10,6 +9,7 @@
 
 static void close_viewer(void); // (main.c)
 static int launch_to; // 0 as usual, 1 the Drive vault, 2 the vault on the card
+static int la_from_frame; // (started by a frame: the test kit then skips its menu)
 static int la_target(const char *param) {
   if (strstr(param, "drive")) return 1;
   if (strstr(param, "local")) return 2;
@@ -55,6 +55,7 @@ static void la_poll_events(void) {
   char b[1024] = "";
   sceAppUtilAppEventParseLiveArea(&ev, b);
   int t = la_target(b);
+  LOG("livearea event: %s -> %d\n", b, t);
   if (!t || screen == S_PIN || screen == S_CALC || screen == S_COVER || screen == S_UNLOCKING || decoy_session) return;
   const char *v = la_vault(t);
   if (!v[0]) { if (t == 1) open_drive(screen); return; }
@@ -65,43 +66,19 @@ static void la_poll_events(void) {
   open_vault(v);
 }
 
-// ---------- the vault's numbers on the LiveArea ----------
-// (sceLiveAreaUpdateFrameSync rewrites a frame of the page; its pictures come from dirpathTop)
+// ---------- the strip there was along the bottom ----------
+// (an install from before kept the vault's numbers the app wrote into frame3: emptied once, so the
+//  page is just its picture, the gate and the two frames)
 int sceLiveAreaUpdateFrameSync(const char *formatVer, const char *frameXmlStr, int frameXmlStrLen, const char *dirpathTop, unsigned int flag);
 static void la_update_stats(void) {
-  if (!loaded_vault || decoy_session) return;
-  static int loaded;
-  if (!loaded) { sceSysmoduleLoadModule(SCE_SYSMODULE_LIVEAREA); loaded = 1; }
-  // (the strip's picture, next to the page it's written into)
-  sceIoMkdir(DATA "/livearea", 0777);
+  static int done;
+  if (done) return;
+  done = 1;
   SceIoStat st;
-  if (sceIoGetstat(DATA "/livearea/strip.png", &st) < 0) {
-    size_t n = 0;
-    uint8_t *b = lv_read_all("app0:sce_sys/livearea/contents/strip.png", NULL, &n);
-    if (b) { FILE *f = fopen(DATA "/livearea/strip.png", "wb"); if (f) { fwrite(b, 1, n, f); fclose(f); } free(b); }
-  }
-  long long hearts = 0;
-  double secs = 0;
-  for (int k = 0; k < vault.nviews; k++) { hearts += vault.views[k].likes; secs += vault.views[k].seconds; }
-  const char *nm = strrchr(vault.root, '/');
-  char time_s[32], line[256];
-  if (secs >= 3600) snprintf(time_s, sizeof time_s, "%d h %d min", (int)(secs / 3600), (int)secs % 3600 / 60);
-  else snprintf(time_s, sizeof time_s, "%d min", (int)(secs / 60));
-  // (only numbers and the folder's name: what's in the vault never shows outside the app)
-  snprintf(line, sizeof line, "%s%s  ·  %d items  ·  %lld hearts  ·  %s looking", is_drive_vault(vault.root) ? "☁ " : "", nm ? nm + 1 : vault.root, vault.n, hearts, time_s);
-  char xml[1200], esc[600];
-  size_t o = 0;
-  for (const char *p = line; *p && o + 6 < sizeof esc; p++) {
-    if (*p == '&') { memcpy(esc + o, "&amp;", 5); o += 5; }
-    else if (*p == '<') { memcpy(esc + o, "&lt;", 4); o += 4; }
-    else esc[o++] = *p;
-  }
-  esc[o] = 0;
-  int n = snprintf(xml, sizeof xml,
-    "<?xml version=\"1.0\" encoding=\"utf-8\"?><update-frame><frame id=\"frame3\"><liveitem><background>strip.png</background>"
-    "<text valign=\"center\" align=\"left\" text-align=\"left\" text-valign=\"center\" word-wrap=\"off\" ellipsis=\"on\" x=\"36\">"
-    "<str size=\"22\" color=\"#fff5f8\" shadow=\"on\">%s</str></text></liveitem></frame></update-frame>", esc);
-  int r = sceLiveAreaUpdateFrameSync("01.00", xml, n, DATA "/livearea", 0);
-  LOG("livearea update: %08x\n", r);
-  (void)r;
+  if (sceIoGetstat(DATA "/livearea/strip.png", &st) < 0) return; // (never written: nothing to empty)
+  sceSysmoduleLoadModule(SCE_SYSMODULE_LIVEAREA);
+  static const char xml[] = "<?xml version=\"1.0\" encoding=\"utf-8\"?><update-frame><frame id=\"frame3\"><liveitem></liveitem></frame></update-frame>";
+  int r = sceLiveAreaUpdateFrameSync("01.00", xml, (int)sizeof xml - 1, DATA "/livearea", 0);
+  LOG("livearea strip emptied: %08x\n", r);
+  if (r >= 0) { sceIoRemove(DATA "/livearea/strip.png"); sceIoRmdir(DATA "/livearea"); }
 }

@@ -43,8 +43,7 @@ Untraceable vault's cached thumbnails are encrypted with its key, like everythin
 Settings, in sections (Appearance, Playback, Privacy, Sync and sources, Library): search the Library, video
 volume, interface sounds, **Theme** (the accent: the vault's own, any of ten for the Vita, or **Custom**:
 ✕ opens a colour wheel, touch it or ←→ hue, ↑↓ colourfulness, L/R brightness), **Background** (dark,
-black for OLED screens, midnight, plum), **Sound pack** (the Vita's own, or Soft, Retro (8-bit) and
-Bubbly, made by `tools/make-sound-packs.py`), what a double tap does, the glow behind pictures, Google
+black for OLED screens, midnight, plum), **Sound pack** (Bubbly to begin with, or the Vita's own, Soft and Retro (8-bit), made by `tools/make-sound-packs.py`), what a double tap does, the glow behind pictures, Google
 Drive, another vault, clearing the thumbnail cache. While Theme or Background is chosen, a small
 Library at the right shows it in those colours.
 
@@ -260,11 +259,12 @@ you leave the screen (`src/wifi.c`).
 
 ## The LiveArea
 
-The page behind the bubble (`sce_sys/livearea/contents`, drawn by `tools/make-livearea.mjs`): the
-gate in the middle starts the app as usual; the frame on its left opens the **Google Drive vault**
-and the one on its right the **vault on the card**, straight away (past the PIN lock, if there is
-one); the strip along the bottom shows the vault's numbers (items, hearts, time spent looking),
-written by the app whenever a vault opens (`src/livearea.c`). The Google Drive vault is the one
+The page behind the bubble (`sce_sys/livearea/contents`, drawn by `tools/make-livearea.mjs`; the
+title along the bottom in Great Vibes, SIL OFL, `tools/fonts`): the gate in the middle (the icon)
+starts the app as usual; the frame on its left opens the **Google Drive vault** and the one on its
+right the **vault on the card**, straight away (past the PIN lock, if there is one; `src/livearea.c`).
+The frames' targets carry the build's Title ID (`template.xml` is filled in by CMake), so the test
+kit's start the test kit, which then skips its menu. The Google Drive vault is the one
 "Get it from Drive" made (a vault of its own, its folder ending in "(Drive)") or one that has been
 synced; with none on the card yet, its frame opens Google Drive's screen to get it.
 

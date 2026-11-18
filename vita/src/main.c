@@ -580,8 +580,10 @@ static struct {
   int accpic;  // the accent follows the picture shown
 } cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
 static void cfg_load(void) {
+  cfg.sndpack = 3; // (Bubbly, from the start)
   FILE *f = fopen(DATA "/config.txt", "r");
   if (!f) return;
+  int snd_chosen = 0; // (a sound pack picked since Bubbly became the default: kept; one from before: Bubbly)
   cfg.onboarded = 1; // (it was used before: unless it says otherwise, nothing to show)
   char line[600];
   while (fgets(line, sizeof line, f)) {
@@ -614,6 +616,7 @@ static void cfg_load(void) {
     else if (!strcmp(line, "theme")) cfg.theme = atoi(eq);
     else if (!strcmp(line, "bgstyle")) cfg.bgstyle = atoi(eq);
     else if (!strcmp(line, "sndpack")) cfg.sndpack = atoi(eq);
+    else if (!strcmp(line, "sndv")) snd_chosen = atoi(eq) >= 2;
     else if (!strcmp(line, "conv")) cfg.conv = atoi(eq) != 0;
     else if (!strcmp(line, "acc_h")) cfg.acc_h = atoi(eq);
     else if (!strcmp(line, "acc_s")) cfg.acc_s = atoi(eq);
@@ -643,7 +646,7 @@ static void cfg_load(void) {
   if (cfg.tscale != 90 && cfg.tscale != 112 && cfg.tscale != 125) cfg.tscale = 100;
   if (cfg.acc_v < 25 || cfg.acc_v > 100) cfg.acc_v = 100;
   if (cfg.bgstyle < 0 || cfg.bgstyle > 3) cfg.bgstyle = 0;
-  if (cfg.sndpack < 0 || cfg.sndpack > 3) cfg.sndpack = 0;
+  if (!snd_chosen || cfg.sndpack < 0 || cfg.sndpack > 3) cfg.sndpack = 3;
   if (cfg.sort < 0 || cfg.sort >= 10) cfg.sort = 0;
   if (cfg.wsel < 0) cfg.wsel = 0;
   if (cfg.sounds < 0 || cfg.sounds > 100) cfg.sounds = 70;
@@ -658,7 +661,7 @@ static void cfg_write(void) {
   cfg_dirty_at = 0;
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\nview=%d,%d,%d,%d\ntscale=%d\naccpic=%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\nview=%d,%d,%d,%d\ntscale=%d\naccpic=%d\nsndv=2\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
           cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v, cfg.onboarded,
           cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback, cfg.ifit, cfg.iorient, cfg.vfit, cfg.vorient, cfg.tscale, cfg.accpic);
@@ -1883,9 +1886,12 @@ static void glass(float x, float y, float w, float h, int round) {
   rr(x, y, w, h, r, with_alpha(TEXT, 30));                                         // (its rim: faint, even, all round)
   rr(x + 1, y + 1, w - 2, h - 2, r - 1, with_alpha(mix_col(SURF2, ACC, 0.32f), 235)); // (the glass, a little of the accent in it)
   // (light from above: a soft gradient, a few faint layers, no edge of its own)
+  // (each layer inset from the ends by as much as its corners are tighter than the bubble's, so its
+  //  top edge stays inside the bubble's curve: nothing sticks out at the corners)
   for (int k = 0; k < 4; k++) {
-    float hh = (h - 2) * (0.62f - k * 0.13f);
-    rr(x + 1, y + 1, w - 2, hh, fminf(r - 1, hh / 2), with_alpha(TEXT, 7));
+    float hh = (h - 2) * (0.62f - k * 0.13f), lr = fminf(r - 1, hh / 2), in = fmaxf(0, r - 1 - lr);
+    if (w - 2 - 2 * in < 2 * lr) continue;
+    rr(x + 1 + in, y + 1, w - 2 - 2 * in, hh, lr, with_alpha(TEXT, 7));
   }
 }
 static void tab_bubble(float x, float y, float w, float h) { glass(x, y, w, h, 1); }
@@ -4267,6 +4273,8 @@ int main(void) {
   {
     char param[1024] = "";
     if (sceAppMgrGetAppParam(param) >= 0) launch_to = la_target(param);
+    la_from_frame = launch_to;
+    if (launch_to) LOG("started from the LiveArea: %s\n", param);
   }
   if (pin.on) pin_lock(-1);
   else open_start_vault();

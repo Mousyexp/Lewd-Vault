@@ -708,7 +708,12 @@ static void tk_put_away(void) {
 // ---------- each frame: main.c calls these ----------
 // (after the input is read: the menu first, a test's step, the input logged)
 static void tk_frame_input(void) {
-  if (!T.menu_done && screen == S_LIBRARY && loaded_vault) { T.menu_done = 1; screen = S_TEST; tk_mark("menu"); } // (once, at the start)
+  // (once, at the start; started from a LiveArea frame: the app as usual, that vault open)
+  if (!T.menu_done && screen == S_LIBRARY && loaded_vault) {
+    T.menu_done = 1;
+    if (la_from_frame) { T.hud = 1; tk_mark("normal run"); LOG("tk: started from a LiveArea frame (%d): the app, normally\n", la_from_frame); }
+    else { screen = S_TEST; tk_mark("menu"); }
+  }
   if (T.active) {
     // (the person can stop a test: ○ and △ together)
     if ((in.now & SCE_CTRL_CIRCLE) && (in.now & SCE_CTRL_TRIANGLE)) { rpf("  stopped by hand\n"); T.queue_pos = -1; tk_finish_test(); return; }

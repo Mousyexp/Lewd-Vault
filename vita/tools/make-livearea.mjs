@@ -1,9 +1,10 @@
 // The LiveArea page (sce_sys/livearea/contents/), drawn as one scene and cut into its pieces so they
-// sit together seamlessly: bg.png (840 x 500), the gate startup.png (280 x 158), drive.png and
-// local.png (the 260 x 260 frames either side of the gate: the Google Drive vault and the vault on the
-// card, each opening it straight away) and strip.png (840 x 150 along the bottom, under the vault's
-// numbers the app writes there). Where style a1 puts them on the 840 x 500 background: frame1 x 0-260
-// and frame2 x 580-840 (y 90-350), frame3 y 350-500, the gate x 280-560 y 143-301.
+// sit together seamlessly: bg.png (840 x 500), the gate startup.png (280 x 158: the icon alone),
+// drive.png and local.png (the 260 x 260 frames either side of the gate: the Google Drive vault and
+// the vault on the card, each opening it straight away). Where style a1 puts them on the 840 x 500
+// background: frame1 x 0-260 and frame2 x 580-840 (y 90-350), the gate x 280-560 y 143-301. The
+// title is along the bottom in a script face (Great Vibes, SIL OFL: tools/fonts), clear of the
+// system's icons along the top.
 // Rendered by Chromium (Playwright); the system wants 8-bit palette PNGs, made by Pillow.
 //   node vita/tools/make-livearea.mjs
 import { createRequire } from 'node:module';
@@ -16,6 +17,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const out = join(root, 'sce_sys', 'livearea', 'contents');
 mkdirSync(out, { recursive: true });
 const heart = 'data:image/png;base64,' + readFileSync(join(root, '..', 'art', 'app-icon.png')).toString('base64');
+const script = 'data:font/ttf;base64,' + readFileSync(join(root, 'tools', 'fonts', 'GreatVibes-Regular.ttf')).toString('base64');
 
 // bokeh: the same soft flecks every time
 let seed = 21;
@@ -51,27 +53,26 @@ const scene = (layer) => `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="h
   <filter id="ts"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#000" flood-opacity=".6"/></filter>
   <filter id="soft"><feDropShadow dx="0" dy="6" stdDeviation="7" flood-color="#000" flood-opacity=".45"/></filter>
 </defs>
+<style>@font-face { font-family: 'Great Vibes'; src: url(${script}); }</style>
 <rect width="840" height="500" fill="url(#sky)"/>
 ${flecks}
 <circle cx="420" cy="222" r="190" fill="url(#halo)"/>
-<text x="420" y="58" text-anchor="middle" font-family="DejaVu Sans" font-weight="bold" font-size="40" fill="#fff5f8" filter="url(#ts)">Lewd Vault</text>
-<text x="420" y="84" text-anchor="middle" font-family="DejaVu Sans" font-size="15" fill="#f2c4d4" letter-spacing="1">your private collection, on the go</text>
-${layer === 'gate' ? `<g filter="url(#soft)"><image href="${heart}" x="292" y="160" width="124" height="124"/></g>
-  <text x="430" y="214" font-family="DejaVu Sans" font-weight="bold" font-size="32" fill="#fff5f8" filter="url(#ts)">Lewd</text>
-  <text x="430" y="252" font-family="DejaVu Sans" font-weight="bold" font-size="32" fill="#fff5f8" filter="url(#ts)">Vault</text>` : ''}
+<text x="420" y="428" text-anchor="middle" font-family="Great Vibes" font-size="92" word-spacing="18" fill="#fff5f8" filter="url(#ts)">Lewd Vault</text>
+<text x="420" y="470" text-anchor="middle" font-family="DejaVu Sans" font-size="15" fill="#f2c4d4" letter-spacing="2">your private collection, on the go</text>
+${layer === 'gate' ? `<g filter="url(#soft)"><image href="${heart}" x="352" y="154" width="136" height="136"/></g>` : ''}
 ${layer === 'frames' ? `
   <g>${glass(12, 102, 236, 236, 34)}<g filter="url(#soft)">${cloud}</g>${label(130, 'Google Drive', 'open that vault straight away')}
      <g filter="url(#soft)"><image href="${heart}" x="150" y="196" width="50" height="50"/></g></g>
   <g transform="translate(580 0)">${glass(12, 102, 236, 236, 34)}<g filter="url(#soft)">${card}</g>${label(130, 'On the card', 'open that vault straight away')}
-     <g filter="url(#soft)"><image href="${heart}" x="148" y="194" width="50" height="50"/></g></g>
-  ${glass(12, 362, 816, 126, 28)}` : ''}
+     <g filter="url(#soft)"><image href="${heart}" x="148" y="194" width="50" height="50"/></g></g>` : ''}
 </svg>`;
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 840, height: 500 } });
 const shot = async (layer, name, clip) => {
   await page.setContent(`<body style="margin:0">${scene(layer)}</body>`);
-  await page.waitForTimeout(150);
+  await page.evaluate(() => document.fonts.ready);
+  await page.waitForTimeout(300);
   const p = join(out, name);
   await page.screenshot({ path: p, clip });
   // (the system's own format: 8-bit palette)
@@ -81,6 +82,5 @@ await shot('', 'bg.png', { x: 0, y: 0, width: 840, height: 500 });
 await shot('gate', 'startup.png', { x: 280, y: 143, width: 280, height: 158 });
 await shot('frames', 'drive.png', { x: 0, y: 90, width: 260, height: 260 });
 await shot('frames', 'local.png', { x: 580, y: 90, width: 260, height: 260 });
-await shot('frames', 'strip.png', { x: 0, y: 350, width: 840, height: 150 });
 await browser.close();
 console.log('LiveArea pictures made');

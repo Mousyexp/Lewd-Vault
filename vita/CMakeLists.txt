@@ -62,6 +62,8 @@ if(LV_TESTKIT)
     list(APPEND LV_EXTRA_FILES FILE testclips/${clip} testclips/${clip})
   endforeach()
 endif()
+# (the LiveArea page with this build's Title ID in its frames' targets)
+configure_file(sce_sys/livearea/contents/template.xml ${CMAKE_CURRENT_BINARY_DIR}/template.xml @ONLY)
 vita_create_vpk(${LV_VPK_NAME}.vpk ${VITA_TITLEID} eboot.bin
   VERSION ${VITA_VERSION}
   ${LV_EXTRA_FILES}
@@ -69,10 +71,9 @@ vita_create_vpk(${LV_VPK_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sce_sys/icon0.png sce_sys/icon0.png
   FILE sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
   FILE sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
-  FILE sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
+  FILE ${CMAKE_CURRENT_BINARY_DIR}/template.xml sce_sys/livearea/contents/template.xml
   FILE sce_sys/livearea/contents/drive.png sce_sys/livearea/contents/drive.png
   FILE sce_sys/livearea/contents/local.png sce_sys/livearea/contents/local.png
-  FILE sce_sys/livearea/contents/strip.png sce_sys/livearea/contents/strip.png
   FILE font.ttf font.ttf
   FILE cacert.pem cacert.pem
   FILE splash.png splash.png
