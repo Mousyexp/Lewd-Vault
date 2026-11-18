@@ -862,6 +862,7 @@ static void web_take_results(void) {
         wv_raw_post = d->post;
         snprintf(wv_ext, sizeof wv_ext, "%s", d->ext);
         if (wv < nposts && lv_post_is_video(&posts[wv]) && !d->err[0] && !wv_vid) { // (not if it's already playing as it came)
+          make_room(32u << 20); // (a player: room first)
           wv_vid = lv_video_open(video_path, NULL, 1);
           LOG("video open %s -> %p\n", video_path, (void *)wv_vid);
           if (wv_vid) lv_video_set_volume(wv_vid, cfg.volume * 32768 / 100);
@@ -2643,6 +2644,7 @@ static void draw_webview(void) {
     int64_t need = g->total > 0 && g->total / 50 > 2 * 1024 * 1024 ? g->total / 50 : 2 * 1024 * 1024;
     if (g->have >= need || (g->total > 0 && g->have >= g->total)) {
       stream_tried = wv; stream_tried_gen = wgen;
+      make_room(32u << 20); // (a player: room first)
       wv_vid = lv_video_open_growing(dl_path[dl_slot], g);
       LOG("stream open %s have=%lld total=%lld -> %p\n", dl_path[dl_slot], (long long)g->have, (long long)g->total, (void *)wv_vid);
       if (wv_vid) { lv_video_set_volume(wv_vid, cfg.volume * 32768 / 100); wv_loading = 0; wv_stream = g; }
@@ -2710,6 +2712,7 @@ static void draw_webview(void) {
   static int wv_hi_post = -1;
   if (wv_hi_post >= 0 && wv_hi_post != wv) wv_hi_post = -1;
   if (wzoom * wv_mag > 1.25f && wv_hi_post != wv && wv_tex_post == wv && wv_raw_post == wv && wv_raw && !saving && !lv_post_is_video(p)) {
+    make_room(16u << 20); // (a sharper copy: room first)
     uint8_t *copy = malloc(wv_rawn);
     if (copy) {
       memcpy(copy, wv_raw, wv_rawn);

@@ -112,6 +112,8 @@ static vita2d_texture *make_empty(unsigned w, unsigned h, const char *path) { (v
 static vita2d_texture *make_png(unsigned w, unsigned h, const char *path) { (void)w; (void)h; return vita2d_load_PNG_file(path); }
 // An icon's PNG (a few KB of pixels): in main memory, not a 256 KiB granule of video memory each
 static vita2d_texture *load_png_small(const char *path) { return in_main_memory(make_png, 0, 0, path); }
+static void make_room(size_t need); // (the parts not on screen let go, if memory is short: below)
+static int (*tex_no_room)(void); // (main.c's release_hidden_now, once there is one; main thread only)
 vita2d_texture *tex_new(unsigned w, unsigned h) {
   // (video memory comes in 256 KiB granules: a small texture still takes a whole one)
   long need = ((long)((w + 7) & ~7u) * h * 4 + 4096 + 0x3FFFF) & ~0x3FFFFL;
@@ -120,7 +122,13 @@ vita2d_texture *tex_new(unsigned w, unsigned h) {
   if ((size_t)((w + 7) & ~7u) * h * 4 <= SMALL_TEX && (!known || user > (int)RESERVE_USER + (1 << 20)) && (t = in_main_memory(make_empty, w, h, NULL))) return t;
   if (!known || cdram - need >= (long)RESERVE_CDRAM) t = vita2d_create_empty_texture(w, h);
   if (t) return t;
-  if (known && user - need < (long)RESERVE_USER) { LOG("tex_new %ux%u: no room (user %d, cdram %d)\n", w, h, user, cdram); return NULL; }
+  if (known && user - need < (long)RESERVE_USER) {
+    // (no room: the parts not on screen give theirs back at once, and it's tried once more)
+    static int again;
+    if (!again && tex_no_room && tex_no_room()) { again = 1; t = tex_new(w, h); again = 0; return t; }
+    LOG("tex_new %ux%u: no room (user %d, cdram %d)\n", w, h, user, cdram);
+    return NULL;
+  }
   SceKernelMemBlockType was = vita2d_texture_get_alloc_memblock_type();
   vita2d_texture_set_alloc_memblock_type(SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE);
   t = vita2d_create_empty_texture(w, h);
@@ -860,6 +868,7 @@ static vita2d_texture **pending_free;
 static unsigned *pending_at; // (the frame each was let go in)
 static int npending, cappending;
 static pthread_mutex_t fmx = PTHREAD_MUTEX_INITIALIZER; // (a video closing on its own thread frees too)
+static unsigned free_backdate; // (a part off screen for 3 frames or more: its textures can go at once)
 static void free_later(vita2d_texture *t) {
   if (!t) return;
   pthread_mutex_lock(&fmx);
@@ -872,8 +881,20 @@ static void free_later(vita2d_texture *t) {
     if (!p || !pa) { pthread_mutex_unlock(&fmx); return; } // (a leak, not a crash)
     cappending = cap;
   }
-  pending_at[npending] = frame_no;
+  pending_at[npending] = frame_no - free_backdate;
   pending_free[npending++] = t;
+  pthread_mutex_unlock(&fmx);
+}
+// textures let go three frames ago or more: the GPU is done with them (vita2d has two frames in
+// flight at most), so they're freed without waiting for it
+static void free_due(void) {
+  pthread_mutex_lock(&fmx);
+  int kept = 0;
+  for (int k = 0; k < npending; k++) {
+    if (frame_no - pending_at[k] >= 3) vita2d_free_texture(pending_free[k]);
+    else { pending_free[kept] = pending_free[k]; pending_at[kept++] = pending_at[k]; }
+  }
+  npending = kept;
   pthread_mutex_unlock(&fmx);
 }
 static vita2d_texture *upload(const LvPixels *px) {
@@ -2398,6 +2419,7 @@ static void *closer_main(void *arg) {
   return NULL;
 }
 static void video_open_async(const char *path, const char *clip, int loop) {
+  make_room(32u << 20); // (a player: its buffers and frames, ~25 MB)
   pthread_mutex_lock(&cmx);
   vopen_gen++;
   snprintf(vopen_job.path, sizeof vopen_job.path, "%s", path ? path : "");
@@ -2834,7 +2856,7 @@ static void draw_viewer(void) {
   if (vid && vid_clip && is_video(it)) text_center(W / 2, 30, with_alpha(TEXT, 200), 15, "Preview clip: the Vita can't play this video's own file");
 
   // (zoomed in past 1.25x: the picture again at up to 1920 px, once; back to the screen's size with the next)
-  if (zoom * lv_mag > 1.25f && big_item == shown[vk] && big_hi_item != shown[vk] && !vid) { big_hi = 1; big_hi_item = shown[vk]; ask_big(shown[vk]); big_hi = 0; }
+  if (zoom * lv_mag > 1.25f && big_item == shown[vk] && big_hi_item != shown[vk] && !vid) { make_room(16u << 20); big_hi = 1; big_hi_item = shown[vk]; ask_big(shown[vk]); big_hi = 0; }
   if (vo_open) { draw_view_options(); return; } // (Viewing: its panel over the picture)
   // --- touch: swipe for the next one, pinch to zoom, drag when zoomed, tap for the controls ---
   if (in.touching && details_y < 0.5f) {
@@ -3684,7 +3706,6 @@ static int area_of(int s) {
   }
   return A_NONE;
 }
-static uint64_t area_seen[A_N]; // (when each was last on screen: µs, the real time, whatever the frame rate)
 static unsigned char area_held[A_N];
 static void scr_set_free(int set) {
   for (int k = set * 3; k < set * 3 + 3; k++) if (scr_buf[k]) { free_later(scr_buf[k]); scr_buf[k] = NULL; }
@@ -3751,29 +3772,48 @@ static void area_release(int a) {
     case A_SETTINGS: if (wheel_tex) { free_later(wheel_tex); wheel_tex = NULL; } break;
   }
 }
+static unsigned area_frame[A_N]; // (the frame each part was last on screen)
+static SceUID main_thread;
+// Every part not on screen gives its memory back. Off screen 3 frames or more, its textures go at once
+// (the GPU's done with them); else as usual, three frames on.
+static int release_hidden(const char *why, int at_once) {
+  int a = area_of(screen), n = 0;
+  int linked = a == A_WEBVIEW ? (wv_back == S_VIDEOS ? A_VIDEOS : A_WEB) : (a == A_VIEWER || a == A_SETTINGS) ? A_LIB : -1;
+  for (int k = A_LIB; k < A_N; k++) {
+    if (k == a || k == linked || !area_held[k]) continue;
+    free_backdate = at_once && frame_no - area_frame[k] >= 3 ? 3 : 0;
+    area_release(k);
+    free_backdate = 0;
+    area_held[k] = 0;
+    n++;
+    LOG("released %s (%s)\n", A_NAME[k], why);
+  }
+  if (n && at_once) free_due();
+  return n;
+}
+static int release_hidden_now(void) { return sceKernelGetThreadId() == main_thread && release_hidden("no room for a texture", 1) > 0; }
+// whether memory is short: main memory, video memory or the heap within reach of their reserves
+static int mem_short(size_t need) {
+#ifdef LV_DEBUG
+  // (debug builds: a file that says memory is always short, to test letting go on every screen)
+  static int forced = -1;
+  if (forced < 0) { SceIoStat st; forced = sceIoGetstat(DATA "/debug_lowmem.txt", &st) >= 0; }
+  if (forced) return 1;
+#endif
+  int fu = 0, fc = 0;
+  return (mem_free(&fu, &fc) == 0 && ((size_t)fu < RESERVE_USER + need || (size_t)fc < RESERVE_CDRAM + need)) || !heap_room(need);
+}
+// Room for something big about to be made (a video's player, a picture at twice the screen): the
+// parts not on screen let go first, if it's needed
+static void make_room(size_t need) { if (mem_short(need)) release_hidden("making room", 1); }
+// Every frame: the part on screen is noted. The others keep what they hold (held, not drawn, it costs
+// nothing) until memory is short; then they let it go, and get it again when they're back.
 static void janitor(void) {
   int a = area_of(screen);
-  uint64_t now = sceKernelGetProcessTimeWide();
-  area_seen[a] = now; area_held[a] = 1;
-  // (the full view belongs with what it was opened from: the Browser, or the video browser)
-  if (a == A_WEBVIEW) { int b = wv_back == S_VIDEOS ? A_VIDEOS : A_WEB; area_seen[b] = now; }
-  if (a == A_VIEWER || a == A_SETTINGS) area_seen[A_LIB] = now;
-  if (frame_no % 30) return; // (twice a second is plenty)
+  area_held[a] = 1; area_frame[a] = frame_no;
+  if (frame_no % 10) return; // (six times a second)
   drive_reap();
-  int fu = 0, fc = 0;
-  int low = (mem_free(&fu, &fc) == 0 && (fu < (int)RESERVE_USER + (24 << 20) || fc < (int)RESERVE_CDRAM + (24 << 20))) || !heap_room(16u << 20);
-  for (int k = A_LIB; k < A_N; k++) {
-    if (k == a || !area_held[k]) continue;
-    if (k == A_LIB && (!low || a == A_VIEWER || a == A_SETTINGS)) continue; // (the home screen's: only when memory is short)
-    unsigned idle = (unsigned)((now - area_seen[k]) / 1000000); // (seconds)
-    // Settings' wheel and the full views' buffers are quick to make again: let go as soon as they're left
-    int quick = k == A_SETTINGS || k == A_VIEWER || k == A_WEBVIEW;
-    if (quick || idle >= 60 || (low && idle >= 1)) {
-      area_release(k);
-      area_held[k] = 0;
-      LOG("released %s (%s, idle %us)\n", A_NAME[k], low ? "memory short" : "left", idle);
-    }
-  }
+  if (mem_short(24u << 20)) release_hidden("memory short", 1);
 }
 #ifdef LV_DEBUG
 // (debug builds, at each change of screen: what each part still holds, to find what a screen leaves behind)
@@ -3811,6 +3851,8 @@ int main(void) {
   sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT, SCE_TOUCH_SAMPLING_STATE_START);
   sceTouchSetSamplingState(SCE_TOUCH_PORT_BACK, SCE_TOUCH_SAMPLING_STATE_START);
   pin_to_core(0); // (the drawing thread on the first core; the work on the other two)
+  main_thread = sceKernelGetThreadId();
+  tex_no_room = release_hidden_now;
   // (the videos played last time, still on the card: they were only for playing, and can be large)
   {
     static const char *const tmp[] = {"play.mp4", "play.webm", "play0.mp4", "play0.webm", "play1.mp4", "play1.webm", "play.mp4.part", "play.webm.part", NULL};
@@ -3882,17 +3924,7 @@ int main(void) {
     }
     // textures let go three frames ago or more: the GPU is done with them (vita2d has two frames in
     // flight at most), so they're freed without waiting for it
-    if (npending) {
-      pthread_mutex_lock(&fmx);
-      int kept = 0;
-      for (int k = 0; k < npending; k++) {
-        if (frame_no - pending_at[k] >= 3) vita2d_free_texture(pending_free[k]);
-        else { pending_free[kept] = pending_free[k]; pending_at[kept++] = pending_at[k]; }
-      }
-      npending = kept;
-      pthread_mutex_unlock(&fmx);
-      PT("textures freed");
-    }
+    if (npending) { free_due(); PT("textures freed"); }
     videos_close_now();
     PT("videos closed");
     // (a backup for the sleep callback: the wall clock jumped, but frames don't take seconds;

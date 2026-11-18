@@ -348,11 +348,15 @@ high and every touch target has a few pixels of slack.
 
 **Each part on its own.** The app's parts (the Library, its full view, the Browser and its full view,
 the video browser, Comics, Favourites, Settings) each hold what they show: textures, a screen buffer or
-three, connections. So they don't add up over a session, a part that's been left gives them back
-(`janitor` in `src/main.c`): the full views' screen buffers and Settings' colour wheel at once, the
-others after a minute away (the Browser's 16 MB of preview atlases, the video browser's cards, the
-comics' covers, pages and strips, Favourites' covers), and all of them sooner when memory runs short,
-the Library's own thumbnails too; their lists stay, so coming back only fetches what's on screen. Each
+three, connections. Held and not drawn, that costs no time, so a part that's been left keeps it, and
+coming back is instant; but they mustn't add up to too little room for what comes next. So when
+memory gets short (checked six times a second), every part not on screen gives its memory back at
+once (`janitor` and `release_hidden` in `src/main.c`), the Library's own thumbnails too: off screen for
+three frames or more, the GPU is done with their textures, so they're freed there and then. Before
+something big is made (a video's player, a picture at twice the screen) the room is made first
+(`make_room`), and a texture that finds no room gets the others let go and is tried once more. Their
+lists stay, so coming back only fetches what's on screen. A debug build's `debug_lowmem.txt` in the
+data folder makes memory always short, to test it. Each
 worker closes its connection after 20 s with nothing to do (`wait_work`), Google Drive after each job,
 and the Wi-Fi server stops with its page. Icons and other small textures live in main memory, in 4 KiB
 pages, not a 256 KiB granule of video memory each (fifty icons and forty site tiles were ~22 MB of
