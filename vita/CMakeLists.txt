@@ -47,18 +47,24 @@ target_link_libraries(${PROJECT_NAME}
   vita2d freetype bz2 png turbojpeg webp sharpyuv
   avformat avcodec swresample swscale avutil vpx mp3lame mpg123 opus vorbis ogg
   curl ssl crypto zstd pthread z m
-  SceAvPlayer_stub SceAudio_stub SceGxm_stub SceDisplay_stub SceSysmodule_stub SceCtrl_stub
+  SceAvPlayer_stub SceVideodec_stub SceAudio_stub SceGxm_stub SceDisplay_stub SceSysmodule_stub SceCtrl_stub
   SceTouch_stub ScePower_stub SceAppUtil_stub SceCommonDialog_stub SceIme_stub ScePgf_stub
   SceLibKernel_stub SceKernelThreadMgr_stub SceRtc_stub SceAppMgr_stub SceLiveArea_stub
   SceShellSvc_stub SceNet_stub SceNetCtl_stub SceKernelModulemgr_stub SceIofilemgr_stub SceSysmem_stub SceProcessmgr_stub
 )
 
 vita_create_self(eboot.bin ${PROJECT_NAME} UNSAFE)
+set(LV_EXTRA_FILES "")
 if(LV_TESTKIT)
   target_compile_definitions(${PROJECT_NAME} PRIVATE LV_DEBUG LV_TESTKIT)
+  # (the test kit's sample videos: one of each kind the player reads, for its Video formats test)
+  foreach(clip h264.mkv h264.avi mpeg4.avi vp9.webm)
+    list(APPEND LV_EXTRA_FILES FILE testclips/${clip} testclips/${clip})
+  endforeach()
 endif()
 vita_create_vpk(${LV_VPK_NAME}.vpk ${VITA_TITLEID} eboot.bin
   VERSION ${VITA_VERSION}
+  ${LV_EXTRA_FILES}
   NAME ${VITA_APP_NAME}
   FILE sce_sys/icon0.png sce_sys/icon0.png
   FILE sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png

@@ -8,6 +8,13 @@
 //    the streams are enabled and playback started when the player says it is READY, frames live in
 //    GPU memory it maps itself, and the sound port is kept fed (silence between frames).
 //
+//  * H.264 in MKV / WebM / AVI: FFmpeg reads the container and the Vita's own H.264 hardware
+//    (sceAvcdec, as Moonlight's Vita port uses it) decodes the picture straight into a texture: the
+//    container's length-prefixed packets are turned into start codes here, the stream's SPS and PPS
+//    put in front of each key frame. Up to 1920 x 1088.
+//
+//  * MPEG-4 Part 2 / H.263 (XviD, DivX, old AVIs and 3GPs): FFmpeg's own decoders, in software.
+//
 //  * WebM / MKV: the Vita has no hardware for VP8/VP9, so they are decoded in software: FFmpeg
 //    reads the container (libavformat) and decodes the sound (Opus, Vorbis, AAC), libvpx decodes the
 //    picture on its own thread (libvpx's multi-threaded mode hung under test, so one decoder thread),
@@ -34,6 +41,7 @@ vita2d_texture *tex_new(unsigned w, unsigned h);
 #include <psp2/kernel/sysmem.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/sysmodule.h>
+#include <psp2/videodec.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -106,6 +114,21 @@ struct LvVideo {
   int rgb_cur;
   volatile int pix_fresh;
   volatile int snd_done, dec_done;
+  // ---- H.264 in hardware (sceAvcdec) ----
+  int avc;                   // (the picture's decoded by the Vita's H.264 hardware)
+  SceAvcdecCtrl avc_ctl;
+  SceUID avc_mem;
+  int avc_lib, avc_dec;      // (the library started; the decoder made)
+  vita2d_texture *avc_tex[3]; // (three frames: one shown, one the GPU may still read, one decoded into)
+  vita2d_texture avc_view[3]; // (each texture's view at the picture's own size, not its padding)
+  int avc_w16, avc_h16, avc_back;
+  volatile int avc_front;
+  uint8_t *avc_hdr; int avc_hdr_n, avc_nal; // (SPS and PPS with start codes; the packets' length size: 0 start codes already)
+  uint8_t *avc_buf; size_t avc_cap;
+  int64_t avc_pts[32]; int avc_npts; // (the times of the frames sent and not yet out: the earliest is the next shown)
+  // ---- other pictures in software (MPEG-4 Part 2, H.263) ----
+  AVCodecContext *vctx;
+  AVFrame *vframe;
   // ---- a file still being downloaded (lv_video_open_growing): reads wait for its bytes ----
   const LvGrow *grow;
   SceUID gfd;
@@ -367,20 +390,26 @@ static void *sw_sound_main(void *arg) {
   return NULL;
 }
 
+static void sw_show_planes(LvVideo *v, int iw, int ih, int f, const uint8_t *const planes[3], const int strides[3]);
 static void sw_show(LvVideo *v, vpx_image_t *img) {
+  int f = img->fmt == VPX_IMG_FMT_I444 ? AV_PIX_FMT_YUV444P : img->fmt == VPX_IMG_FMT_I422 ? AV_PIX_FMT_YUV422P : AV_PIX_FMT_YUV420P;
+  const uint8_t *const planes[3] = {img->planes[0], img->planes[1], img->planes[2]};
+  const int strides[3] = {img->stride[0], img->stride[1], img->stride[2]};
+  sw_show_planes(v, (int)img->d_w, (int)img->d_h, f, planes, strides);
+}
+static void sw_show_planes(LvVideo *v, int iw, int ih, int f, const uint8_t *const planes[3], const int strides[3]) {
   // made 480p (854 x 480 at most) before it's drawn: a bigger frame is scaled down here, once, and the
   // GPU takes it from there to the screen
-  int ow = (int)img->d_w, oh = (int)img->d_h;
+  int ow = iw, oh = ih;
   if (ow > 854 || oh > 480) {
     double s = ow * 480.0 > oh * 854.0 ? 854.0 / ow : 480.0 / oh;
     ow = ((int)(ow * s)) & ~1;
     oh = ((int)(oh * s)) & ~1;
   }
-  int f = img->fmt == VPX_IMG_FMT_I444 ? AV_PIX_FMT_YUV444P : img->fmt == VPX_IMG_FMT_I422 ? AV_PIX_FMT_YUV422P : AV_PIX_FMT_YUV420P;
-  if (!v->sws || v->sws_w != (int)img->d_w || v->sws_h != (int)img->d_h || v->sws_fmt != f || v->pix_w != ow || v->pix_h != oh) {
+  if (!v->sws || v->sws_w != iw || v->sws_h != ih || v->sws_fmt != f || v->pix_w != ow || v->pix_h != oh) {
     if (v->sws) sws_freeContext(v->sws);
-    v->sws = sws_getContext((int)img->d_w, (int)img->d_h, f, ow, oh, AV_PIX_FMT_RGBA, SWS_FAST_BILINEAR, NULL, NULL, NULL);
-    v->sws_w = (int)img->d_w; v->sws_h = (int)img->d_h; v->sws_fmt = f;
+    v->sws = sws_getContext(iw, ih, f, ow, oh, AV_PIX_FMT_RGBA, SWS_FAST_BILINEAR, NULL, NULL, NULL);
+    v->sws_w = iw; v->sws_h = ih; v->sws_fmt = f;
     if (v->pix_w != ow || v->pix_h != oh) {
       pthread_mutex_lock(&v->mx);
       free(v->pix[0]); free(v->pix[1]);
@@ -395,9 +424,7 @@ static void sw_show(LvVideo *v, vpx_image_t *img) {
   int back = v->pix_ready == 0 ? 1 : 0;
   uint8_t *dst[1] = {v->pix[back]};
   int dst_stride[1] = {ow * 4};
-  const uint8_t *src[3] = {img->planes[0], img->planes[1], img->planes[2]};
-  int src_stride[3] = {img->stride[0], img->stride[1], img->stride[2]};
-  sws_scale(v->sws, src, src_stride, 0, (int)img->d_h, dst, dst_stride);
+  sws_scale(v->sws, planes, strides, 0, ih, dst, dst_stride);
   pthread_mutex_lock(&v->mx);
   v->pix_ready = back;
   v->pix_fresh = 1;
@@ -414,11 +441,105 @@ static void sw_seek_now(LvVideo *v) {
   v->played = 0;
   v->clock_base_ms = to;
   v->wall_start = now_us();
+  v->avc_npts = 0;
   v->seek_to = -1;
   pthread_cond_broadcast(&v->cv);
   pthread_mutex_unlock(&v->mx);
 }
 
+// ---------- H.264 in hardware ----------
+// (the stream's SPS and PPS from the container's avcC box, as start-code NAL units)
+static int avc_parse_extra(LvVideo *v, const uint8_t *ex, int n) {
+  if (n < 7 || ex[0] != 1) { v->avc_nal = 0; return 0; } // (no avcC: start codes already, or nothing)
+  v->avc_nal = (ex[4] & 3) + 1;
+  v->avc_hdr = malloc((size_t)n * 2 + 64);
+  if (!v->avc_hdr) return -1;
+  int at = 5, o = 0;
+  for (int set = 0; set < 2; set++) {
+    if (at >= n) break;
+    int cnt = set == 0 ? ex[at++] & 0x1f : ex[at++];
+    for (int k = 0; k < cnt && at + 2 <= n; k++) {
+      int l = ex[at] << 8 | ex[at + 1];
+      at += 2;
+      if (at + l > n) break;
+      memcpy(v->avc_hdr + o, "\0\0\0\1", 4); o += 4;
+      memcpy(v->avc_hdr + o, ex + at, (size_t)l); o += l;
+      at += l;
+    }
+  }
+  v->avc_hdr_n = o;
+  return 0;
+}
+// a packet as start-code NAL units (the SPS and PPS first, on a key frame); its length
+static size_t avc_annexb(LvVideo *v, const AVPacket *pkt) {
+  size_t need = (size_t)pkt->size * 2 + (size_t)v->avc_hdr_n + 64;
+  if (need > v->avc_cap) { uint8_t *nb = realloc(v->avc_buf, need); if (!nb) return 0; v->avc_buf = nb; v->avc_cap = need; }
+  size_t o = 0;
+  if ((pkt->flags & AV_PKT_FLAG_KEY) && v->avc_hdr_n) { memcpy(v->avc_buf, v->avc_hdr, (size_t)v->avc_hdr_n); o = (size_t)v->avc_hdr_n; }
+  if (!v->avc_nal) { memcpy(v->avc_buf + o, pkt->data, (size_t)pkt->size); return o + (size_t)pkt->size; }
+  for (int at = 0; at + v->avc_nal <= pkt->size;) {
+    uint32_t l = 0;
+    for (int k = 0; k < v->avc_nal; k++) l = l << 8 | pkt->data[at + k];
+    at += v->avc_nal;
+    if (l > (uint32_t)(pkt->size - at)) break;
+    memcpy(v->avc_buf + o, "\0\0\0\1", 4); o += 4;
+    memcpy(v->avc_buf + o, pkt->data + at, l); o += l;
+    at += (int)l;
+  }
+  return o;
+}
+static int avc_open(LvVideo *v, AVCodecParameters *cp) {
+  if (cp->width <= 0 || cp->height <= 0 || cp->width > 1920 || cp->height > 1088) return -1;
+  if (avc_parse_extra(v, cp->extradata, cp->extradata_size) != 0) return -1;
+  sceSysmoduleLoadModule(SCE_SYSMODULE_AVCDEC);
+  v->avc_w16 = (cp->width + 15) & ~15;
+  v->avc_h16 = (cp->height + 15) & ~15;
+  SceVideodecQueryInitInfoHwAvcdec init = {sizeof init, (uint32_t)v->avc_w16, (uint32_t)v->avc_h16, 5, 1};
+  if (sceVideodecInitLibrary(SCE_VIDEODEC_TYPE_HW_AVCDEC, &init) < 0) { LOG("avc: init failed\n"); return -1; }
+  v->avc_lib = 1;
+  SceAvcdecQueryDecoderInfo q = {(uint32_t)v->avc_w16, (uint32_t)v->avc_h16, 5};
+  SceAvcdecDecoderInfo di;
+  memset(&di, 0, sizeof di);
+  if (sceAvcdecQueryDecoderMemSize(SCE_VIDEODEC_TYPE_HW_AVCDEC, &q, &di) < 0) return -1;
+  uint32_t sz = (di.frameMemSize + 0x3FFFF) & ~0x3FFFFu;
+  v->avc_mem = sceKernelAllocMemBlock("lv_avcdec", SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW, sz, NULL);
+  if (v->avc_mem < 0) { LOG("avc: no memory for the decoder (%u)\n", (unsigned)sz); return -1; }
+  memset(&v->avc_ctl, 0, sizeof v->avc_ctl);
+  sceKernelGetMemBlockBase(v->avc_mem, &v->avc_ctl.frameBuf.pBuf);
+  v->avc_ctl.frameBuf.size = sz;
+  if (sceAvcdecCreateDecoder(SCE_VIDEODEC_TYPE_HW_AVCDEC, &v->avc_ctl, &q) < 0) { LOG("avc: decoder not made\n"); return -1; }
+  v->avc_dec = 1;
+  // (the frames: the hardware writes into video memory the GPU then draws)
+  for (int k = 0; k < 3; k++) {
+    v->avc_tex[k] = vita2d_create_empty_texture(v->avc_w16, v->avc_h16);
+    if (!v->avc_tex[k]) return -1;
+    vita2d_texture *view = &v->avc_view[k];
+    memset(view, 0, sizeof *view);
+    sceGxmTextureInitLinearStrided(&view->gxm_tex, vita2d_texture_get_datap(v->avc_tex[k]), SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, cp->width, cp->height, v->avc_w16 * 4);
+    sceGxmTextureSetMinFilter(&view->gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
+    sceGxmTextureSetMagFilter(&view->gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
+  }
+  v->avc_front = -1; v->avc_back = 0;
+  v->avc = 1;
+  LOG("avc: %dx%d in hardware, nal %d, header %d bytes\n", cp->width, cp->height, v->avc_nal, v->avc_hdr_n);
+  return 0;
+}
+static void avc_close(LvVideo *v) {
+  if (v->avc_dec) sceAvcdecDeleteDecoder(&v->avc_ctl);
+  if (v->avc_mem > 0) sceKernelFreeMemBlock(v->avc_mem);
+  if (v->avc_lib) sceVideodecTermLibrary(SCE_VIDEODEC_TYPE_HW_AVCDEC);
+  for (int k = 0; k < 3; k++) if (v->avc_tex[k]) lv_video_release_texture(v->avc_tex[k]);
+  free(v->avc_hdr); free(v->avc_buf);
+  v->avc_dec = v->avc_lib = 0; v->avc_mem = 0;
+}
+// waits for a picture's moment on the sound's clock (gives up on a seek or a pause)
+static void sw_wait_for(LvVideo *v, int64_t pts) {
+  while (v->run && v->seek_to < 0 && !v->paused) {
+    int64_t ahead = pts - sw_clock(v);
+    if (ahead <= 4) break;
+    sceKernelDelayThread((SceUInt)((ahead > 20 ? 20 : ahead) * 1000));
+  }
+}
 static void *sw_decode_main(void *arg) {
   sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << 1); // (off the drawing thread's core)
   LvVideo *v = arg;
@@ -450,6 +571,72 @@ static void *sw_decode_main(void *arg) {
         while (avcodec_receive_frame(v->actx, af) == 0) {
           int n = swr_convert(v->swr, (uint8_t **)&pcm, 48000, (const uint8_t **)af->extended_data, af->nb_samples);
           if (n > 0) ring_put(v, pcm, n);
+        }
+      }
+    } else if (pkt->stream_index == v->vs && v->avc) {
+      AVRational tb = v->fmt->streams[v->vs]->time_base;
+      // (its time: its own, else its decoding time (AVI has only that), else a frame on from the last)
+      static int64_t last_in;
+      int64_t pts = pkt->pts != AV_NOPTS_VALUE ? av_rescale_q(pkt->pts, tb, (AVRational){1, 1000})
+                  : pkt->dts != AV_NOPTS_VALUE ? av_rescale_q(pkt->dts, tb, (AVRational){1, 1000}) : last_in + 33;
+      last_in = pts;
+      size_t n = avc_annexb(v, pkt);
+      if (n) {
+        SceAvcdecAu au;
+        memset(&au, 0, sizeof au);
+        au.pts.upper = 0; au.pts.lower = (uint32_t)(pts < 0 ? 0 : pts);
+        au.dts.upper = au.dts.lower = 0xFFFFFFFF;
+        au.es.pBuf = v->avc_buf; au.es.size = (uint32_t)n;
+        int back = v->avc_back;
+        SceAvcdecPicture pic;
+        memset(&pic, 0, sizeof pic);
+        pic.size = sizeof pic;
+        pic.frame.pixelType = SCE_AVCDEC_PIXELFORMAT_RGBA8888;
+        pic.frame.framePitch = (uint32_t)v->avc_w16;
+        pic.frame.frameWidth = (uint32_t)v->avc_w16;
+        pic.frame.frameHeight = (uint32_t)v->avc_h16;
+        pic.frame.pPicture[0] = vita2d_texture_get_datap(v->avc_tex[back]);
+        SceAvcdecPicture *pp = &pic;
+        SceAvcdecArrayPicture arr = {0, 1, &pp};
+        if (v->avc_npts < 32) v->avc_pts[v->avc_npts++] = pts;
+        int r = sceAvcdecDecode(&v->avc_ctl, &au, &arr);
+        if (r < 0) LOG("avc: decode error %x at %lld\n", r, (long long)pts);
+        else if (arr.numOfOutput > 0) {
+          // (its time: the earliest of those sent and not yet out, as frames come out in the order
+          //  they're shown; the decoder's own isn't always filled in)
+          int64_t opts = pts;
+          if (v->avc_npts) {
+            int m = 0;
+            for (int q = 1; q < v->avc_npts; q++) if (v->avc_pts[q] < v->avc_pts[m]) m = q;
+            opts = v->avc_pts[m];
+            v->avc_pts[m] = v->avc_pts[--v->avc_npts];
+          }
+          if (!(skip_until >= 0 && opts < skip_until - 40)) {
+            skip_until = -1;
+            sw_wait_for(v, opts);
+            if (v->seek_to >= 0 || !v->run) { av_packet_unref(pkt); continue; }
+            v->pos_ms = opts;
+            pthread_mutex_lock(&v->mx);
+            v->avc_front = back;
+            v->avc_back = (back + 1) % 3; // (never the one shown, nor the one shown before it)
+            pthread_mutex_unlock(&v->mx);
+          }
+        }
+      }
+    } else if (pkt->stream_index == v->vs && v->vctx) {
+      if (avcodec_send_packet(v->vctx, pkt) == 0) {
+        while (avcodec_receive_frame(v->vctx, v->vframe) == 0) {
+          AVRational tb = v->fmt->streams[v->vs]->time_base;
+          int64_t bt = v->vframe->best_effort_timestamp;
+          int64_t pts = bt != AV_NOPTS_VALUE ? av_rescale_q(bt, tb, (AVRational){1, 1000}) : v->pos_ms;
+          if (skip_until >= 0 && pts < skip_until - 40) continue;
+          skip_until = -1;
+          sw_wait_for(v, pts);
+          if (v->seek_to >= 0 || !v->run) break;
+          v->pos_ms = pts;
+          const uint8_t *const planes[3] = {v->vframe->data[0], v->vframe->data[1], v->vframe->data[2]};
+          const int strides[3] = {v->vframe->linesize[0], v->vframe->linesize[1], v->vframe->linesize[2]};
+          sw_show_planes(v, v->vframe->width, v->vframe->height, v->vframe->format, planes, strides);
         }
       }
     } else if (pkt->stream_index == v->vs && v->vpx_ok) {
@@ -513,6 +700,16 @@ static int sw_open(LvVideo *v) {
         v->w = cp->width;
         v->h = cp->height;
       }
+    } else if (cp->codec_type == AVMEDIA_TYPE_VIDEO && v->vs < 0 && cp->codec_id == AV_CODEC_ID_H264) {
+      // (H.264: the Vita's own hardware)
+      if (avc_open(v, cp) == 0) { v->vs = (int)k; v->w = cp->width; v->h = cp->height; v->pix_w = v->w; v->pix_h = v->h; }
+      else LOG("sw: H.264 %dx%d: not in hardware\n", cp->width, cp->height);
+    } else if (cp->codec_type == AVMEDIA_TYPE_VIDEO && v->vs < 0 && avcodec_find_decoder(cp->codec_id)) {
+      // (MPEG-4 Part 2, H.263 and the like: FFmpeg's own decoder)
+      const AVCodec *c = avcodec_find_decoder(cp->codec_id);
+      v->vctx = avcodec_alloc_context3(c);
+      if (v->vctx && avcodec_parameters_to_context(v->vctx, cp) >= 0 && avcodec_open2(v->vctx, c, NULL) >= 0 && (v->vframe = av_frame_alloc())) { v->vs = (int)k; v->w = cp->width; v->h = cp->height; }
+      else if (v->vctx) avcodec_free_context(&v->vctx);
     } else if (cp->codec_type == AVMEDIA_TYPE_AUDIO && v->as < 0) {
       const AVCodec *c = avcodec_find_decoder(cp->codec_id);
       if (!c) continue;
@@ -564,6 +761,9 @@ static int sw_close(LvVideo *v) {
     return 0;
   }
   if (v->vpx_ok) vpx_codec_destroy(&v->vpx);
+  avc_close(v);
+  if (v->vctx) avcodec_free_context(&v->vctx);
+  if (v->vframe) av_frame_free(&v->vframe);
   if (v->actx) avcodec_free_context(&v->actx);
   if (v->swr) swr_free(&v->swr);
   if (v->sws) sws_freeContext(v->sws);
@@ -580,6 +780,15 @@ static int sw_close(LvVideo *v) {
 // A new picture goes into whichever of two textures wasn't drawn last (the GPU may still be reading
 // that one), and only when the decoder has a new one.
 static vita2d_texture *sw_frame(LvVideo *v) {
+  if (v->avc) { // (the hardware's frame, as it is: nothing copied)
+    pthread_mutex_lock(&v->mx);
+    int f = v->avc_front;
+    pthread_mutex_unlock(&v->mx);
+    if (f < 0) return NULL;
+    v->has_frame = 1;
+    v->rgb = &v->avc_view[f];
+    return v->rgb;
+  }
   pthread_mutex_lock(&v->mx);
   int k = v->pix_ready;
   if (k >= 0 && v->pix[k] && v->pix_fresh) {
@@ -630,7 +839,7 @@ LvVideo *lv_video_open(const char *path, const uint8_t *key, int loop) {
   v->speed = 100;
   v->add_thread = v->audio_thread = -1;
   v->run = 1;
-  v->sw = ext(path, "webm") || ext(path, "mkv");
+  v->sw = ext(path, "webm") || ext(path, "mkv") || ext(path, "avi");
   if ((v->sw ? sw_open(v) : av_open(v)) != 0) { lv_video_close(v); return NULL; }
   return v;
 }

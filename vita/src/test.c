@@ -107,11 +107,11 @@ static void meas_frame(float work_ms, float len_ms) {
 }
 
 // ---------- the tests ----------
-enum { TK_NORMAL, TK_ALL, TK_LIB, TK_VIEW, TK_WEB, TK_VIDEOS, TK_COMICS, TK_WEBTOON, TK_MEM, TK_NET, TK_CARD, TK_STRESS, TK_REPORTS, TK_N };
+enum { TK_NORMAL, TK_ALL, TK_LIB, TK_VIEW, TK_WEB, TK_VIDEOS, TK_COMICS, TK_WEBTOON, TK_MEM, TK_NET, TK_CARD, TK_STRESS, TK_VIDFMT, TK_REPORTS, TK_N };
 static const char *const TK_NAME[TK_N] = {
   "Open the app normally", "Run every test", "Library: scrolling", "Full view: pictures", "Browser: loading, scrolling",
   "Video browser", "Comics: MangaDex", "Webtoon strips", "Memory: give back, come back", "Network: every source",
-  "Memory card speed", "Stress: five tours", "Reports",
+  "Memory card speed", "Stress: five tours", "Video formats", "Reports",
 };
 static const char *const TK_ABOUT[TK_N] = {
   "The app as usual: live numbers at the top, everything logged",
@@ -126,6 +126,7 @@ static const char *const TK_ABOUT[TK_N] = {
   "Every source asked once: answer, time, size",
   "Writes, reads and deletes 16 MB; reads vault files",
   "Five rounds of every screen: does memory creep up?",
+  "H.264 in MKV and AVI, MPEG-4 AVI, VP9 WebM: plays?",
   "Where the reports are, and sending them",
 };
 static struct {
@@ -140,7 +141,7 @@ static struct {
   float times[64];
   int ntimes;
 } T = {.menu_sel = 2};
-static const int TK_ORDER[] = {TK_LIB, TK_VIEW, TK_WEB, TK_VIDEOS, TK_COMICS, TK_WEBTOON, TK_MEM, TK_NET, TK_CARD, TK_STRESS};
+static const int TK_ORDER[] = {TK_LIB, TK_VIEW, TK_WEB, TK_VIDEOS, TK_COMICS, TK_WEBTOON, TK_MEM, TK_NET, TK_CARD, TK_VIDFMT, TK_STRESS};
 #define TK_NORDER ((int)(sizeof TK_ORDER / sizeof *TK_ORDER))
 static typeof(cfg) tk_cfg; // (the settings as they were: back after each test)
 
@@ -154,6 +155,11 @@ static int tk_wait(int cond, float max_s, const char *what) {
 }
 static void tk_press(unsigned b) { in.pressed |= b; in.now |= b; }
 
+// the video formats test: the player open now, its last picture, pictures counted
+static LvVideo *tk_vid;
+static vita2d_texture *tk_vlast;
+static int tk_vframes;
+static uint64_t tk_vpos;
 // network test: a thread asks each source once
 typedef struct { char name[48], url[300]; int st; float ms; size_t bytes; char err[80]; } NetRes;
 static NetRes *net_res;
@@ -390,6 +396,34 @@ static void tk_step(void) {
           break;
       }
       break;
+    case TK_VIDFMT: {
+      // each sample: opened, its first picture, then how many new pictures in 3 s
+      static const char *const CLIP[] = {"h264.mkv", "h264.avi", "mpeg4.avi", "vp9.webm"};
+      static const char *const WHAT[] = {"H.264 in MKV (hardware)", "H.264 in AVI (hardware)", "MPEG-4 in AVI (software)", "VP9 in WebM (software)"};
+      int c = T.phase / 3, step = T.phase % 3;
+      if (c >= 4) { tk_finish_test(); break; }
+      if (step == 0) {
+        char p[96];
+        snprintf(p, sizeof p, "app0:testclips/%s", CLIP[c]);
+        if (vid) stop_video();
+        tk_vid = lv_video_open(p, NULL, 1);
+        tk_vframes = 0; tk_vlast = NULL; tk_vpos = 0;
+        if (!tk_vid) { rpf("  %-26s did NOT open\n", WHAT[c]); T.phase += 2; }
+        tk_next();
+        break;
+      }
+      vita2d_texture *f = tk_vid ? lv_video_frame(tk_vid) : NULL;
+      uint64_t pos = tk_vid ? lv_video_pos(tk_vid) : 0;
+      if (f && pos != tk_vpos) { tk_vframes++; tk_vpos = pos; }
+      tk_vlast = f;
+      if (step == 1) { if (tk_wait(f != NULL, 8, WHAT[c])) { tk_vframes = 0; tk_next(); } if (!f && tk_secs() > 8) { lv_video_close(tk_vid); tk_vid = NULL; tk_vlast = NULL; } }
+      else if (step == 2 && tk_secs() >= 3) {
+        rpf("  %-26s %dx%d, %.0f pictures a second\n", "", lv_video_width(tk_vid), lv_video_height(tk_vid), tk_vframes / 3.0f);
+        lv_video_close(tk_vid); tk_vid = NULL; tk_vlast = NULL;
+        tk_next();
+      }
+      break;
+    }
     case TK_STRESS: {
       // each round: Library, a picture, Browser, Comics, Settings, Library; memory written down after each
       static const int SCR[] = {S_LIBRARY, S_VIEWER, S_WEB, S_MANGA, S_SETTINGS, S_LIBRARY};
@@ -654,6 +688,10 @@ static void tk_frame_end(float work_ms, float len_ms) {
   meas_frame(work_ms, len_ms);
   static int last_screen = -1;
   if (screen != last_screen && !T.active && T.menu_done && screen != S_TEST) { tk_mark("screen %d", screen); last_screen = screen; }
+  if (T.active && tk_vlast) { // (the video formats test: its picture, fitted)
+    float tw = lv_video_width(tk_vid), th = lv_video_height(tk_vid);
+    if (tw > 0 && th > 0) { float sc = fminf(W / tw, H / th); vita2d_draw_texture_scale(tk_vlast, (W - tw * sc) / 2, (H - th * sc) / 2, sc, sc); }
+  }
   if (T.active || T.hud) {
     static float avg_len = 16.7f, avg_work;
     avg_len += (len_ms - avg_len) * 0.05f;
