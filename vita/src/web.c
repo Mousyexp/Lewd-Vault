@@ -726,16 +726,86 @@ static void sw_open(void);
 static void wv_offline(void);
 static int fav_find(int kind, const char *page);
 static LvVideo *wv_vid;
+static int wv_vid_post = -1; // (the post it plays)
 static const LvGrow *wv_stream; // (the player's download, while it's still coming)
 static float wzoom = 1, wpan_x, wpan_y, wswipe;
 static int wdetails;
 static float wdetails_y;
 static unsigned wchrome_until;
 
+// ---------- where each Browser video was left (ux0:data/LWDV00001/web_resume.tsv) ----------
+// A line each, the most recent first: the seconds and the post's address. Noted when a video is
+// closed more than 10 s in and more than 10 s from its end (nearer the end: forgotten), and gone
+// back to once the same post's video opens again.
+typedef struct { int secs; char key[300]; } WResume;
+#define WRES_MAX 200
+static WResume *wres;
+static int nwres, wres_loaded;
+static int64_t wv_resume_to = -1; // (the open video: where to go once its length is known)
+static const char *wres_key(const LvPost *p) { return p->page && p->page[0] ? p->page : p->file ? p->file : ""; }
+static void wres_load(void) {
+  if (wres_loaded) return;
+  wres_loaded = 1;
+  wres = calloc(WRES_MAX, sizeof *wres);
+  FILE *f = fopen(DATA "/web_resume.tsv", "r");
+  if (!f || !wres) { if (f) fclose(f); return; }
+  char line[360];
+  while (nwres < WRES_MAX && fgets(line, sizeof line, f)) {
+    line[strcspn(line, "\r\n")] = 0;
+    char *tab = strchr(line, '\t');
+    if (!tab || !tab[1]) continue;
+    *tab = 0;
+    wres[nwres].secs = atoi(line);
+    snprintf(wres[nwres].key, sizeof wres[nwres].key, "%s", tab + 1);
+    nwres++;
+  }
+  fclose(f);
+}
+static int wres_find(const char *key) {
+  wres_load();
+  for (int k = 0; key[0] && k < nwres; k++) if (!strcmp(wres[k].key, key)) return k;
+  return -1;
+}
+static void wres_write(void) {
+  FILE *f = fopen(DATA "/web_resume.tsv.part", "w");
+  if (!f) return;
+  for (int k = 0; k < nwres; k++) fprintf(f, "%d\t%s\n", wres[k].secs, wres[k].key);
+  fclose(f);
+  sceIoRemove(DATA "/web_resume.tsv");
+  sceIoRename(DATA "/web_resume.tsv.part", DATA "/web_resume.tsv");
+}
+// (the closing video's place: noted, or forgotten if it was at the start or the end)
+static void wres_note(const char *key, uint64_t pos, uint64_t dur) {
+  wres_load();
+  if (!wres || !key[0] || strlen(key) >= sizeof wres[0].key || strpbrk(key, "\t\n\r")) return;
+  int k = wres_find(key), keep = pos > 10000 && dur > 0 && pos + 10000 < dur;
+  if (!keep && k < 0) return;
+  if (k >= 0) { memmove(wres + k, wres + k + 1, (nwres - k - 1) * sizeof *wres); nwres--; }
+  if (keep) {
+    if (nwres >= WRES_MAX) nwres = WRES_MAX - 1;
+    memmove(wres + 1, wres, nwres * sizeof *wres);
+    wres[0].secs = (int)(pos / 1000);
+    snprintf(wres[0].key, sizeof wres[0].key, "%s", key);
+    nwres++;
+  }
+  wres_write();
+}
+// (a video just opened for post wv: where it was left, if anywhere)
+static void wres_arm(void) {
+  wv_resume_to = -1;
+  if (wv < 0 || wv >= nposts) return;
+  int k = wres_find(wres_key(&posts[wv]));
+  if (k >= 0 && wres[k].secs > 0) wv_resume_to = (int64_t)wres[k].secs * 1000;
+}
+
 static void wv_drop(void) {
   // (a video still downloading for this view: stopped, it isn't wanted any more)
   if (dl_post >= 0) { pthread_mutex_lock(&wmx); if (!saving) big_cancel = 1; pthread_mutex_unlock(&wmx); }
+  if (wv_vid && wv_vid_post >= 0 && wv_vid_post < nposts && wv_resume_to < 0)
+    wres_note(wres_key(&posts[wv_vid_post]), lv_video_pos(wv_vid), lv_video_duration(wv_vid));
+  wv_resume_to = -1;
   if (wv_vid) { video_close_later(wv_vid); wv_vid = NULL; }
+  wv_vid_post = -1;
   wv_stream = NULL;
   release_tex(wv_tex);
   wv_tex = NULL;
@@ -884,7 +954,7 @@ static void web_take_results(void) {
           make_room(32u << 20); // (a player: room first)
           wv_vid = lv_video_open(video_path, NULL, 1);
           LOG("video open %s -> %p\n", video_path, (void *)wv_vid);
-          if (wv_vid) lv_video_set_volume(wv_vid, cfg.volume * 32768 / 100);
+          if (wv_vid) { lv_video_set_volume(wv_vid, cfg.volume * 32768 / 100); wv_vid_post = wv; wres_arm(); }
           else snprintf(wv_err, sizeof wv_err, "This video can't be played on the Vita (it can still be saved)");
         }
         // (asked to be made available offline while it came: the save page, now it's all here)
@@ -2671,7 +2741,7 @@ static void draw_webview(void) {
       make_room(32u << 20); // (a player: room first)
       wv_vid = lv_video_open_growing(dl_path[dl_slot], g);
       LOG("stream open %s have=%lld total=%lld -> %p\n", dl_path[dl_slot], (long long)g->have, (long long)g->total, (void *)wv_vid);
-      if (wv_vid) { lv_video_set_volume(wv_vid, cfg.volume * 32768 / 100); wv_loading = 0; wv_stream = g; }
+      if (wv_vid) { lv_video_set_volume(wv_vid, cfg.volume * 32768 / 100); wv_loading = 0; wv_stream = g; wv_vid_post = wv; wres_arm(); }
     }
   }
   LvPost *p = &posts[wv];
@@ -2681,6 +2751,21 @@ static void draw_webview(void) {
   vita2d_texture *t = NULL;
   int is_frame = 0;
   if (wv_vid) { t = lv_video_frame(wv_vid); is_frame = t != NULL; }
+  // (picked up where it was left: once its length is known, and while downloading once that far is here)
+  if (wv_vid && wv_resume_to >= 0 && lv_video_duration(wv_vid) > 0) {
+    uint64_t d = lv_video_duration(wv_vid);
+    double have = wv_stream && !wv_stream->done && wv_stream->total > 0 ? (double)wv_stream->have / (double)wv_stream->total - 0.03 : 1;
+    if ((uint64_t)wv_resume_to >= d) wv_resume_to = -1;
+    else if (have >= (double)wv_resume_to / (double)d) {
+      lv_video_seek(wv_vid, wv_resume_to);
+      char a1[16], m[64];
+      fmt_time((uint64_t)wv_resume_to, a1, sizeof a1);
+      snprintf(m, sizeof m, "Picked up where it was left: %s", a1);
+      say(m);
+      wv_resume_to = -1;
+      wchrome_until = frame_no + 150;
+    }
+  }
   if (!t && wv_tex_post == wv) t = wv_tex;
   if (!t) t = preview_of(wv);
   float avail_h = H - wdetails_y * 300;
