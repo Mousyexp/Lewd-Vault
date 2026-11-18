@@ -6,6 +6,7 @@
 #include <string.h>
 #include <turbojpeg.h>
 #include <jpeglib.h>
+#include <jerror.h>
 #include <webp/decode.h>
 
 static void fit(int w, int h, int max_w, int max_h, int *ow, int *oh) {
@@ -169,6 +170,130 @@ int lv_image_size(const uint8_t *d, size_t n, int *w, int *h) {
   return 0;
 }
 
+// ----- libjpeg's memory: its system part (jmemnobs.c's, replaced here) -----
+// A progressive JPEG is drawn by several scans over the whole picture, so libjpeg keeps every
+// block's coefficients until the last one: for a webtoon's 700 x 23000 strip that's ~50 MB. What
+// doesn't fit the budget it's given (max_memory_to_use) it hands to a "backing store" in pieces, a
+// band of block rows at a time. Ours keeps them in RAM, compressed: coefficients are mostly zeros, so
+// a page of them is a few runs. The decoder then holds one window of rows, plus the compressed rest.
+typedef struct backing_store_struct {
+  void (*read_backing_store)(j_common_ptr cinfo, struct backing_store_struct *info, void *buffer_address, long file_offset, long byte_count);
+  void (*write_backing_store)(j_common_ptr cinfo, struct backing_store_struct *info, void *buffer_address, long file_offset, long byte_count);
+  void (*close_backing_store)(j_common_ptr cinfo, struct backing_store_struct *info);
+  void *store; // (where jmemnobs.c keeps its FILE *: the struct is libjpeg's, no bigger than that)
+} lv_backing_store;
+void *jpeg_get_small(j_common_ptr cinfo, size_t n) { (void)cinfo; return malloc(n); }
+void jpeg_free_small(j_common_ptr cinfo, void *p, size_t n) { (void)cinfo; (void)n; free(p); }
+void *jpeg_get_large(j_common_ptr cinfo, size_t n) { (void)cinfo; return malloc(n); }
+void jpeg_free_large(j_common_ptr cinfo, void *p, size_t n) { (void)cinfo; (void)n; free(p); }
+size_t jpeg_mem_available(j_common_ptr cinfo, size_t min_bytes_needed, size_t max_bytes_needed, size_t already_allocated) {
+  (void)min_bytes_needed;
+  long cap = cinfo->mem->max_memory_to_use;
+  if (!cap) return max_bytes_needed; // (no budget: all of it in memory, as before)
+  return (size_t)cap > already_allocated ? (size_t)cap - already_allocated : 0;
+}
+long jpeg_mem_init(j_common_ptr cinfo) { (void)cinfo; return 0; }
+void jpeg_mem_term(j_common_ptr cinfo) { (void)cinfo; }
+
+#define CS_PAGE 8192 // (bytes of coefficients a compressed page holds)
+typedef struct { long npages; uint8_t **pg; uint16_t *len; uint8_t tmp[CS_PAGE], out[CS_PAGE + 8]; size_t held; } Cstore;
+static size_t cs_peak; // (the most the compressed pages took: for the log)
+// a page of int16s as runs: [zeros][count][that many values], or raw when that's no smaller
+static size_t cs_pack(const uint8_t *in, uint8_t *out) {
+  const int16_t *v = (const int16_t *)in;
+  const int nv = CS_PAGE / 2;
+  size_t o = 0;
+  for (int i = 0; i < nv;) {
+    int z = 0, l = 0;
+    while (i + z < nv && !v[i + z]) z++;
+    while (i + z + l < nv && v[i + z + l]) l++;
+    if (o + 4 + l * 2 >= CS_PAGE) return CS_PAGE; // (raw is smaller)
+    uint16_t hz = (uint16_t)z, hl = (uint16_t)l;
+    memcpy(out + o, &hz, 2); memcpy(out + o + 2, &hl, 2);
+    memcpy(out + o + 4, v + i + z, (size_t)l * 2);
+    o += 4 + (size_t)l * 2;
+    i += z + l;
+  }
+  return o;
+}
+static void cs_unpack(const uint8_t *in, size_t n, uint8_t *out) {
+  if (n == CS_PAGE) { memcpy(out, in, CS_PAGE); return; }
+  memset(out, 0, CS_PAGE);
+  size_t o = 0, i = 0;
+  while (i + 4 <= n) {
+    uint16_t z, l;
+    memcpy(&z, in + i, 2); memcpy(&l, in + i + 2, 2);
+    o += (size_t)z * 2;
+    if (o + (size_t)l * 2 > CS_PAGE) break;
+    memcpy(out + o, in + i + 4, (size_t)l * 2);
+    o += (size_t)l * 2;
+    i += 4 + (size_t)l * 2;
+  }
+}
+static void cs_fail(j_common_ptr cinfo) { cinfo->err->msg_code = JERR_OUT_OF_MEMORY; cinfo->err->msg_parm.i[0] = 99; cinfo->err->error_exit(cinfo); }
+static void cs_read(j_common_ptr cinfo, struct backing_store_struct *info, void *buf, long off, long count) {
+  (void)cinfo;
+  Cstore *c = info->store;
+  uint8_t *b = buf;
+  while (count > 0) {
+    long p = off / CS_PAGE, at = off % CS_PAGE, take = CS_PAGE - at < count ? CS_PAGE - at : count;
+    if (p < c->npages && c->pg[p]) {
+      if (at == 0 && take == CS_PAGE) cs_unpack(c->pg[p], c->len[p], b);
+      else { cs_unpack(c->pg[p], c->len[p], c->tmp); memcpy(b, c->tmp + at, (size_t)take); }
+    } else memset(b, 0, (size_t)take);
+    b += take; off += take; count -= take;
+  }
+}
+static void cs_write(j_common_ptr cinfo, struct backing_store_struct *info, void *buf, long off, long count) {
+  Cstore *c = info->store;
+  const uint8_t *b = buf;
+  while (count > 0) {
+    long p = off / CS_PAGE, at = off % CS_PAGE, take = CS_PAGE - at < count ? CS_PAGE - at : count;
+    if (p >= c->npages) cs_fail(cinfo);
+    const uint8_t *src = b;
+    if (at || take < CS_PAGE) { // (part of a page: the rest of it as it was)
+      if (c->pg[p]) cs_unpack(c->pg[p], c->len[p], c->tmp); else memset(c->tmp, 0, CS_PAGE);
+      memcpy(c->tmp + at, b, (size_t)take);
+      src = c->tmp;
+    }
+    size_t n = cs_pack(src, c->out);
+    const uint8_t *keep = n == CS_PAGE ? src : c->out;
+    if (!c->pg[p] || c->len[p] != n) {
+      uint8_t *np = realloc(c->pg[p], n ? n : 1);
+      if (!np) cs_fail(cinfo);
+      c->held += n - (c->pg[p] ? c->len[p] : 0);
+      c->pg[p] = np;
+    }
+    memcpy(c->pg[p], keep, n);
+    c->len[p] = (uint16_t)n;
+    if (c->held > cs_peak) cs_peak = c->held;
+    b += take; off += take; count -= take;
+  }
+}
+static void cs_close(j_common_ptr cinfo, struct backing_store_struct *info) {
+  (void)cinfo;
+  Cstore *c = info->store;
+  if (!c) return;
+  for (long k = 0; k < c->npages; k++) free(c->pg[k]);
+  free(c->pg); free(c->len); free(c);
+  info->store = NULL;
+}
+void jpeg_open_backing_store(j_common_ptr cinfo, struct backing_store_struct *info, long total_bytes_needed) {
+  Cstore *c = calloc(1, sizeof *c);
+  if (!c) cs_fail(cinfo);
+  c->npages = (total_bytes_needed + CS_PAGE - 1) / CS_PAGE;
+  c->pg = calloc((size_t)c->npages, sizeof *c->pg);
+  c->len = calloc((size_t)c->npages, sizeof *c->len);
+  if (!c->pg || !c->len) { free(c->pg); free(c->len); free(c); cs_fail(cinfo); }
+  info->store = c;
+  info->read_backing_store = cs_read;
+  info->write_backing_store = cs_write;
+  info->close_backing_store = cs_close;
+}
+// (a progressive JPEG's budget: its window of rows in memory, the rest compressed)
+#define JPEG_PROG_BUDGET (1l << 20)
+size_t lv_jpeg_store_peak(void) { size_t p = cs_peak; cs_peak = 0; return p; }
+
 // ----- a band of rows: a slice of a webtoon's strip (700 x 22000 and more), never decoded whole -----
 static int band_shrink(uint8_t *buf, int dw, int dh, int ow, int oh, LvPixels *out) {
   if (dw != ow || dh != oh) {
@@ -195,6 +320,7 @@ static int jpeg_rows(const uint8_t *d, size_t n, int y0, int y1, int max_w, int 
   jpeg_create_decompress(&c);
   jpeg_mem_src(&c, (unsigned char *)d, (unsigned long)n);
   jpeg_read_header(&c, TRUE);
+  if (c.progressive_mode) c.mem->max_memory_to_use = JPEG_PROG_BUDGET;
   int w = (int)c.image_width, h = (int)c.image_height;
   if (y1 > h) y1 = h;
   if (y0 < 0) y0 = 0;
@@ -289,42 +415,75 @@ int lv_decode_rows(const uint8_t *d, size_t n, int y0, int y1, int max_w, int ma
   return -1;
 }
 
+// (PNG: one pass, a row at a time, a band handed on as it fills)
+static int png_bands(const uint8_t *d, size_t n, int w, int h, int band_h, int max_w, int (*cb)(void *, int, LvPixels *), void *ctx) {
+  png_structp p = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+  if (!p) return -1;
+  png_infop info = png_create_info_struct(p);
+  uint8_t *volatile buf = NULL;
+  volatile int done = 0;
+  struct pngsrc src = {d, n, 0};
+  if (!info || setjmp(png_jmpbuf(p))) { png_destroy_read_struct(&p, info ? &info : NULL, NULL); free(buf); return done ? done : -1; }
+  png_set_read_fn(p, &src, png_from_mem);
+  png_read_info(p, info);
+  if (png_get_interlace_type(p, info) != PNG_INTERLACE_NONE) png_error(p, "interlaced");
+  png_set_expand(p); png_set_strip_16(p); png_set_gray_to_rgb(p); png_set_filler(p, 0xFF, PNG_FILLER_AFTER);
+  png_read_update_info(p, info);
+  for (int k = 0; k * band_h < h; k++) {
+    int y0 = k * band_h, dh = y0 + band_h > h ? h - y0 : band_h;
+    if (!(buf = malloc((size_t)w * dh * 4))) png_error(p, "memory");
+    for (int y = 0; y < dh; y++) png_read_row(p, buf + (size_t)y * w * 4, NULL);
+    int ow, oh;
+    fit(w, dh, max_w, 1 << 20, &ow, &oh);
+    LvPixels px;
+    uint8_t *b = buf;
+    buf = NULL;
+    if (band_shrink(b, w, dh, ow, oh, &px) != 0) break;
+    done = k + 1;
+    if (cb(ctx, k, &px)) break;
+  }
+  png_destroy_read_struct(&p, &info, NULL);
+  return done ? done : -1;
+}
 // A tall picture cut into bands of band_h of its rows, top to bottom, each fitted to max_w and given
-// to cb (which owns its pixels; non-zero stops). A JPEG is read once, a row at a time: a progressive
-// one has to be (libjpeg keeps the whole strip's coefficients for it), and it's quickest anyway.
-// Returns how many bands, or -1.
+// to cb (which owns its pixels; non-zero stops). Never the whole strip in memory: a JPEG is read
+// once, a row at a time (a progressive one's coefficients mostly compressed, above), a PNG too, a
+// WebP a few bands per pass. Returns how many bands, or -1.
 int lv_decode_bands(const uint8_t *d, size_t n, int band_h, int max_w, int (*cb)(void *ctx, int k, LvPixels *px), void *ctx) {
   if (band_h < 16) return -1;
   int w = 0, h = 0;
   if (!lv_image_size(d, n, &w, &h) || w < 1 || h < 1) return -1;
   int nb = (h + band_h - 1) / band_h;
   if (n >= 12 && !memcmp(d, "RIFF", 4) && !memcmp(d + 8, "WEBP", 4)) {
-    // (WebP: decoded once, whole (it can't be more than 16383 rows), then cut: a crop is decoded from
-    //  the top each time)
-    LvPixels all;
-    if (webp(d, n, max_w, 1 << 20, &all) != 0) return -1;
-    int bh = (int)((long long)band_h * all.h / h), done = 0;
-    if (bh < 1) bh = 1;
-    for (int k = 0; k * bh < all.h; k++) {
-      int dh = (k + 1) * bh > all.h ? all.h - k * bh : bh;
-      LvPixels px = {malloc((size_t)all.w * dh * 4), all.w, dh};
-      if (!px.rgba) break;
-      memcpy(px.rgba, all.rgba + (size_t)k * bh * all.w * 4, (size_t)all.w * dh * 4);
-      done = k + 1;
-      if (cb(ctx, k, &px)) break;
+    // (WebP: a few bands at a time, cropped by the decoder, at most BAND_BUDGET of pixels each pass:
+    //  each pass decodes from the top again (that's how VP8 works) but never holds the whole strip)
+    const size_t BAND_BUDGET = 6u << 20;
+    int ow, oh;
+    fit(w, band_h, max_w, 1 << 20, &ow, &oh);
+    int per = (int)(BAND_BUDGET / ((size_t)ow * oh * 4));
+    if (per < 1) per = 1;
+    int done = 0;
+    for (int k = 0; k < nb; k += per) {
+      int y0 = k * band_h, y1 = (k + per) * band_h > h ? h : (k + per) * band_h;
+      LvPixels chunk;
+      if (webp_rows(d, n, y0, y1, max_w, 1 << 20, &chunk) != 0) return done ? done : -1;
+      // (cut at the bands' own rows, scaled as the chunk was)
+      for (int b = k; b < k + per && b < nb; b++) {
+        int r0 = (int)((long long)(b * band_h - y0) * chunk.h / (y1 - y0));
+        int r1 = (int)((long long)((b + 1) * band_h > h ? h - y0 : (b + 1) * band_h - y0) * chunk.h / (y1 - y0));
+        if (r1 <= r0) continue;
+        LvPixels px = {malloc((size_t)chunk.w * (r1 - r0) * 4), chunk.w, r1 - r0};
+        if (!px.rgba) { free(chunk.rgba); return done ? done : -1; }
+        memcpy(px.rgba, chunk.rgba + (size_t)r0 * chunk.w * 4, (size_t)chunk.w * (r1 - r0) * 4);
+        done = b + 1;
+        if (cb(ctx, b, &px)) { free(chunk.rgba); return done; }
+      }
+      free(chunk.rgba);
     }
-    free(all.rgba);
     return done ? done : -1;
   }
-  if (!(n >= 3 && d[0] == 0xFF && d[1] == 0xD8)) {
-    // (PNG: each band on its own)
-    for (int k = 0; k < nb; k++) {
-      LvPixels px;
-      if (lv_decode_rows(d, n, k * band_h, (k + 1) * band_h, max_w, 1 << 20, &px) != 0) return -1;
-      if (cb(ctx, k, &px)) return k + 1;
-    }
-    return nb;
-  }
+  if (n >= 8 && !memcmp(d, "\x89PNG", 4)) return png_bands(d, n, w, h, band_h, max_w, cb, ctx);
+  if (!(n >= 3 && d[0] == 0xFF && d[1] == 0xD8)) return -1;
   struct jpeg_decompress_struct c;
   struct jerr e;
   uint8_t *volatile buf = NULL;
@@ -336,6 +495,7 @@ int lv_decode_bands(const uint8_t *d, size_t n, int band_h, int max_w, int (*cb)
   jpeg_create_decompress(&c);
   jpeg_mem_src(&c, (unsigned char *)d, (unsigned long)n);
   jpeg_read_header(&c, TRUE);
+  if (c.progressive_mode) c.mem->max_memory_to_use = JPEG_PROG_BUDGET;
   int den = 1;
   while (den < 8 && w / (den * 2) >= max_w) den *= 2;
   c.scale_num = 1; c.scale_denom = den;

@@ -144,7 +144,7 @@ static void *fav_main(void *arg) {
   LvHttp *h = lv_http_new();
   while (worker_run) {
     pthread_mutex_lock(&fvmx);
-    while (worker_run && !nfav_jobs) pthread_cond_wait(&fvcv, &fvmx);
+    while (worker_run && !nfav_jobs) wait_work(&fvcv, &fvmx, h);
     if (!worker_run) { pthread_mutex_unlock(&fvmx); break; }
     FavJob j = fav_jobs[--nfav_jobs];
     pthread_mutex_unlock(&fvmx);

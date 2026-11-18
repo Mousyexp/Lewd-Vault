@@ -144,8 +144,9 @@ static int mg_fetch_band(LvHttp *h, const char *url, int k, int rows, int total,
   if (mg_get(h, url, &raw, &rn, 24u << 20, err) != 200 || !lv_image_size(raw, rn, &iw, &ih) || iw < 1 || ih < 1) {
     free(raw); pthread_mutex_unlock(&strip_cut_mx); return 0;
   }
-  // (its pixels whole, at most, while it's cut: a progressive JPEG keeps all its coefficients)
-  if (!heap_room((size_t)iw * ih * 4 + (8u << 20))) {
+  // (cut a few bands at a time: never the whole strip's pixels; a progressive JPEG's coefficients
+  //  kept compressed, ~a quarter of a byte a pixel, image.c)
+  if (!heap_room((size_t)iw * ih / 2 + (12u << 20))) {
     free(raw); pthread_mutex_unlock(&strip_cut_mx); *err = "Not enough memory for this strip"; return 0;
   }
   // (the bands as the page measured them, in the file's own rows)
@@ -159,7 +160,7 @@ static int mg_fetch_band(LvHttp *h, const char *url, int k, int rows, int total,
   s.len = calloc(s.nb, sizeof *s.len);
   int got = s.jpg && s.len ? lv_decode_bands(raw, rn, br, W, strip_band, &s) : -1;
   free(raw);
-  LOG("strip %s: %dx%d, %d bands of %d rows -> %d\n", url, iw, ih, s.nb, br, got);
+  LOG("strip %s: %dx%d, %d bands of %d rows -> %d (coefficients held %u KB)\n", url, iw, ih, s.nb, br, got, (unsigned)(lv_jpeg_store_peak() >> 10));
   if (got <= 0) { strip_free(&s); pthread_mutex_unlock(&strip_cut_mx); *err = "This strip couldn't be read"; return 0; }
   pthread_mutex_lock(&strip_mx);
   strip_free(&strips[strip_next]);
@@ -214,7 +215,7 @@ static void *mg_main(void *arg) {
   LvHttp *h = lv_http_new();
   while (worker_run) {
     pthread_mutex_lock(&mgmx);
-    while (worker_run && !nmjobs) pthread_cond_wait(&mgcv, &mgmx);
+    while (worker_run && !nmjobs) wait_work(&mgcv, &mgmx, h);
     if (!worker_run) { pthread_mutex_unlock(&mgmx); break; }
     // newest first (the reader's page before the covers asked for earlier)
     MJob j = mjobs[--nmjobs];

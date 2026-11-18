@@ -199,7 +199,7 @@ static void *vb_main(void *arg) {
         if (vrows[r].state == 0) { job = r; vrows[r].state = 1; break; }
       }
       if (job >= 0) break;
-      pthread_cond_wait(&vbcv, &vbmx);
+      wait_work(&vbcv, &vbmx, h);
     }
     // the post's address, copied while held
     char url[1024] = "";

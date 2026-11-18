@@ -11,6 +11,10 @@ int lv_net_online(void); // 1 when connected (Wi-Fi)
 typedef struct LvHttp LvHttp;
 LvHttp *lv_http_new(void);
 void lv_http_free(LvHttp *h);
+// Its connection let go (a worker with nothing to do for a while: a socket, its TLS state and its
+// buffers back to the Vita's small network pool); the next request opens one again.
+void lv_http_drop(LvHttp *h);
+int lv_http_has_conn(const LvHttp *h);
 // GET into memory (malloc'd, NUL-terminated). Returns the HTTP status (200...), or -1 when nothing
 // came back; *err gets a short reason. Stops at max bytes, or when *cancel turns non-zero;
 // *progress (0..1) follows the download when the size is known.

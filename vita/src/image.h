@@ -25,3 +25,5 @@ int lv_decode_rows(const uint8_t *data, size_t n, int y0, int y1, int max_w, int
 // A tall picture cut into bands of band_h of its own rows, top to bottom, each fitted to max_w and
 // handed to cb (it owns px->rgba; returning non-zero stops). Returns how many bands, or -1.
 int lv_decode_bands(const uint8_t *data, size_t n, int band_h, int max_w, int (*cb)(void *ctx, int k, LvPixels *px), void *ctx);
+// The most a progressive JPEG's compressed coefficients took since the last ask (and reset).
+size_t lv_jpeg_store_peak(void);

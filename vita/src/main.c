@@ -99,11 +99,25 @@ static int mem_free(int *user, int *cdram) {
   *user = i.size_user; *cdram = i.size_cdram;
   return 0;
 }
+// (main memory comes in 4 KiB pages; a texture this small goes there, not into a 256 KiB granule)
+#define SMALL_TEX (128u << 10)
+static vita2d_texture *in_main_memory(vita2d_texture *(*make)(unsigned, unsigned, const char *), unsigned w, unsigned h, const char *path) {
+  SceKernelMemBlockType was = vita2d_texture_get_alloc_memblock_type();
+  vita2d_texture_set_alloc_memblock_type(SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE);
+  vita2d_texture *t = make(w, h, path);
+  vita2d_texture_set_alloc_memblock_type(was);
+  return t;
+}
+static vita2d_texture *make_empty(unsigned w, unsigned h, const char *path) { (void)path; return vita2d_create_empty_texture(w, h); }
+static vita2d_texture *make_png(unsigned w, unsigned h, const char *path) { (void)w; (void)h; return vita2d_load_PNG_file(path); }
+// An icon's PNG (a few KB of pixels): in main memory, not a 256 KiB granule of video memory each
+static vita2d_texture *load_png_small(const char *path) { return in_main_memory(make_png, 0, 0, path); }
 vita2d_texture *tex_new(unsigned w, unsigned h) {
   // (video memory comes in 256 KiB granules: a small texture still takes a whole one)
   long need = ((long)((w + 7) & ~7u) * h * 4 + 4096 + 0x3FFFF) & ~0x3FFFFL;
   int user = 0, cdram = 0, known = mem_free(&user, &cdram) == 0;
   vita2d_texture *t = NULL;
+  if ((size_t)((w + 7) & ~7u) * h * 4 <= SMALL_TEX && (!known || user > (int)RESERVE_USER + (1 << 20)) && (t = in_main_memory(make_empty, w, h, NULL))) return t;
   if (!known || cdram - need >= (long)RESERVE_CDRAM) t = vita2d_create_empty_texture(w, h);
   if (t) return t;
   if (known && user - need < (long)RESERVE_USER) { LOG("tex_new %ux%u: no room (user %d, cdram %d)\n", w, h, user, cdram); return NULL; }
@@ -114,6 +128,18 @@ vita2d_texture *tex_new(unsigned w, unsigned h) {
   return t;
 }
 // The C heap the same way: room for `need` more bytes and still under 95% of it.
+// A worker's wait for work (its mutex held, as pthread_cond_wait). With a connection open and nothing
+// to do for 20 s, the connection is closed: a part of the app left behind keeps no sockets.
+static void wait_work(pthread_cond_t *cv, pthread_mutex_t *mx, LvHttp *h) {
+  if (!lv_http_has_conn(h)) { pthread_cond_wait(cv, mx); return; }
+  struct timespec until;
+  clock_gettime(CLOCK_REALTIME, &until);
+  until.tv_sec += 20;
+  if (pthread_cond_timedwait(cv, mx, &until) == 0) return;
+  pthread_mutex_unlock(mx); // (closing may say goodbye to the server: not with the lock held)
+  lv_http_drop(h);
+  pthread_mutex_lock(mx);
+}
 static int heap_room(size_t need) {
   struct mallinfo mi = mallinfo();
   size_t heap = (size_t)_newlib_heap_size_user, used = (size_t)mi.uordblks;
@@ -269,7 +295,7 @@ static void text_center(int cx, int y, unsigned col, int size, const char *s) { 
 static vita2d_texture *disc;
 #define DISC 64
 static void make_disc(void) {
-  disc = vita2d_create_empty_texture(DISC, DISC);
+  disc = tex_new(DISC, DISC);
   if (!disc) return;
   uint8_t *d = vita2d_texture_get_datap(disc);
   unsigned stride = vita2d_texture_get_stride(disc);
@@ -310,7 +336,7 @@ static unsigned frame_no;
 static vita2d_texture *ring_tex;
 static void make_ring(void) {
   const int S = 64, R = 16, T = 3;
-  ring_tex = vita2d_create_empty_texture(S, S);
+  ring_tex = tex_new(S, S);
   if (!ring_tex) return;
   uint8_t *d = vita2d_texture_get_datap(ring_tex);
   unsigned stride = vita2d_texture_get_stride(ring_tex);
@@ -1633,7 +1659,7 @@ static vita2d_texture *ui_icon(const char *name) {
     ui_icons[k].tried = 1;
     char p[96];
     snprintf(p, sizeof p, "app0:ui/%s.png", name);
-    ui_icons[k].t = vita2d_load_PNG_file(p);
+    ui_icons[k].t = load_png_small(p);
   }
   return ui_icons[k].t;
 }
@@ -1781,7 +1807,7 @@ static vita2d_texture *ramps[4];
 static void ramps_init(void) {
   for (int k = 0; k < 4; k++) {
     int across = k >= 2;
-    ramps[k] = vita2d_create_empty_texture(across ? 256 : 1, across ? 1 : 256);
+    ramps[k] = tex_new(across ? 256 : 1, across ? 1 : 256);
     if (!ramps[k]) continue;
     uint32_t *d = vita2d_texture_get_datap(ramps[k]);
     unsigned stride = vita2d_texture_get_stride(ramps[k]) / 4;
@@ -3166,7 +3192,7 @@ static int wheel_open;
 static vita2d_texture *wheel_tex;
 static void draw_wheel(void) {
   const int D = 220;
-  if (!wheel_tex && (wheel_tex = vita2d_create_empty_texture(D, D))) {
+  if (!wheel_tex && (wheel_tex = tex_new(D, D))) {
     uint32_t *px = vita2d_texture_get_datap(wheel_tex);
     unsigned st = vita2d_texture_get_stride(wheel_tex) / 4;
     for (int y = 0; y < D; y++)
@@ -3633,6 +3659,140 @@ static void library_grew(int before) {
 #include "manga_ui.c"
 #include "favs.c"
 
+// ---------- each part of the app gives its memory back once it's been left ----------
+// The parts each hold textures while they're used (the Browser's previews, 16 MB of atlases; the
+// video browser's cards; the comics' covers and pages; Favourites' covers; the full views' screen
+// buffers; Settings' colour wheel). Moving within a part keeps them; a part not seen for a minute,
+// or sooner when memory runs short, lets them go (its lists stay: what's on screen is asked for
+// again when it's back). So the parts don't add up: each is about what's on screen now.
+enum { A_NONE, A_LIB, A_VIEWER, A_WEB, A_WEBVIEW, A_VIDEOS, A_COMICS, A_FAVS, A_SETTINGS, A_N };
+static const char *const A_NAME[A_N] = {"", "library", "viewer", "browser", "full view", "videos", "comics", "favourites", "settings"};
+static int area_of(int s) {
+  switch (s) {
+    case S_LIBRARY: case S_SHOW: case S_STATS: case S_CLEAN: case S_HEALTH: return A_LIB;
+    case S_VIEWER: return A_VIEWER;
+    case S_WEB: return A_WEB;
+    case S_WEBVIEW: return A_WEBVIEW;
+    case S_VIDEOS: return A_VIDEOS;
+    case S_MANGA: case S_BOOK: case S_READER: return A_COMICS;
+    case S_FAVS: return A_FAVS;
+    case S_SETTINGS: return A_SETTINGS;
+  }
+  return A_NONE;
+}
+static unsigned area_seen[A_N];
+static unsigned char area_held[A_N];
+static void scr_set_free(int set) {
+  for (int k = set * 3; k < set * 3 + 3; k++) if (scr_buf[k]) { free_later(scr_buf[k]); scr_buf[k] = NULL; }
+}
+static void area_release(int a) {
+  switch (a) {
+    case A_LIB: { // (only when memory is short: the Library's thumbnails, made again as it's scrolled)
+      pthread_mutex_lock(&mx);
+      for (int k = 0; k < SLOTS; k++) {
+        int i = slots[k].item;
+        if (i >= 0 && i < vault.n && tstate && tstate[i] == 2) { tstate[i] = 0; slot_of[i] = -1; }
+        slots[k].tex = NULL; slots[k].item = -1; slots[k].used = 0;
+      }
+      pthread_mutex_unlock(&mx);
+      for (int k = 0; k < SLOTS / CELLS_PER_ATLAS; k++) if (atlas[k]) { free_later(atlas[k]); atlas[k] = NULL; }
+      break;
+    }
+    case A_VIEWER: // (the Library's full view: the last picture, the one before it, a comic's pages, the screen buffers)
+      release_tex(big_tex); big_tex = NULL; big_item = -1; big_hi_item = -1;
+      release_tex(fade_tex); fade_tex = NULL;
+      lc_forget();
+      scr_set_free(0);
+      break;
+    case A_WEBVIEW: // (the Browser's full view: its picture went when it closed; the screen buffers)
+      if (!wv_tex) scr_set_free(1);
+      break;
+    case A_WEB: {
+      // (the previews' four atlases: who had a cell is forgotten, so what's on screen is asked again)
+      pthread_mutex_lock(&wmx);
+      for (int k = 0; k < WSLOTS; k++) {
+        int p = wslots[k].post;
+        if (p >= 0 && p < nposts && wstate && wstate[p] == 2) { wstate[p] = 0; wslot_of[p] = -1; }
+      }
+      web_clear_textures();
+      pthread_mutex_unlock(&wmx);
+      for (int k = SLOTS / CELLS_PER_ATLAS; k < ATLASES; k++) if (atlas[k]) { free_later(atlas[k]); atlas[k] = NULL; }
+      break;
+    }
+    case A_VIDEOS:
+      pthread_mutex_lock(&vbmx);
+      for (int r = 0; r < VB_ROWS; r++)
+        for (int k = 0; k < VB_PER; k++) {
+          if (vrows[r].tex[k]) { release_tex(vrows[r].tex[k]); vrows[r].tex[k] = NULL; }
+          if (vrows[r].ts[k] == 2) vrows[r].ts[k] = 0;
+        }
+      pthread_mutex_unlock(&vbmx);
+      if (vb_hero) { release_tex(vb_hero); vb_hero = NULL; vb_hero_state = 0; }
+      break;
+    case A_COMICS:
+      for (int k = 0; k < MG_TEX; k++) {
+        if (!mg.tex[k]) continue;
+        int b = mg.tex_book[k];
+        if (mg.cstate && b >= 0 && b < mg.nbooks && mg.cstate[b] == 2) mg.cstate[b] = 0;
+        release_tex(mg.tex[k]); mg.tex[k] = NULL; mg.tex_book[k] = -1;
+      }
+      for (int k = 0; k < 3; k++) { release_tex(mg.ptex[k]); mg.ptex[k] = NULL; mg.ptex_page[k] = -1; }
+      pthread_mutex_lock(&strip_cut_mx); // (the strips' bands: a few MB of the heap)
+      pthread_mutex_lock(&strip_mx);
+      for (int k = 0; k < 2; k++) strip_free(&strips[k]);
+      pthread_mutex_unlock(&strip_mx);
+      pthread_mutex_unlock(&strip_cut_mx);
+      break;
+    case A_FAVS: fav_drop_textures(); break;
+    case A_SETTINGS: if (wheel_tex) { free_later(wheel_tex); wheel_tex = NULL; } break;
+  }
+}
+static void janitor(void) {
+  int a = area_of(screen);
+  area_seen[a] = frame_no; area_held[a] = 1;
+  // (the full view belongs with what it was opened from: the Browser, or the video browser)
+  if (a == A_WEBVIEW) { int b = wv_back == S_VIDEOS ? A_VIDEOS : A_WEB; area_seen[b] = frame_no; }
+  if (a == A_VIEWER || a == A_SETTINGS) area_seen[A_LIB] = frame_no;
+  if (frame_no % 30) return; // (twice a second is plenty)
+  drive_reap();
+  int fu = 0, fc = 0;
+  int low = (mem_free(&fu, &fc) == 0 && (fu < (int)RESERVE_USER + (24 << 20) || fc < (int)RESERVE_CDRAM + (24 << 20))) || !heap_room(16u << 20);
+  for (int k = A_LIB; k < A_N; k++) {
+    if (k == a || !area_held[k]) continue;
+    if (k == A_LIB && (!low || a == A_VIEWER || a == A_SETTINGS)) continue; // (the home screen's: only when memory is short)
+    unsigned idle = frame_no - area_seen[k];
+    // Settings' wheel and the full views' buffers are quick to make again: let go as soon as they're left
+    int quick = k == A_SETTINGS || k == A_VIEWER || k == A_WEBVIEW;
+    if ((quick && idle > 30) || idle > 60 * 60 || (low && idle > 30)) {
+      area_release(k);
+      area_held[k] = 0;
+      LOG("released %s (%s, idle %us)\n", A_NAME[k], low ? "memory short" : "left", idle / 60);
+    }
+  }
+}
+#ifdef LV_DEBUG
+// (debug builds, at each change of screen: what each part still holds, to find what a screen leaves behind)
+static const char *res_extra(void) {
+  static char out[256];
+  int at = 0, sb = 0, ui = 0, st = 0, mt = 0, vt = 0, ft = 0;
+  for (int k = 0; k < ATLASES; k++) at += atlas[k] != NULL;
+  for (int k = 0; k < 6; k++) sb += scr_buf[k] != NULL;
+  for (int k = 0; k < UI_ICONS; k++) ui += ui_icons[k].t != NULL;
+  for (int k = 0; k < 96; k++) st += site_tex[k] != NULL;
+  for (int k = 0; k < MG_TEX; k++) mt += mg.tex[k] != NULL;
+  for (int k = 0; k < 3; k++) mt += mg.ptex[k] != NULL;
+  for (int r = 0; r < VB_ROWS; r++) for (int k = 0; k < VB_PER; k++) vt += vrows[r].tex[k] != NULL;
+  for (int k = 0; k < FAV_MAX; k++) ft += fav_tex[k] != NULL;
+  snprintf(out, sizeof out, "atlas=%d scrbuf=%d big=%d fade=%d wv=%d icons=%d sites=%d manga=%d vb=%d+%d favs=%d wheel=%d posts=%d books=%d",
+           at, sb, big_tex != NULL, fade_tex != NULL, wv_tex != NULL, ui, st, mt, vt, vb_hero != NULL, ft, wheel_tex != NULL, nposts, mg.nbooks);
+  return out;
+}
+#endif
+
+#ifdef LV_DEBUG
+static const char *res_extra(void);
+#endif
+static void janitor(void);
 int main(void) {
   sceIoMkdir("ux0:data", 0777);
   sceIoMkdir(DATA, 0777);
@@ -3841,6 +4001,7 @@ int main(void) {
       }
       last_screen = screen;
     }
+    janitor(); // (the parts not on screen give their memory back)
     // three fingers tapped together: the calculator, from anywhere, at once
     if (in.panic && screen != S_CALC && screen != S_UNLOCKING && screen != S_PICK) {
       if (vid) lv_video_pause(vid, 1);
@@ -3926,6 +4087,15 @@ int main(void) {
           struct mallinfo mi = mallinfo(); // (the heap: in use now, and the most it has grown to)
           LOG("perf screen=%u frames=%u avg=%.2fms worst=%.2fms over16ms=%u heap=%.1fMB arena=%.1fMB pool_free_min=%uKB\n", last_screen, n, sum / 1000.0 / n, worst / 1000.0, slow,
               mi.uordblks / 1048576.0, mi.arena / 1048576.0, pool_min / 1024);
+        }
+        if ((unsigned)screen != last_screen) {
+          // (what's held as each screen is left: the heap, and main and video memory outside it, so a
+          //  screen's leftovers show as the next one starts)
+          struct mallinfo mi = mallinfo();
+          int fu = 0, fc = 0;
+          mem_free(&fu, &fc);
+          LOG("res %u->%u heap=%.1fMB user_free=%.1fMB cdram_free=%.1fMB %s\n", last_screen, (unsigned)screen, mi.uordblks / 1048576.0,
+              fu / 1048576.0, fc / 1048576.0, res_extra());
         }
         pool_min = 0xFFFFFFFFu;
         sum = worst = 0; n = slow = 0; last_screen = (unsigned)screen;

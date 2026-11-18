@@ -31,7 +31,7 @@ static void draw_qr(const char *text, int x, int y, int size) {
     if (qt) { free_later(qt); qt = NULL; }
     if (ok) {
       int n = qrcodegen_getSize(qr);
-      qt = vita2d_create_empty_texture(n, n);
+      qt = tex_new(n, n);
       if (qt) {
         uint32_t *px = vita2d_texture_get_datap(qt);
         unsigned st = vita2d_texture_get_stride(qt) / 4;

@@ -273,7 +273,7 @@ static void *list_main(void *arg) {
   LvHttp *h = lv_http_new();
   while (worker_run) {
     pthread_mutex_lock(&wmx);
-    while (worker_run && !list_want) pthread_cond_wait(&wcv, &wmx);
+    while (worker_run && !list_want) wait_work(&wcv, &wmx, h);
     int page = list_want, gen = wgen, ratings = job_q.ratings;
     list_want = 0;
     // (the site copied while held: the list of sites can change on the drawing thread)
@@ -346,7 +346,7 @@ static void *preview_main(void *arg) {
   while (worker_run) {
     pthread_mutex_lock(&wmx);
     // (asleep with nothing wanted, or while 20 finished ones wait to be taken: woken when they are)
-    while (worker_run && (nwwant == 0 || nwdone >= 20)) pthread_cond_wait(&wcv, &wmx);
+    while (worker_run && (nwwant == 0 || nwdone >= 20)) wait_work(&wcv, &wmx, h);
     if (!worker_run) { pthread_mutex_unlock(&wmx); break; }
     int p = wwant[0], gen = wgen;
     memmove(wwant, wwant + 1, --nwwant * sizeof *wwant);
@@ -496,7 +496,7 @@ static void *sample_main(void *arg) {
   LvHttp *h = lv_http_new();
   while (worker_run) {
     pthread_mutex_lock(&wmx);
-    while (worker_run && big_job.post < 0) pthread_cond_wait(&wcv, &wmx);
+    while (worker_run && big_job.post < 0) wait_work(&wcv, &wmx, h);
     if (!worker_run) { pthread_mutex_unlock(&wmx); break; }
     int p = big_job.post, gen = big_job.gen, save = big_job.save, vgen_asked = big_job.vgen, full = big_job.full, hires = big_job.hires;
     big_job.hires = 0;
@@ -1329,7 +1329,7 @@ static vita2d_texture *site_icon_named(int slot, const char *name) {
     site_tex_tried[slot] = 1;
     char p[96];
     snprintf(p, sizeof p, "app0:sites/%s.png", name);
-    site_tex[slot] = vita2d_load_PNG_file(p);
+    site_tex[slot] = load_png_small(p); // (main memory: 50 KB, not a 256 KiB granule each)
   }
   return site_tex[slot];
 }

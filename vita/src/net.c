@@ -96,7 +96,7 @@ int lv_net_online(void) {
   return last;
 }
 
-struct LvHttp { CURL *c; int gen; };
+struct LvHttp { CURL *c; int gen, open; }; // (open: a request made since the connection was last let go)
 static volatile int net_gen;
 void lv_net_reset(void) { net_gen++; }
 static volatile int no_compress;
@@ -108,6 +108,13 @@ LvHttp *lv_http_new(void) {
   h->gen = net_gen;
   if (!h->c) { free(h); return NULL; }
   return h;
+}
+int lv_http_has_conn(const LvHttp *h) { return h && h->open; }
+void lv_http_drop(LvHttp *h) {
+  if (!h || !h->open) return;
+  curl_easy_cleanup(h->c); // (its connection closed: the socket and its TLS state given back)
+  h->c = curl_easy_init();
+  h->open = 0;
 }
 void lv_http_free(LvHttp *h) {
   if (!h) return;
@@ -275,6 +282,8 @@ static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const
     h->gen = net_gen;
     if (!h->c) { snprintf(why, sizeof why, "No network"); return -1; }
   }
+  if (!h->c && !(h->c = curl_easy_init())) { snprintf(why, sizeof why, "No network"); return -1; }
+  h->open = 1;
   Sink *s = sp;
   CURL *c = h->c;
   s->curl = c;

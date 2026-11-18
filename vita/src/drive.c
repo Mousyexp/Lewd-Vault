@@ -384,14 +384,28 @@ static void *sign_in_main(void *arg) {
 }
 static pthread_t worker;
 static int worker_started;
+static volatile int worker_done;
+static void *(*job_fn)(void *);
+// (a job: its work, then its connection to Google let go: no socket kept open between syncs)
+static void *job_main(void *arg) {
+  void *r = job_fn(arg);
+  if (http) lv_http_drop(http);
+  worker_done = 1;
+  return r;
+}
 static int start_worker(void *(*fn)(void *), void *arg) {
   if (worker_started) { pthread_join(worker, NULL); worker_started = 0; }
   cancel = 0;
+  worker_done = 0;
+  job_fn = fn;
   pthread_attr_t at;
   pthread_attr_init(&at);
   pthread_attr_setstacksize(&at, 256 * 1024);
-  worker_started = pthread_create(&worker, &at, fn, arg) == 0;
+  worker_started = pthread_create(&worker, &at, job_main, arg) == 0;
   return worker_started ? 0 : -1;
+}
+void drive_reap(void) {
+  if (worker_started && worker_done) { pthread_join(worker, NULL); worker_started = 0; } // (its stack back)
 }
 void drive_sign_in(void) {
   if (drive.state == DRV_CODE || drive.state == DRV_SYNCING) return;

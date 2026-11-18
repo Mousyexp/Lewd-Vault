@@ -37,3 +37,5 @@ int drive_folder_exists(const char *folder);
 const char *drive_last_sync(void);
 // 1 when the vault at root has been synced with Drive from this Vita.
 int drive_has_manifest(const char *root);
+// A finished job's thread joined (its stack given back); called now and then from the main loop.
+void drive_reap(void);
