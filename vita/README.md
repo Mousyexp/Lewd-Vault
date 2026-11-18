@@ -105,6 +105,14 @@ slide, fade, zoom or none; **Direction** left to right, or right to left for man
 turn pages, anywhere turns to the next, or taps only show the controls; **Double tap** zoom or nothing;
 **Rear touchpad** a swipe turns pages, or nothing. In the Comics tab, □ saves the chapter.
 
+**Viewing pictures and videos** (`src/viewopt.c`): how the full views (the Library's and the Browser's)
+show what's open, set apart for pictures and for videos. **Size**: fit to the screen, fill it (cropped),
+its original size (each of its pixels a screen pixel; the sharper copy is loaded), or fit the width;
+a video can also be stretched to fill. **Orientation**: landscape, or portrait with the Vita on its
+side (as the comic reader turns it; swipes and drags turn with it). A picture bigger than the screen
+is moved with a drag or the stick, and a swipe past its edge goes on to the next. They're in Settings
+(Playback) and in the full view: the size button at the top, or ↑ on a picture.
+
 The Filters and Order lists have an icon for each row.
 
 **Order** (△ or its button: a list): newest, oldest, most viewed, least viewed, recently viewed, most
@@ -407,6 +415,7 @@ times (`perf ...`) and any step over 4 ms (`pt ...`).
 | `src/privacy.c`, `src/clean.c` | The calculator disguise and touch lock; clean up and the health check |
 | `src/livearea.c` | The LiveArea's frames (which vault they open) and its numbers |
 | `src/vbrowse.c` | The video browser |
+| `src/viewopt.c` | Viewing: the full views' size (fit, fill, original, fit width, stretch) and orientation, and their panel |
 | `src/manga.c`, `src/manga_ui.c` | Comics: MangaDex, E-Hentai and the other sources (`LV_MSRC`), the covers, chapters and the reader, saving a chapter as a comic |
 | `src/discover.c`, `tests/discover/` | The source finder's readers of the booru lists, and saved copies of those lists |
 | `tools/make-ui-icons.mjs` | The tab bar's and buttons' icons (`ui/`) |

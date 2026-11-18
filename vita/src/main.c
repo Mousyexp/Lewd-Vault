@@ -471,6 +471,8 @@ static struct {
   // reading comics (reader.c): pages or a strip, landscape or portrait, the page turn, the direction,
   // what taps do, what a double tap does, the rear touchpad
   int cmode, corient, canim, cdir, ctap, cdbl, cback;
+  // the full views (viewopt.c): pictures' size and orientation, videos' size and orientation
+  int ifit, iorient, vfit, vorient;
 } cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
 static void cfg_load(void) {
   FILE *f = fopen(DATA "/config.txt", "r");
@@ -512,6 +514,7 @@ static void cfg_load(void) {
     else if (!strcmp(line, "acc_s")) cfg.acc_s = atoi(eq);
     else if (!strcmp(line, "acc_v")) cfg.acc_v = atoi(eq);
     else if (!strcmp(line, "onboarded")) cfg.onboarded = atoi(eq) != 0;
+    else if (!strcmp(line, "view")) sscanf(eq, "%d,%d,%d,%d", &cfg.ifit, &cfg.iorient, &cfg.vfit, &cfg.vorient);
     else if (!strcmp(line, "comic")) sscanf(eq, "%d,%d,%d,%d,%d,%d,%d", &cfg.cmode, &cfg.corient, &cfg.canim, &cfg.cdir, &cfg.ctap, &cfg.cdbl, &cfg.cback);
   }
   fclose(f);
@@ -527,6 +530,8 @@ static void cfg_load(void) {
   cfg.acc_h = ((cfg.acc_h % 360) + 360) % 360;
   { int *c[] = {&cfg.cmode, &cfg.corient, &cfg.canim, &cfg.cdir, &cfg.ctap, &cfg.cdbl, &cfg.cback}; static const int top[] = {1, 1, 3, 1, 2, 1, 1};
     for (int k = 0; k < 7; k++) if (*c[k] < 0 || *c[k] > top[k]) *c[k] = 0; }
+  { int *c[] = {&cfg.ifit, &cfg.iorient, &cfg.vfit, &cfg.vorient}; static const int top[] = {3, 1, 4, 1};
+    for (int k = 0; k < 4; k++) if (*c[k] < 0 || *c[k] > top[k]) *c[k] = 0; }
   if (cfg.acc_s < 0 || cfg.acc_s > 100) cfg.acc_s = 65;
   if (cfg.acc_v < 25 || cfg.acc_v > 100) cfg.acc_v = 100;
   if (cfg.bgstyle < 0 || cfg.bgstyle > 3) cfg.bgstyle = 0;
@@ -545,10 +550,10 @@ static void cfg_write(void) {
   cfg_dirty_at = 0;
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\nview=%d,%d,%d,%d\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
           cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v, cfg.onboarded,
-          cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback);
+          cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback, cfg.ifit, cfg.iorient, cfg.vfit, cfg.vorient);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -2668,7 +2673,9 @@ static void close_viewer(void) {
 static void fmt_time(uint64_t ms, char *o, size_t n) { int s = (int)(ms / 1000); snprintf(o, n, "%d:%02d", s / 60, s % 60); }
 
 static int tall_fit; static float tall_my;
+static int lv_por; static float lv_mx, lv_my, lv_mag = 1, lv_aw = W, lv_ah = H; // (how the full view shows this one: viewopt.c)
 #include "reader.c"
+#include "viewopt.c"
 static void draw_viewer(void) {
   if (nshown == 0) { screen = S_LIBRARY; return; }
   if (lib_reading_comic()) { draw_lib_comic(); return; } // (a comic's page: the comic reader)
@@ -2737,21 +2744,31 @@ static void draw_viewer(void) {
   }
   if (t && is_frame && (lv_video_width(vid) < 1 || lv_video_height(vid) < 1)) t = th_now, is_frame = 0; // (no size yet)
   if (t && (vita2d_texture_get_width(t) < 1 || vita2d_texture_get_height(t) < 1)) t = NULL;
+  // (how it's shown: Viewing's size and orientation, for a video or a picture)
+  int isv = is_video(it), por = view_portrait(isv);
+  lv_por = por; lv_mx = lv_my = 0; lv_mag = 1;
+  lv_aw = por ? avail_h : W; lv_ah = por ? W : avail_h;
   if (t) {
     float tw = is_frame ? lv_video_width(vid) : vita2d_texture_get_width(t);
     float th = is_frame ? lv_video_height(vid) : vita2d_texture_get_height(t);
-    // (a tall page: the screen's width, scrolled down; the thumbnail, cropped, stays whole meanwhile)
-    tall_fit = !is_frame && t != th_now && th > tw * 2.2f;
-    float s = (tall_fit ? W / tw : fminf(W / tw, avail_h / th)) * zoom * ms;
-    float dw = tw * s, dh = th * s;
-    // keep a zoomed picture's edges on screen
-    float mx = fmaxf(0, (dw - W) / 2), my = fmaxf(0, (dh - avail_h) / 2);
+    // (a tall page, fitted: the screen's width, scrolled down; the thumbnail, cropped, stays whole meanwhile)
+    tall_fit = !por && view_mode(isv) == VF_FIT && !is_frame && t != th_now && th > tw * 2.2f;
+    float sx, sy;
+    if (tall_fit) sx = sy = W / tw;
+    else lv_mag = view_fit(view_mode(isv), tw, th, is_frame ? tw : it->width, is_frame ? th : it->height, lv_aw, lv_ah, &sx, &sy);
+    sx *= zoom * ms; sy *= zoom * ms;
+    float s = sx;
+    float dw = tw * sx, dh = th * sy;
+    // keep a zoomed (or bigger than the screen) picture's edges on screen
+    float mx = fmaxf(0, (dw - lv_aw) / 2), my = fmaxf(0, (dh - lv_ah) / 2);
+    lv_mx = mx; lv_my = my;
     if (tall_fit && tall_top) { pan_y = my; tall_top = 0; }
     if (tall_fit) { pan_y += tall_v; tall_v *= 0.93f; if (fabsf(tall_v) < 0.3f) tall_v = 0; tall_my = my; }
     pan_x = fminf(mx, fmaxf(-mx, pan_x));
     pan_y = fminf(my, fmaxf(-my, pan_y));
     float x = (W - dw) / 2 + pan_x + swipe_x + mdx, y = (avail_h - dh) / 2 + pan_y + mdy;
-    if (vhero.drag > 0 || vhero.closing) {
+    if (por) view_draw(t, 1, tw, th, pan_x + swipe_x + mdx, pan_y + mdy, sx, sy, avail_h, RGBA(255, 255, 255, fade < 1 ? (int)(255 * fade) : 255));
+    else if (vhero.drag > 0 || vhero.closing) {
       // (swiped down: smaller, following the finger; let go, into its card)
       Rect card;
       int has = lib_card_target(vk, &card);
@@ -2760,8 +2777,8 @@ static void draw_viewer(void) {
       draw_in_rect(t, tw, th, hx, hy, hw, hh, e, RGBA(255, 255, 255, 255));
     } else {
       hero_place(&vhero, &x, &y, &dw, &dh, (Rect){0}, 0);
-      if (fade < 1) vita2d_draw_texture_tint_scale(t, x, y, s, s, RGBA(255, 255, 255, (int)(255 * fade)));
-      else vita2d_draw_texture_scale(t, x, y, s, s);
+      (void)s;
+      vita2d_draw_texture_tint_scale(t, x, y, sx, sy, RGBA(255, 255, 255, fade < 1 ? (int)(255 * fade) : 255));
     }
   } else {
     if (big_failed) text_center(W / 2, H / 2, DIM, 18, "This file can't be shown on the Vita");
@@ -2787,7 +2804,8 @@ static void draw_viewer(void) {
   if (vid && vid_clip && is_video(it)) text_center(W / 2, 30, with_alpha(TEXT, 200), 15, "Preview clip: the Vita can't play this video's own file");
 
   // (zoomed in past 1.25x: the picture again at up to 1920 px, once; back to the screen's size with the next)
-  if (zoom > 1.25f && big_item == shown[vk] && big_hi_item != shown[vk] && !vid) { big_hi = 1; big_hi_item = shown[vk]; ask_big(shown[vk]); big_hi = 0; }
+  if (zoom * lv_mag > 1.25f && big_item == shown[vk] && big_hi_item != shown[vk] && !vid) { big_hi = 1; big_hi_item = shown[vk]; ask_big(shown[vk]); big_hi = 0; }
+  if (vo_open) { draw_view_options(); return; } // (Viewing: its panel over the picture)
   // --- touch: swipe for the next one, pinch to zoom, drag when zoomed, tap for the controls ---
   if (in.touching && details_y < 0.5f) {
     if (in.tcount >= 2) {
@@ -2796,8 +2814,9 @@ static void draw_viewer(void) {
       else zoom = fminf(6, fmaxf(1, zoom0 * d / pinch_d0));
     } else {
       pinch_d0 = 0;
-      if (zoom > 1.01f) { pan_x += in.drag_dx; pan_y += in.drag_dy; }
+      if (zoom > 1.01f) { pan_x += view_dx(lv_por, in.drag_dx, in.drag_dy); pan_y += view_dy(lv_por, in.drag_dx, in.drag_dy); }
       else if (tall_fit && fabsf((float)(in.ty - in.down_y)) >= fabsf((float)(in.tx - in.down_x))) { pan_y += in.drag_dy; tall_v = 0; }
+      else if (!tall_fit && view_drag(lv_por, zoom, lv_mx, lv_my, &pan_x, &pan_y, &swipe_x)) {}
       else if (hero_drag(&vhero, !slideshow && !tall_fit && fabsf(swipe_x) < 4 && details_y < 0.05f)) {}
       else if (fabsf((float)(in.tx - in.down_x)) > fabsf((float)(in.ty - in.down_y))) swipe_x += in.drag_dx;
       else if (in.ty - in.down_y < -60) { details = 1; }
@@ -2819,12 +2838,13 @@ static void draw_viewer(void) {
     vflash(s);
   }
   else if (in.dbl && cfg.dbltap && details_y < 0.5f) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); heart_at = frame_no ? frame_no : 1; }
-  else if (in.dbl) { zoom = zoom > 1.5f ? 1 : 2.5f; pan_x = (W / 2.0f - in.tap_x) * (zoom - 1); pan_y = (H / 2.0f - in.tap_y) * (zoom - 1); }
+  else if (in.dbl) { zoom = zoom > 1.5f ? 1 : 2.5f; float ox, oy; view_tap_off(lv_por, lv_aw, lv_ah, &ox, &oy); pan_x = ox * (zoom - 1); pan_y = oy * (zoom - 1); }
   else if (in.tap && details_y < 0.5f) {
     int chrome_on = frame_no < chrome_until || (vid && !vid_clip && lv_video_paused(vid));
     if (vid && !vid_clip && chrome_on && vctl_tap(vid, in.tap_x, in.tap_y, &vseek)) chrome_until = frame_no + 180;
     else if (frame_no < chrome_until && in.tap_x < 70 && in.tap_y < 60) { close_viewer(); return; }
     else if (frame_no < chrome_until && in.tap_x > W - 70 && in.tap_y < 60) { details = 1; }
+    else if (frame_no < chrome_until && view_btn_hit(is_video(it), W - 140)) { view_options_open(is_video(it)); return; }
     else if (frame_no < chrome_until && in.tap_x > W - 140 && in.tap_x < W - 70 && in.tap_y < 60) { char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); }
     else if (frame_no < chrome_until && in.tap_y > H - 90 && !(vid && !vid_clip) && !slideshow && nshown > 1) {} // (the filmstrip's)
     else chrome_until = frame_no < chrome_until ? frame_no : frame_no + 240;
@@ -2870,8 +2890,10 @@ static void draw_viewer(void) {
     }
     // the left stick scrubs: further for a harder push
     if (fabsf(in.lx) > 0.4f && frame_no % 6 == 0) { lv_video_seek(vid, (int64_t)lv_video_pos(vid) + (int64_t)(in.lx * 4000)); chrome_until = frame_no + 120; }
-  } else if (zoom > 1.01f) {
-    pan_x -= in.lx * 12; pan_y -= in.ly * 12;
+  } else if (!vid && !details && !tall_fit && zoom < 1.01f && (in.pressed & SCE_CTRL_UP)) {
+    view_options_open(0); return; // (↑ on a picture: Viewing)
+  } else if (zoom > 1.01f || (!tall_fit && (lv_mx > 1 || lv_my > 1))) {
+    pan_x -= view_dx(lv_por, in.lx, in.ly) * 12; pan_y -= view_dy(lv_por, in.lx, in.ly) * 12;
   } else if (tall_fit && !details) {
     // a tall page: the stick scrolls, ↑↓ a screenful (↓ at its foot: the next page)
     pan_y -= in.ly * 16;
@@ -2929,6 +2951,7 @@ static void draw_viewer(void) {
     snprintf(pos, sizeof pos, "%d of %d", vk + 1, nshown);
     text_center(W / 2, 36, with_alpha(TEXT, a), 17, pos);
     // heart and details
+    view_btn_draw(is_video(it), a, W - 136);
     heart(W - 104, 30, 8, lv_likes_of(&vault, it) ? with_alpha(ACC, a) : with_alpha(TEXT, a / 2));
     circle(W - 38, 30, 13, with_alpha(TEXT, a));
     circle(W - 38, 30, 11, RGBA(0, 0, 0, a));
@@ -3218,13 +3241,16 @@ static void draw_settings(void) {
   if (cfg.theme > 0) vtheme[0] = (char)toupper((unsigned char)vtheme[0]);
   if (wheel_open) { draw_wheel(); return; }
   if (ro_open) { draw_reading_options(); return; } // (Reading comics: the reader's own panel)
+  if (vo_open) { draw_view_options(); return; } // (Viewing: the full views' own panel)
+  char vview[48];
+  snprintf(vview, sizeof vview, "%s · %s", VF_SHORT[cfg.ifit], VF_SHORT[cfg.vfit]);
   char v3[64];
   snprintf(v3, sizeof v3, "%d%%", cfg.volume);
   char v4[16];
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change"},
@@ -3247,11 +3273,12 @@ static void draw_settings(void) {
     {"Open another vault", "", "The vaults on the memory card"},
     {"Clear the thumbnail cache", "", "They're made again as you scroll"},
     {"Reading comics", cfg.cmode ? "Strip" : "Pages", "Pages or a strip, portrait, page turns, direction, taps, the rear touchpad"},
+    {"Viewing pictures and videos", vview, "Fit, fill, original size or fit width; landscape or portrait (in the full view: ↑ or the size button)"},
   };
   // In sections, each with a header: the rows in the order shown (set_sel stays a row's ST_ id)
   static const signed char ORDER[] = {
     -1, ST_THEME, ST_BGS, ST_SNDPACK, ST_SOUNDS, ST_GLOW, ST_DBL,
-    -2, ST_VOL,
+    -2, ST_VIEW, ST_VOL,
     -6, ST_COMICS,
     -3, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK,
     -4, ST_DRIVE, ST_WIFI, ST_CONV,
@@ -3370,6 +3397,7 @@ static void draw_settings(void) {
         }
         break;
       case ST_COMICS: if (cross || d) { sfx(SFX_OPEN); ro_open = 1; ro_sel = 0; } break;
+      case ST_VIEW: if (cross || d) { view_options_open(0); } break;
       case ST_CACHE:
         if (cross) {
           DIR *dd = opendir(cache_dir);
