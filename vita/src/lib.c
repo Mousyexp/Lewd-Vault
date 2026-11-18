@@ -299,8 +299,8 @@ static int draw_modes(int x, int y) {
   x += 4;
   for (int k = 0; k < 4; k++) {
     int on = k == cfg.lmode;
-    if (on) rrect(x, y + 4, ws[k], 32, 16, ACC);
-    unsigned col = on ? RGBA(20, 12, 16, 255) : DIM;
+    if (on) glass(x, y + 4, ws[k], 32, 0);
+    unsigned col = on ? TEXT : DIM;
     icon(LMODE_ICONS[k], x + 20, y + 20, col);
     text(x + 34, y + 26, col, 15, LMODES[k]);
     if (hit(x, y, ws[k], 40)) set_mode(k);

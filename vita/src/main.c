@@ -220,14 +220,19 @@ static int has_wide(const char *s) {
 // chips), and measuring walks the font's glyphs. A small table by the text and its size.
 #define TW_CACHE 512
 static struct { unsigned h; short size, w; char s[160]; } tw_cache[TW_CACHE]; // (hints are long: kept too)
+// Text size (Settings: 90% to 125%): every size the screens ask for, scaled here, where it's measured
+// and drawn
+static int text_pct = 100;
+#define TS(size) (((size) * text_pct + 50) / 100)
 static int text_w_raw(int size, const char *s) {
+  size = TS(size);
   if (pgf && has_wide(s)) return vita2d_pgf_text_width(pgf, size / 17.0f, s);
   return vita2d_font_text_width(font, size, s);
 }
 static int text_w(int size, const char *s) {
   size_t n = strlen(s);
   if (n >= 160) return text_w_raw(size, s);
-  unsigned h = 2166136261u ^ (unsigned)size;
+  unsigned h = 2166136261u ^ (unsigned)size ^ ((unsigned)text_pct << 20); // (another text size: measured anew)
   for (size_t k = 0; k < n; k++) h = (h ^ (unsigned char)s[k]) * 16777619u;
   int at = h & (TW_CACHE - 1);
   if (tw_cache[at].h == h && tw_cache[at].size == size && !strcmp(tw_cache[at].s, s)) return tw_cache[at].w;
@@ -250,6 +255,7 @@ static unsigned bad_draws;
   } while (0)
 static void text(int x, int y, unsigned col, int size, const char *s) {
   if (x < -4000 || x > 4000 || y < -4000 || y > 4000 || !s) return; // (off anywhere sensible: a bad number)
+  size = TS(size);
   if (pgf && has_wide(s)) vita2d_pgf_draw_text(pgf, x, y, col, size / 17.0f, s);
   else vita2d_font_draw_text(font, x, y, col, size, s);
 }
@@ -268,7 +274,7 @@ static void text_fit(int x, int y, unsigned col, int size, const char *s, int ma
   size_t n = strlen(s);
   // (where it's cut, remembered: the same line cut the same way every frame was measured anew)
   static struct { unsigned h; short size, maxw, cut; } fit_cache[64];
-  unsigned h = 2166136261u ^ (unsigned)size * 31u ^ (unsigned)max_w * 131u;
+  unsigned h = 2166136261u ^ (unsigned)size * 31u ^ (unsigned)max_w * 131u ^ ((unsigned)text_pct << 22);
   for (size_t k = 0; k < n; k++) h = (h ^ (unsigned char)s[k]) * 16777619u;
   int slot = h & 63;
   if (fit_cache[slot].h == h && fit_cache[slot].size == size && fit_cache[slot].maxw == max_w && (size_t)fit_cache[slot].cut <= n) {
@@ -569,6 +575,8 @@ static struct {
   int cmode, corient, canim, cdir, ctap, cdbl, cback;
   // the full views (viewopt.c): pictures' size and orientation, videos' size and orientation
   int ifit, iorient, vfit, vorient;
+  int tscale;  // text size, in percent: 90, 100, 112 or 125 (0: 100)
+  int accpic;  // the accent follows the picture shown
 } cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
 static void cfg_load(void) {
   FILE *f = fopen(DATA "/config.txt", "r");
@@ -610,6 +618,8 @@ static void cfg_load(void) {
     else if (!strcmp(line, "acc_s")) cfg.acc_s = atoi(eq);
     else if (!strcmp(line, "acc_v")) cfg.acc_v = atoi(eq);
     else if (!strcmp(line, "onboarded")) cfg.onboarded = atoi(eq) != 0;
+    else if (!strcmp(line, "tscale")) cfg.tscale = atoi(eq);
+    else if (!strcmp(line, "accpic")) cfg.accpic = atoi(eq) != 0;
     else if (!strcmp(line, "view")) sscanf(eq, "%d,%d,%d,%d", &cfg.ifit, &cfg.iorient, &cfg.vfit, &cfg.vorient);
     else if (!strcmp(line, "comic")) sscanf(eq, "%d,%d,%d,%d,%d,%d,%d", &cfg.cmode, &cfg.corient, &cfg.canim, &cfg.cdir, &cfg.ctap, &cfg.cdbl, &cfg.cback);
   }
@@ -629,6 +639,7 @@ static void cfg_load(void) {
   { int *c[] = {&cfg.ifit, &cfg.iorient, &cfg.vfit, &cfg.vorient}; static const int top[] = {3, 1, 4, 1};
     for (int k = 0; k < 4; k++) if (*c[k] < 0 || *c[k] > top[k]) *c[k] = 0; }
   if (cfg.acc_s < 0 || cfg.acc_s > 100) cfg.acc_s = 65;
+  if (cfg.tscale != 90 && cfg.tscale != 112 && cfg.tscale != 125) cfg.tscale = 100;
   if (cfg.acc_v < 25 || cfg.acc_v > 100) cfg.acc_v = 100;
   if (cfg.bgstyle < 0 || cfg.bgstyle > 3) cfg.bgstyle = 0;
   if (cfg.sndpack < 0 || cfg.sndpack > 3) cfg.sndpack = 0;
@@ -646,10 +657,10 @@ static void cfg_write(void) {
   cfg_dirty_at = 0;
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\nview=%d,%d,%d,%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\nview=%d,%d,%d,%d\ntscale=%d\naccpic=%d\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
           cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v, cfg.onboarded,
-          cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback, cfg.ifit, cfg.iorient, cfg.vfit, cfg.vorient);
+          cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback, cfg.ifit, cfg.iorient, cfg.vfit, cfg.vorient, cfg.tscale, cfg.accpic);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -1394,7 +1405,10 @@ static void find_vaults(void) {
   }
 }
 
-static void apply_theme(void) {
+static unsigned acc_theme; // (the theme's accent: where the picture's colour goes back to)
+static void apply_theme_base(void);
+static void apply_theme(void) { apply_theme_base(); acc_theme = ACC; }
+static void apply_theme_base(void) {
   int b = cfg.bgstyle >= 0 && cfg.bgstyle < 4 ? cfg.bgstyle : 0;
   BG = BGS[b].bg; SURF = BGS[b].surf; SURF2 = BGS[b].surf2; TEXT = BGS[b].text; DIM = BGS[b].dim; FAINT = BGS[b].faint;
   vita2d_set_clear_color(BG);
@@ -1771,16 +1785,22 @@ static unsigned mix_col(unsigned a, unsigned b, float t) { // (a to b; alpha fro
   int bl = (int)(((a >> 16) & 255) * (1 - t) + ((b >> 16) & 255) * t);
   return RGBA(r, g, bl, (a >> 24) & 255);
 }
-static void tab_bubble(float x, float y, float w, float h) {
-  float r = h / 2;
-  rrect_round(x - 3, y - 2, w + 6, h + 5, r + 3, with_alpha(ACC, 34));                    // (the glow)
-  rrect_round(x, y, w, h, r, with_alpha(mix_col(SURF2, TEXT, 0.55f), 255));               // (the rim)
-  rrect_round(x + 1.5f, y + 1.5f, w - 3, h - 3, r - 1.5f, mix_col(with_alpha(SURF2, 255), ACC, 0.42f)); // (the body)
-  rrect_round(x + 1.5f, y + h * 0.55f, w - 3, h * 0.45f - 1.5f, r - 1.5f, with_alpha(ACC, 40)); // (deeper below)
-  rrect_round(x + 4, y + 2.5f, w - 8, h * 0.46f, h * 0.23f, with_alpha(TEXT, 30));       // (the sheen)
-  rrect_round(x + 4, y + 2.5f, w - 8, h * 0.22f, h * 0.11f, with_alpha(TEXT, 22));
-  rrect_round(x + w * 0.16f, y + 3.5f, w * 0.30f, 3, 1.5f, with_alpha(TEXT, 120));          // (the glint)
+// Liquid glass, as iOS has it: the chosen thing in a lens of clear glass. Mostly see-through (what's
+// behind shows), a breath of the accent in it, light caught along its top edge and, fainter, its
+// bottom one (the edges bend the light), a glint at the top left, a soft glow pooled inside at the
+// bottom, a faint shadow under it. round: a pill (the tab bar); else squircle corners (segments).
+static void glass(float x, float y, float w, float h, int round) {
+  void (*rr)(float, float, float, float, float, unsigned) = round ? rrect_round : rrect;
+  float r = round ? h / 2 : h * 0.34f;
+  rr(x, y + 1.5f, w, h, r, RGBA(0, 0, 0, 40));                                   // (its shadow)
+  rr(x, y, w, h, r, with_alpha(mix_col(TEXT, ACC, 0.3f), 52));                   // (the glass: clear, a little tinted)
+  rr(x + 1, y + 1, w - 2, h - 2, r - 1, with_alpha(ACC, 30));
+  rr(x + r * 0.3f, y + 1.2f, w - r * 0.6f, h * 0.45f, r * 0.75f, with_alpha(TEXT, 13)); // (a soft sheen over its top half)
+  rr(x + r * 0.55f, y + 0.6f, w - r * 1.1f, 1.4f, 0.7f, with_alpha(TEXT, 175));   // (its top edge, catching the light)
+  rr(x + r * 0.75f, y + h - 2, w - r * 1.5f, 1.2f, 0.6f, with_alpha(TEXT, 60));   // (its bottom edge, fainter)
+  rr(x + r * 0.6f, y + h * 0.2f, fminf(w * 0.12f, 14), fmaxf(2, h * 0.09f), 1, with_alpha(TEXT, 70)); // (a small glint)
 }
+static void tab_bubble(float x, float y, float w, float h) { glass(x, y, w, h, 1); }
 // (the screens leave BAR at the bottom free when scrolled to the end; meanwhile they show through
 // around the pill)
 #define PILL_W 600
@@ -3403,6 +3423,8 @@ static void draw_settings(void) {
   if (wheel_open) { draw_wheel(); return; }
   if (ro_open) { draw_reading_options(); return; } // (Reading comics: the reader's own panel)
   if (vo_open) { draw_view_options(); return; } // (Viewing: the full views' own panel)
+  char vtext[16];
+  snprintf(vtext, sizeof vtext, "%d%%", text_pct);
   char vview[48];
   snprintf(vview, sizeof vview, "%s · %s", VF_SHORT[cfg.ifit], VF_SHORT[cfg.vfit]);
   char v3[64];
@@ -3411,7 +3433,7 @@ static void draw_settings(void) {
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change"},
@@ -3435,10 +3457,12 @@ static void draw_settings(void) {
     {"Clear the thumbnail cache", "", "They're made again as you scroll"},
     {"Reading comics", cfg.cmode ? "Strip" : "Pages", "Pages or a strip, portrait, page turns, direction, taps, the rear touchpad"},
     {"Viewing pictures and videos", vview, "Fit, fill, original size or fit width; landscape or portrait (in the full view: ↑ or the size button)"},
+    {"Text size", vtext, "\u2190\u2192: smaller or bigger, everywhere"},
+    {"Accent from the picture", cfg.accpic ? "On" : "Off", "The accent colour takes the picture's own, as you look through them"},
   };
   // In sections, each with a header: the rows in the order shown (set_sel stays a row's ST_ id)
   static const signed char ORDER[] = {
-    -1, ST_THEME, ST_BGS, ST_SNDPACK, ST_SOUNDS, ST_GLOW, ST_DBL,
+    -1, ST_THEME, ST_ACCPIC, ST_BGS, ST_TEXT, ST_SNDPACK, ST_SOUNDS, ST_GLOW, ST_DBL,
     -2, ST_VIEW, ST_VOL,
     -6, ST_COMICS,
     -3, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK,
@@ -3559,6 +3583,17 @@ static void draw_settings(void) {
         break;
       case ST_COMICS: if (cross || d) { sfx(SFX_OPEN); ro_open = 1; ro_sel = 0; } break;
       case ST_VIEW: if (cross || d) { view_options_open(0); } break;
+      case ST_TEXT: {
+        static const int P[] = {90, 100, 112, 125};
+        int at = 1;
+        for (int k = 0; k < 4; k++) if (P[k] == text_pct) at = k;
+        if (!d && cross) d = 1;
+        at = (at + d + 4) % 4;
+        cfg.tscale = text_pct = P[at];
+        cfg_save(); sfx(SFX_TOGGLE);
+        break;
+      }
+      case ST_ACCPIC: if (cross || d) { cfg.accpic = !cfg.accpic; if (!cfg.accpic) apply_theme(); cfg_save(); sfx(SFX_TOGGLE); } break;
       case ST_CACHE:
         if (cross) {
           DIR *dd = opendir(cache_dir);
@@ -3793,6 +3828,61 @@ static void library_grew(int before) {
 #include "vbrowse.c"
 #include "manga_ui.c"
 #include "favs.c"
+
+// ---------- the accent from the picture (Settings: Accent from the picture) ----------
+// The picture's own colour: its thumbnail looked at in a 12 x 12 grid, each point weighed by how
+// vivid it is (saturation times brightness), the hues averaged round the wheel. Kept bright and
+// saturated enough to read on the dark background; the accent glides to it.
+static int vivid_of(vita2d_texture *t, float *ph, float *ps) {
+  if (!t) return 0;
+  const uint8_t *d = sceGxmTextureGetData(&t->gxm_tex);
+  int w = vita2d_texture_get_width(t), h = vita2d_texture_get_height(t);
+  unsigned stride = sceGxmTextureGetStride(&t->gxm_tex);
+  if (!d || w < 4 || h < 4) return 0;
+  if (!stride) stride = ((w + 7) & ~7) * 4;
+  float sx = 0, sy = 0, wsum = 0, ssum = 0;
+  for (int gy = 0; gy < 12; gy++)
+    for (int gx = 0; gx < 12; gx++) {
+      const uint8_t *p = d + (size_t)(gy * h / 12) * stride + (size_t)(gx * w / 12) * 4;
+      float r = p[0] / 255.f, g = p[1] / 255.f, b = p[2] / 255.f;
+      float mx = fmaxf(r, fmaxf(g, b)), mn = fminf(r, fminf(g, b)), c = mx - mn;
+      if (mx < 0.2f || c < 0.08f) continue; // (dark or grey: no colour to speak of)
+      float s = c / mx, hue;
+      if (mx == r) hue = fmodf((g - b) / c, 6); else if (mx == g) hue = (b - r) / c + 2; else hue = (r - g) / c + 4;
+      hue *= 60; if (hue < 0) hue += 360;
+      float wgt = s * mx; wgt *= wgt;
+      sx += cosf(hue * 0.0174533f) * wgt; sy += sinf(hue * 0.0174533f) * wgt; wsum += wgt; ssum += s * wgt;
+    }
+  if (wsum < 0.02f) return 0;
+  float hue = atan2f(sy, sx) / 0.0174533f;
+  *ph = hue < 0 ? hue + 360 : hue;
+  *ps = ssum / wsum;
+  return 1;
+}
+static void accent_follow(void) {
+  static int last_item = -2, has;
+  static unsigned target;
+  if (!cfg.accpic) return;
+  int item = -1;
+  if (screen == S_VIEWER && vk >= 0 && vk < nshown) item = shown[vk];
+  else if (screen == S_LIBRARY && sel >= 0 && sel < nshown) item = shown[sel];
+  if (item != last_item && frame_no % 4 == 0) {
+    float h, sat;
+    vita2d_texture *t = item >= 0 ? thumb_of(item) : NULL;
+    if (item < 0) { has = 0; last_item = item; }
+    else if (t) {
+      has = vivid_of(t, &h, &sat);
+      if (has) target = hsv(h, fminf(0.9f, fmaxf(0.5f, sat)), 0.96f); // (bright and coloured enough to read)
+      last_item = item;
+    }
+  }
+  unsigned want = has && item >= 0 ? target : acc_theme;
+  if (ACC != want) {
+    ACC = mix_col(ACC, want, ease(0.1f)) | 0xFF000000u;
+    unsigned dr = abs((int)(ACC & 255) - (int)(want & 255)) + abs((int)((ACC >> 8) & 255) - (int)((want >> 8) & 255)) + abs((int)((ACC >> 16) & 255) - (int)((want >> 16) & 255));
+    if (dr < 4) ACC = want;
+  }
+}
 static void warm_icons(void) {
   static SceUID dir = -2;
   static int site = 0;
@@ -3986,6 +4076,7 @@ static const char *res_extra(void);
 #endif
 static void janitor(void);
 static void warm_icons(void);
+static void accent_follow(void);
 int main(void) {
   sceIoMkdir("ux0:data", 0777);
   sceIoMkdir(DATA, 0777);
@@ -4023,6 +4114,7 @@ int main(void) {
   pgf = vita2d_load_default_pgf();
   rnd_state ^= (unsigned)time(NULL);
   cfg_load();
+  text_pct = cfg.tscale ? cfg.tscale : 100;
   apply_theme(); // (the background and accent chosen, from the first screen on)
   vita2d_set_clear_color(BG);
   sfx_pack(SND_PACKS[cfg.sndpack]); // (just where to read from: nothing's read until a sound plays)
@@ -4229,6 +4321,7 @@ int main(void) {
       last_screen = screen;
     }
     janitor(); // (the parts not on screen give their memory back)
+    accent_follow();
     // three fingers tapped together: the calculator, from anywhere, at once
     if (in.panic && screen != S_CALC && screen != S_UNLOCKING && screen != S_PICK) {
       if (vid) lv_video_pause(vid, 1);

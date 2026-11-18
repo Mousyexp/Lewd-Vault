@@ -66,7 +66,8 @@ static void pin_set(const char *p, int decoy) {
     for (int k = 0; k < 16; k++) snprintf(pin.salt + 2 * k, 3, "%02x", r[k]);
   }
   pin_hash(p, pin.salt, decoy ? pin.decoy_hash : pin.hash);
-  if (!decoy) pin.on = 1;
+  // (turned on: it locks when the Vita wakes too, by default; a new PIN keeps the choice made)
+  if (!decoy) { if (!pin.on) pin.on_wake = 1; pin.on = 1; }
   pin_save();
 }
 // The lock goes up: in front of the screen it's on (or before the vault opens, at start).

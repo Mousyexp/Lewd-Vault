@@ -1258,9 +1258,9 @@ static void draw_find_sheet(void) {
   static const char *tab_icons[] = {"image", "film", "book"};
   int segw = 390, tw3 = segw / 3, segx = wx + ww - segw - 20, segy = wy + 14;
   rrect(segx, segy, segw, 40, 20, SURF2);
-  rrect(segx + 3 + find_tab * tw3, segy + 3, tw3 - 6, 34, 17, ACC);
+  glass(segx + 3 + find_tab * tw3, segy + 3, tw3 - 6, 34, 0);
   for (int t = 0; t < 3; t++) {
-    unsigned c = t == find_tab ? RGBA(20, 12, 16, 255) : TEXT;
+    unsigned c = t == find_tab ? TEXT : DIM;
     int lw = text_w(16, tabs[t]) + 30, lx = segx + t * tw3 + (tw3 - lw) / 2;
     icon(tab_icons[t], lx + 11, segy + 20, c);
     text(lx + 28, segy + 26, c, 16, tabs[t]);
@@ -1524,9 +1524,9 @@ static void draw_sites_sheet(void) {
   static const char *tab_icons[] = {"image", "film", "book"};
   int segw = 450, tw3 = segw / 3, segx = W / 2 - segw / 2, segy = wy + 14;
   rrect(segx, segy, segw, 40, 20, SURF2);
-  rrect(segx + 3 + sites_tab * tw3, segy + 3, tw3 - 6, 34, 17, ACC);
+  glass(segx + 3 + sites_tab * tw3, segy + 3, tw3 - 6, 34, 0);
   for (int t = 0; t < 3; t++) {
-    unsigned c = t == sites_tab ? RGBA(20, 12, 16, 255) : TEXT;
+    unsigned c = t == sites_tab ? TEXT : DIM;
     int lw = text_w(17, tabs[t]) + 30, lx = segx + t * tw3 + (tw3 - lw) / 2;
     icon(tab_icons[t], lx + 11, segy + 20, c);
     text(lx + 28, segy + 27, c, 17, tabs[t]);

@@ -330,9 +330,9 @@ static void draw_show_plan(void) {
   // the kinds, as a segmented control
   int ky = cy + 162, segw = cw - 24, sw4 = segw / 4;
   rrect(cx + 12, ky, segw, 36, 18, SURF2);
-  rrect(cx + 12 + 3 + so.preset * sw4, ky + 3, sw4 - 6, 30, 15, ACC);
+  glass(cx + 12 + 3 + so.preset * sw4, ky + 3, sw4 - 6, 30, 0);
   for (int k = 0; k < 4; k++) {
-    text_center(cx + 12 + k * sw4 + sw4 / 2, ky + 24, k == so.preset ? RGBA(20, 12, 16, 255) : TEXT, 15, PRESETS[k]);
+    text_center(cx + 12 + k * sw4 + sw4 / 2, ky + 24, k == so.preset ? TEXT : DIM, 15, PRESETS[k]);
     if (hit(cx + 12 + k * sw4, ky, sw4, 36) && k != so.preset) {
       if (ss.on) say("End the session to change its kind");
       else { sfx(SFX_TOGGLE); preset(k); show_save(); }

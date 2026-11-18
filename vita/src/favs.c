@@ -411,9 +411,9 @@ static void draw_favs(void) {
   static const char *ticons[2] = {"film", "book"};
   int segw = 300, tw2 = segw / 2, segx = W - segw - 14;
   rrect(segx, 10, segw, 40, 20, SURF2);
-  rrect(segx + 3 + fav_tab * tw2, 13, tw2 - 6, 34, 17, ACC);
+  glass(segx + 3 + fav_tab * tw2, 13, tw2 - 6, 34, 0);
   for (int t = 0; t < 2; t++) {
-    unsigned c = t == fav_tab ? RGBA(20, 12, 16, 255) : TEXT;
+    unsigned c = t == fav_tab ? TEXT : DIM;
     int lw = text_w(16, tabs[t]) + 28, lx = segx + t * tw2 + (tw2 - lw) / 2;
     icon(ticons[t], lx + 10, 30, c);
     text(lx + 26, 36, c, 16, tabs[t]);
