@@ -14,3 +14,5 @@ ${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wno-unused-parameter -o 
 "$out-discover"
 ${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wno-unused-parameter -o "$out-conv" tests/conv_test.c src/conv.c src/json.c
 "$out-conv"
+${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wno-unused-parameter -o "$out-favmerge" tests/favmerge_test.c src/favmerge.c
+"$out-favmerge"

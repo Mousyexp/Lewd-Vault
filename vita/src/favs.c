@@ -348,9 +348,31 @@ static void fav_read(int at, int offline) {
   if (offline) mg_offline_pending = 1;
 }
 
+// Two-way Favourites (drive.c): Drive's list folded in once it's here, with what changed here
+// meanwhile (from any screen: the main loop calls it)
+static int favs_sync_loud; // (asked for with the button: says how it went, even when nothing changed)
+static void favs_drive_take(void) {
+  if (drive_favs_state == 3) { if (favs_sync_loud) { sfx(SFX_ERROR); say(drive_favs_msg); } drive_favs_state = 0; favs_sync_loud = 0; return; }
+  if (drive_favs_state != 2) return;
+  drive_favs_state = 0;
+  if (!favs_loaded) favs_load();
+  if (lv_favs_merge(DRIVE_FAV_LOCAL, DRIVE_FAV_MERGED, DRIVE_FAV_START, DRIVE_FAV_LOCAL, NULL, NULL) == 0) {
+    // (what's in Drive now: next time's base)
+    sceIoRemove(DRIVE_FAV_BASE);
+    sceIoRename(DRIVE_FAV_MERGED, DRIVE_FAV_BASE);
+    favs_load();
+    fav_drop_textures();
+    char m[120];
+    int ad = drive_favs_added, rm = drive_favs_removed;
+    if (ad || rm) { snprintf(m, sizeof m, "Favourites from Drive: %d new, %d taken out", ad, rm); say(m); }
+    else if (favs_sync_loud) say("Favourites: the same as in Drive");
+  }
+  favs_sync_loud = 0;
+}
 static void draw_favs(void) {
   fav_take();
   if (!favs_loaded) favs_load();
+  { static unsigned last_in; if (frame_no - last_in > 2) { if (drive_signed_in() && lv_net_online()) drive_favs_sync(); } last_in = frame_no; } // (opened: Drive's asked)
   // (the background: the frame is cleared to it already)
   // (the tab's list: made again only when the favourites or the tab change)
   static int list[FAV_MAX], m, l_tab = -1;
@@ -420,6 +442,17 @@ static void draw_favs(void) {
     if (hit(segx + t * tw2, 6, tw2, 48) && fav_tab != t) { fav_tab = t; fav_sel = 0; fav_scroll = 0; sfx(SFX_TAB); }
   }
   if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) { fav_tab ^= 1; fav_sel = 0; fav_scroll = 0; sfx(SFX_TAB); }
+  // with Drive (signed in): the button left of the tabs, or SELECT
+  if (drive_signed_in()) {
+    int sx = segx - 54, busy = drive_favs_state == 1;
+    rrect(sx, 10, 44, 40, 20, SURF2);
+    if (busy) spinner(sx + 22, 30, 9);
+    else icon("refresh", sx + 22, 30, TEXT);
+    if ((hit(sx, 6, 44, 48) || (in.pressed & SCE_CTRL_SELECT)) && !busy) {
+      if (drive_favs_sync() == 0) { favs_sync_loud = 1; sfx(SFX_OPEN); say("Favourites: in step with Drive…"); }
+      else { sfx(SFX_ERROR); say("Drive is busy: in a moment"); }
+    }
+  }
   // the chosen one's actions, along the foot: open, available offline, remove
   if (m && fav_sel < m) {
     int k = list[fav_sel];
@@ -434,7 +467,7 @@ static void draw_favs(void) {
     int a2 = hit(bx + w1 + 12, by - 4, w2, 48);
     rrect(bx + w1 + w2 + 24, by, w3, 40, 20, SURF2); text(bx + w1 + w2 + 48, by + 26, ACC2, 16, b3);
     int a3 = hit(bx + w1 + w2 + 24, by - 4, w3, 48);
-    text(16, H - BAR - 64, FAINT, 12, "✕ open  △ available offline  □ remove  ○ back");
+    text(16, H - BAR - 64, FAINT, 12, drive_signed_in() ? "✕ open  △ available offline  □ remove  SELECT sync with Drive  ○ back" : "✕ open  △ available offline  □ remove  ○ back");
     if (a2 || (in.pressed & SCE_CTRL_TRIANGLE)) { sfx(SFX_OPEN); if (comic) fav_read(k, 1); else fav_play(k, 1); return; }
     if (a3 || (in.pressed & SCE_CTRL_SQUARE)) { fav_remove(k); fav_drop_textures(); sfx(SFX_DELETE); say("Taken out of Favourites"); return; }
     if (a1 || (in.pressed & SCE_CTRL_CROSS)) { sfx(SFX_SELECT); if (comic) fav_read(k, 0); else fav_play(k, 0); return; }

@@ -20,6 +20,7 @@
 // sign-in; never in the vault) and one manifest per vault (each file as it was at the last sync).
 // Files deleted here by a sync go to ux0:data/LWDV00001/drive/trash, out of the vault.
 #include "drive.h"
+#include "favmerge.h"
 #include "json.h"
 #include "vault.h"
 #include "net.h"
@@ -881,6 +882,8 @@ static void to_trash(const char *full, const char *rel) {
   if (rename(full, to) != 0) remove(full);
 }
 
+static int favs_work(const char **why);
+static void favs_after(int r, const char *why);
 static void *sync_main(void *arg) {
   sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << 2); // (off the drawing thread's core)
   (void)arg;
@@ -1121,6 +1124,11 @@ static void *sync_main(void *arg) {
     if (!ns) say("Already in step with Google Drive");
     else snprintf(drive.message, sizeof drive.message, "Done: %d up, %d down%s", drive.up, drive.down, drive.conflicts ? ", some kept from both sides" : "");
   }
+  if (drive_favs_state != 1) { // (the favourites too, after the vault)
+    const char *fw = NULL;
+    drive_favs_state = 1;
+    favs_after(favs_work(&fw), fw);
+  }
   drive.state = DRV_DONE;
   goto out;
 fail:
@@ -1140,8 +1148,121 @@ out:
   free(pl.l); free(pl.r); free(pl.m);
   return NULL;
 }
+// ---------- the Vita's own files in Drive: "Lewd Vault (Vita)" (not in the vault's folder) ----------
+// favorites.tsv (two-way Favourites: every Vita signed in to the same Google account shares one list)
+// and Test reports/ (the test kit's reports). The vault's format and folder aren't touched.
+#define SIDE_FOLDER "Lewd Vault (Vita)"
+volatile int drive_favs_state, drive_favs_added, drive_favs_removed, drive_favs_runs, drive_favs_fails;
+char drive_favs_msg[160];
+volatile int drive_side_busy;
+// (a file or folder by its name in a folder: its id, or "" when it isn't there; 0, or -1)
+static int find_child(const char *parent, const char *name, char *id, size_t cap, const char **why) {
+  char nq[300], q[600], qe[1600], url[1900];
+  size_t n = 0;
+  for (const char *c = name; *c && n + 3 < sizeof nq; c++) { if (*c == '\'' || *c == '\\') nq[n++] = '\\'; nq[n++] = *c; }
+  nq[n] = 0;
+  snprintf(q, sizeof q, "name = '%s' and '%s' in parents and trashed = false", nq, parent);
+  url_enc(q, qe, sizeof qe);
+  snprintf(url, sizeof url, "%s?q=%s&fields=files(id)&orderBy=createdTime", FILES, qe);
+  Json j;
+  uint8_t *raw = NULL;
+  id[0] = 0;
+  if (call_json(url, NULL, &j, &raw, why) != 0) return -1;
+  int first = json_at(&j, json_get(&j, 0, "files"), 0);
+  if (first >= 0) json_gs(&j, first, "id", id, cap);
+  json_free(&j);
+  free(raw);
+  return 0;
+}
+static int side_folder(char *id, size_t cap, const char **why) {
+  Plan pl;
+  memset(&pl, 0, sizeof pl);
+  if (ensure_root(&pl, SIDE_FOLDER, 1, why) != 0) return -1;
+  snprintf(id, cap, "%s", pl.root_id);
+  return 0;
+}
+// (a file into a folder: the one of that name replaced, else a new one)
+static int side_put(const char *parent, const char *name, const char *path, const char **why) {
+  char id[80], nid[80] = "", md5[40] = "";
+  if (find_child(parent, name, id, sizeof id, why) != 0) return -1;
+  return upload(path, name, parent, id[0] ? id : NULL, nid, md5, why);
+}
+static int copy_plain(const char *from, const char *to) {
+  FILE *a = fopen(from, "rb"), *b = fopen(to, "wb");
+  if (!b) { if (a) fclose(a); return -1; }
+  char buf[4096];
+  size_t n;
+  while (a && (n = fread(buf, 1, sizeof buf, a)) > 0) fwrite(buf, 1, n, b);
+  if (a) fclose(a);
+  return fclose(b) == 0 ? 0 : -1;
+}
+// Favourites: this Vita's list as it is now (fav_start), Drive's (fav_theirs) and the last agreed one
+// (fav_base) made one (fav_merged), which goes up to Drive; the drawing thread then takes it in
+// (drive_favs_state 2), folding in what changed here meanwhile. 0, or -1 (*why says).
+static int favs_work(const char **why) {
+  sceIoMkdir(DIRP, 0777);
+  if (copy_plain(DRIVE_FAV_LOCAL, DRIVE_FAV_START) != 0) { *why = "The favourites couldn't be read"; return -1; }
+  char folder[80], id[80];
+  if (side_folder(folder, sizeof folder, why) != 0) return -1;
+  if (find_child(folder, "favorites.tsv", id, sizeof id, why) != 0) return -1;
+  sceIoRemove(DIRP "/fav_theirs.tsv");
+  if (id[0] && download(id, DIRP "/fav_theirs.tsv", why) != 0) return -1;
+  int ad = 0, rm = 0;
+  if (lv_favs_merge(DRIVE_FAV_START, DIRP "/fav_theirs.tsv", DRIVE_FAV_BASE, DRIVE_FAV_MERGED, &ad, &rm) != 0) { *why = "The favourites couldn't be put together"; return -1; }
+  if (side_put(folder, "favorites.tsv", DRIVE_FAV_MERGED, why) != 0) return -1;
+  sceIoRemove(DIRP "/fav_theirs.tsv");
+  drive_favs_added = ad; drive_favs_removed = rm;
+  return 0;
+}
+static void favs_after(int r, const char *why) {
+  drive_favs_runs++;
+  if (r != 0) drive_favs_fails++;
+  if (r == 0) drive_favs_state = 2;
+  else { snprintf(drive_favs_msg, sizeof drive_favs_msg, "Favourites with Drive: %s", why && why[0] ? why : "it didn't work"); drive_favs_state = 3; }
+  LOG("drive favs: %d %s\n", r, why ? why : "");
+}
+static void *favs_main(void *arg) {
+  (void)arg;
+  if (!http) http = lv_http_new();
+  const char *why = NULL;
+  favs_after(favs_work(&why), why);
+  drive_side_busy = 0;
+  return NULL;
+}
+int drive_favs_sync(void) {
+  if (!drive_signed_in() || drive.state == DRV_CODE || drive.state == DRV_SYNCING || drive_side_busy || drive_favs_state == 1) return -1;
+  drive_side_busy = 1; drive_favs_state = 1;
+  if (start_worker(favs_main, NULL) != 0) { drive_side_busy = 0; drive_favs_state = 0; return -1; }
+  return 0;
+}
+// A test kit report into "Lewd Vault (Vita)/Test reports"
+static char rep_path[300], rep_name[120];
+volatile int drive_report_state; // (0, 1 sending, 2 sent, 3 failed)
+static void *report_main(void *arg) {
+  (void)arg;
+  if (!http) http = lv_http_new();
+  const char *why = NULL;
+  char folder[80], sub[80];
+  int r = side_folder(folder, sizeof folder, &why);
+  if (r == 0) r = find_child(folder, "Test reports", sub, sizeof sub, &why);
+  if (r == 0 && !sub[0]) r = make_folder("Test reports", folder, sub, sizeof sub, &why);
+  if (r == 0) r = side_put(sub, rep_name, rep_path, &why);
+  LOG("drive report %s: %d %s\n", rep_name, r, why ? why : "");
+  drive_report_state = r == 0 ? 2 : 3;
+  drive_side_busy = 0;
+  return NULL;
+}
+int drive_send_report(const char *path, const char *name) {
+  if (!drive_signed_in() || drive.state == DRV_CODE || drive.state == DRV_SYNCING || drive_side_busy) return -1;
+  snprintf(rep_path, sizeof rep_path, "%s", path);
+  snprintf(rep_name, sizeof rep_name, "%s", name);
+  drive_side_busy = 1; drive_report_state = 1;
+  if (start_worker(report_main, NULL) != 0) { drive_side_busy = 0; drive_report_state = 3; return -1; }
+  return 0;
+}
+
 void drive_sync(const char *root, const char *folder, int make) {
-  if (drive.state == DRV_CODE || drive.state == DRV_SYNCING) return;
+  if (drive.state == DRV_CODE || drive.state == DRV_SYNCING || drive_side_busy) return;
   memset((void *)&drive, 0, sizeof drive);
   snprintf(sync_root, sizeof sync_root, "%s", root);
   snprintf(sync_folder, sizeof sync_folder, "%s", folder);

@@ -39,3 +39,21 @@ const char *drive_last_sync(void);
 int drive_has_manifest(const char *root);
 // A finished job's thread joined (its stack given back); called now and then from the main loop.
 void drive_reap(void);
+
+// The Vita's own files in Drive, in "Lewd Vault (Vita)" beside the vault's folder (signed in; a
+// thread each; -1 when busy or signed out). Two-way Favourites: drive_favs_sync (also done after
+// every vault sync) merges this Vita's favorites.tsv with Drive's; drive_favs_state goes 1 (busy),
+// then 2 (DRIVE_FAV_MERGED ready: the drawing thread folds it in with lv_favs_merge, mine = the
+// favourites now, base = DRIVE_FAV_START, and keeps DRIVE_FAV_MERGED as DRIVE_FAV_BASE) or 3
+// (drive_favs_msg says why).
+#define DRIVE_FAV_LOCAL "ux0:data/LWDV00001/favorites.tsv"
+#define DRIVE_FAV_START "ux0:data/LWDV00001/drive/fav_start.tsv"
+#define DRIVE_FAV_BASE "ux0:data/LWDV00001/drive/fav_base.tsv"
+#define DRIVE_FAV_MERGED "ux0:data/LWDV00001/drive/fav_merged.tsv"
+int drive_favs_sync(void);
+extern volatile int drive_favs_state, drive_favs_added, drive_favs_removed, drive_favs_runs, drive_favs_fails;
+extern char drive_favs_msg[160];
+// A test kit report (the file at path) into "Lewd Vault (Vita)/Test reports" as name
+int drive_send_report(const char *path, const char *name);
+extern volatile int drive_report_state; // (0, 1 sending, 2 sent, 3 failed)
+extern volatile int drive_side_busy;

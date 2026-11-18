@@ -52,6 +52,7 @@
 #include "json.h"
 #include "booru.h"
 #include "drive.h"
+#include "favmerge.h"
 #include "net.h"
 #include "discover.h"
 #include "conv.h"
@@ -4355,6 +4356,7 @@ int main(void) {
     if (loaded_vault) wf_take();
     msave_take();
     conv_take();
+    favs_drive_take();
     if (frame_no % 30 == 0 && screen != S_WEBVIEW) plain_wipe_try();
     if (refilter_wanted && loaded_vault) {
       refilter_wanted = 0;

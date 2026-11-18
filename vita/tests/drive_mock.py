@@ -108,6 +108,13 @@ class H(BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(u.query)
         raw = self.body()
         with lock:
+            if u.path == "/debug/set":  # (a file's bytes replaced, by its name: another device's change)
+                name = q.get("name", [""])[0]
+                for fid, f in files.items():
+                    if f["name"] == name and not f["trashed"]:
+                        f["data"] = raw
+                        return self.send(200, {"id": fid})
+                return self.send(404, {})
             if u.path == "/device/code":
                 form = urllib.parse.parse_qs(raw.decode())
                 if form.get("client_id", [""])[0] != "test-client":
@@ -194,6 +201,12 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
         with lock:
+            if u.path == "/debug/file":  # (a file by its name, wherever it is: the Vita's own files)
+                name = q.get("name", [""])[0]
+                for fid, f in files.items():
+                    if f["name"] == name and not f["trashed"]:
+                        return self.send(200, f["data"], ctype="application/octet-stream")
+                return self.send(404, {})
             if u.path == "/debug/dump":
                 n = 0
                 for fid, f in files.items():
@@ -220,6 +233,10 @@ class H(BaseHTTPRequestHandler):
                 live = [fid for fid, f in files.items() if not f["trashed"]]
                 if "name = '" in query:
                     name = query.split("name = '")[1].split("' and")[0].replace("\\'", "'")
+                    if "' in parents" in query:  # (a file or folder by its name in a folder: the Vita's own files)
+                        parent = query.split("' in parents")[0].rsplit("'", 1)[1]
+                        hits = [fid for fid in live if files[fid]["name"] == name and files[fid]["parents"] == [parent]]
+                        return self.send(200, {"files": [{"id": h} for h in hits]})
                     hits = [fid for fid in live if files[fid]["name"] == name and files[fid]["mimeType"] == FOLDER and files[fid]["parents"] == ["root"]]
                     return self.send(200, {"files": [{"id": h} for h in hits]})
                 start = int(q.get("pageToken", ["0"])[0])

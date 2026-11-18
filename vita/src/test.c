@@ -107,11 +107,11 @@ static void meas_frame(float work_ms, float len_ms) {
 }
 
 // ---------- the tests ----------
-enum { TK_NORMAL, TK_ALL, TK_LIB, TK_VIEW, TK_WEB, TK_VIDEOS, TK_COMICS, TK_WEBTOON, TK_MEM, TK_NET, TK_CARD, TK_STRESS, TK_VIDFMT, TK_REPORTS, TK_N };
+enum { TK_NORMAL, TK_ALL, TK_LIB, TK_VIEW, TK_WEB, TK_VIDEOS, TK_COMICS, TK_WEBTOON, TK_MEM, TK_NET, TK_CARD, TK_STRESS, TK_VIDFMT, TK_DRIVE, TK_REPORTS, TK_N };
 static const char *const TK_NAME[TK_N] = {
   "Open the app normally", "Run every test", "Library: scrolling", "Full view: pictures", "Browser: loading, scrolling",
   "Video browser", "Comics: MangaDex", "Webtoon strips", "Memory: give back, come back", "Network: every source",
-  "Memory card speed", "Stress: five tours", "Video formats", "Reports",
+  "Memory card speed", "Stress: five tours", "Video formats", "Google Drive", "Reports",
 };
 static const char *const TK_ABOUT[TK_N] = {
   "The app as usual: live numbers at the top, everything logged",
@@ -127,6 +127,7 @@ static const char *const TK_ABOUT[TK_N] = {
   "Writes, reads and deletes 16 MB; reads vault files",
   "Five rounds of every screen: does memory creep up?",
   "H.264 in MKV and AVI, MPEG-4 AVI, VP9 WebM: plays?",
+  "Favourites both ways, a report up (signed in)",
   "Where the reports are, and sending them",
 };
 static struct {
@@ -141,7 +142,7 @@ static struct {
   float times[64];
   int ntimes;
 } T = {.menu_sel = 2};
-static const int TK_ORDER[] = {TK_LIB, TK_VIEW, TK_WEB, TK_VIDEOS, TK_COMICS, TK_WEBTOON, TK_MEM, TK_NET, TK_CARD, TK_VIDFMT, TK_STRESS};
+static const int TK_ORDER[] = {TK_LIB, TK_VIEW, TK_WEB, TK_VIDEOS, TK_COMICS, TK_WEBTOON, TK_MEM, TK_NET, TK_CARD, TK_VIDFMT, TK_DRIVE, TK_STRESS};
 #define TK_NORDER ((int)(sizeof TK_ORDER / sizeof *TK_ORDER))
 static typeof(cfg) tk_cfg; // (the settings as they were: back after each test)
 
@@ -424,6 +425,36 @@ static void tk_step(void) {
       }
       break;
     }
+    case TK_DRIVE: {
+      // the favourites with Drive, then a small report up (the Vita's own folder, "Lewd Vault (Vita)")
+      static int runs0, fails0;
+      if (T.phase == 0) {
+        if (!drive_signed_in()) { rpf("  not signed in to Google Drive (Settings): skipped\n"); tk_finish_test(); break; }
+        if (T.t < 2) break;
+        if (drive_side_busy || drive.state == DRV_SYNCING) { if (tk_secs() > 60) { rpf("  Drive stayed busy: skipped\n"); tk_finish_test(); } break; }
+        runs0 = drive_favs_runs; fails0 = drive_favs_fails;
+        if (drive_favs_sync() != 0) { rpf("  favourites: the sync didn't start\n"); T.phase = 1; }
+        tk_next();
+      } else if (T.phase == 1) {
+        if (drive_favs_runs == runs0 && tk_secs() < 60) break;
+        if (drive_favs_runs == runs0) rpf("  favourites: no answer in 60 s\n");
+        else if (drive_favs_fails != fails0) rpf("  favourites: FAILED: %s\n", drive_favs_msg);
+        else rpf("  favourites: in step, %.1f s (%d new from Drive, %d taken out)\n", tk_secs(), drive_favs_added, drive_favs_removed);
+        tk_next();
+      } else if (T.phase == 2) {
+        if (drive_side_busy) break;
+        FILE *f = fopen(TK_DIR "/drive-check.txt", "wb");
+        if (f) { fputs("Lewd Vault test kit: a report up to Drive works.\n", f); fclose(f); }
+        if (drive_send_report(TK_DIR "/drive-check.txt", "drive-check.txt") != 0) { rpf("  report: the upload didn't start\n"); tk_finish_test(); break; }
+        tk_next();
+      } else if (T.phase == 3) {
+        if (drive_report_state == 1 && tk_secs() < 60) break;
+        rpf("  report: %s, %.1f s\n", drive_report_state == 2 ? "up in Lewd Vault (Vita)/Test reports" : "FAILED (log.txt says why)", tk_secs());
+        sceIoRemove(TK_DIR "/drive-check.txt");
+        tk_finish_test();
+      }
+      break;
+    }
     case TK_STRESS: {
       // each round: Library, a picture, Browser, Comics, Settings, Library; memory written down after each
       static const int SCR[] = {S_LIBRARY, S_VIEWER, S_WEB, S_MANGA, S_SETTINGS, S_LIBRARY};
@@ -538,6 +569,10 @@ static void tk_count_reports(void) {
   while (sceIoDread(d, &e) > 0) T.n_reports += strstr(e.d_name, ".txt") != NULL;
   sceIoDclose(d);
 }
+static char tk_drive_path[200], tk_drive_name[96]; // (a report waiting for Drive to be free)
+static void tk_drive_pump(void) {
+  if (tk_drive_name[0] && !drive_side_busy && drive.state != DRV_SYNCING && drive.state != DRV_CODE && drive_send_report(tk_drive_path, tk_drive_name) == 0) tk_drive_name[0] = 0;
+}
 static void tk_save_report(const char *kind) {
   if (!rp) return;
   tk_log_tail(DATA "/log.txt", 120);
@@ -552,7 +587,9 @@ static void tk_save_report(const char *kind) {
   if (f) { fwrite(rp, 1, rp_n, f); fclose(f); }
   LOG("tk report saved: %s (%lu bytes)\n", path, (unsigned long)rp_n);
   tk_send(name, rp, rp_n);
-  snprintf(T.status, sizeof T.status, "Report saved: reports/%s%s", name, tk_url[0] ? " (and sent)" : "");
+  // (signed in to Drive: up to "Lewd Vault (Vita)/Test reports" too, once Drive is free)
+  if (drive_signed_in()) { snprintf(tk_drive_path, sizeof tk_drive_path, "%s", path); snprintf(tk_drive_name, sizeof tk_drive_name, "%s", name); }
+  snprintf(T.status, sizeof T.status, "Report saved: reports/%s%s%s", name, tk_url[0] ? " (and sent)" : "", drive_signed_in() ? " · to Drive" : "");
   free(rp); rp = NULL; rp_n = rp_cap = 0;
   tk_count_reports();
 }
@@ -683,6 +720,7 @@ static void tk_frame_input(void) {
 }
 // (at the frame's end: measured, the screen noted, the numbers drawn on top)
 static void tk_frame_end(float work_ms, float len_ms) {
+  if (frame_no % 60 == 0) tk_drive_pump();
   if (tk_away && len_ms > 1000) { tk_away = 0; tk_mark("%s", tk_before_away); LOG("tk: woken after %.1f s\n", len_ms / 1000); } // (back from the LiveArea)
   else if (len_ms > 1000) len_ms = 1000; // (a sleep: one long frame, not a measure)
   meas_frame(work_ms, len_ms);
