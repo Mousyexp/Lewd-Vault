@@ -798,6 +798,24 @@ static void wres_arm(void) {
   if (k >= 0 && wres[k].secs > 0) wv_resume_to = (int64_t)wres[k].secs * 1000;
 }
 
+// An Untraceable vault's files stay encrypted on the card; a video played from the Browser is
+// downloaded plain (the player reads it as it comes), so once nothing is using it, it's deleted: when
+// its view closes, when the app is put away and when the vault locks. Saved copies go into the vault
+// encrypted (lv_vault_add_files with the vault's key), never as these files.
+static int plain_wipe_due;
+static void plain_wipe_try(void) {
+  if (!plain_wipe_due || wv_vid || dl_post >= 0 || saving) return;
+  int left = 0;
+  for (int s = 0; s < 2; s++) {
+    if (!dl_path[s][0]) continue;
+    int r = sceIoRemove(dl_path[s]);
+    if (r < 0 && r != (int)0x80010002) left = 1; // (in use still: next time; not there: done)
+    else dl_path[s][0] = 0;
+  }
+  plain_wipe_due = left;
+}
+static void plain_wipe_ask(void) { if (loaded_vault && vault.untraceable) plain_wipe_due = 1; }
+
 static void wv_drop(void) {
   // (a video still downloading for this view: stopped, it isn't wanted any more)
   if (dl_post >= 0) { pthread_mutex_lock(&wmx); if (!saving) big_cancel = 1; pthread_mutex_unlock(&wmx); }
@@ -806,6 +824,7 @@ static void wv_drop(void) {
   wv_resume_to = -1;
   if (wv_vid) { video_close_later(wv_vid); wv_vid = NULL; }
   wv_vid_post = -1;
+  plain_wipe_ask();
   wv_stream = NULL;
   release_tex(wv_tex);
   wv_tex = NULL;

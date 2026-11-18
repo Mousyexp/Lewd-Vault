@@ -4199,7 +4199,7 @@ int main(void) {
   tex_no_room = release_hidden_now;
   // (the videos played last time, still on the card: they were only for playing, and can be large)
   {
-    static const char *const tmp[] = {"play.mp4", "play.webm", "play0.mp4", "play0.webm", "play1.mp4", "play1.webm", "play.mp4.part", "play.webm.part", NULL};
+    static const char *const tmp[] = {"play.mp4", "play.webm", "play0.mp4", "play0.webm", "play1.mp4", "play1.webm", "conv480.mp4", "play.mp4.part", "play.webm.part", NULL};
     for (int k = 0; tmp[k]; k++) { char p[96]; snprintf(p, sizeof p, DATA "/%s", tmp[k]); sceIoRemove(p); }
   }
   // (a bigger per-frame vertex pool than vita2d's 1 MB: room to spare on the busiest screen)
@@ -4317,6 +4317,7 @@ int main(void) {
       slideshow = 0;
       if (loaded_vault) { save_edits_now(); views_save_async(); resume_save(); }
       flush_settings();
+      plain_wipe_ask(); plain_wipe_try();
     }
     if (woke) {
       woke = 0;
@@ -4354,6 +4355,7 @@ int main(void) {
     if (loaded_vault) wf_take();
     msave_take();
     conv_take();
+    if (frame_no % 30 == 0 && screen != S_WEBVIEW) plain_wipe_try();
     if (refilter_wanted && loaded_vault) {
       refilter_wanted = 0;
       int keep = sel >= 0 && sel < nshown ? shown[sel] : -1; // (the card chosen stays chosen)
