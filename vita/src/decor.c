@@ -3,8 +3,8 @@
 // bounce when one is tapped. Drawn in rose, they're turned to the accent's colour the way the PC turns
 // them (CSS hue-rotate's matrix), greys for a grey accent; made again when the accent changes.
 // Settings › Decorations turns them off. Compiled inside main.c.
-enum { DEC_BIKINI, DEC_CORSET, DEC_CROPTOP, DEC_SONICO, DEC_SUIT, DEC_TEARJU, DEC_YORUICHI, DEC_N };
-static const char *const DEC_FILE[DEC_N] = {"bikini", "corset", "croptop", "sonico", "suit", "tearju", "yoruichi"};
+enum { DEC_BIKINI, DEC_CORSET, DEC_CROPTOP, DEC_SONICO, DEC_SUIT, DEC_TEARJU, DEC_YORUICHI, DEC_PEACE, DEC_N };
+static const char *const DEC_FILE[DEC_N] = {"bikini", "corset", "croptop", "sonico", "suit", "tearju", "yoruichi", "peace"};
 static vita2d_texture *dec_tex[DEC_N];
 static unsigned dec_acc[DEC_N];
 static unsigned dec_bounce_at[DEC_N];
@@ -70,9 +70,12 @@ static int decor_draw(int k, float cx, float bottom, float h, int alpha) {
   vita2d_texture *t = dec_get(k);
   if (!t) return 0;
   float tw = vita2d_texture_get_width(t), th = vita2d_texture_get_height(t), sc = h / th;
-  float t_s = frame_no / 60.0f;
+  int still = alpha < 0; // (a negative alpha: drawn still, no breathing or bobbing)
+  if (still) alpha = -alpha;
+  float t_s = still ? 0 : frame_no / 60.0f;
   float breath = 1 + 0.012f * sinf(t_s * 1.6f + k);       // (a slow breath: taller and back)
-  float bob = sinf(t_s * 1.1f + k * 1.7f) * 2.5f;
+  float bob = still ? 0 : sinf(t_s * 1.1f + k * 1.7f) * 2.5f;
+  if (still) breath = 1;
   float hop = 0, squash = 1;
   if (dec_bounce_at[k]) {
     float u = (frame_no - dec_bounce_at[k]) / 36.0f;       // (a hop: up, down, a little squash as she lands)

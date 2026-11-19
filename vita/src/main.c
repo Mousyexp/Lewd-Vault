@@ -2780,7 +2780,7 @@ static void draw_library(void) {
       text_center(W / 2, TOP + 180, FAINT, 16, "Save a chapter from the Comics tab, or give a collection the category Comics");
     } else if (vault.n == 0 && !query[0]) {
       // (a new vault: where things come from)
-      decor_draw(DEC_TEARJU, W - 150, H - BAR + 6, 300, 255); // (one of the girls, waiting by it)
+      decor_draw(DEC_TEARJU, W - 150, H - BAR + 6, 300, -150); // (still, and fainter: a negative alpha) // (one of the girls, waiting by it)
       text_center(W / 2, TOP + 140, TEXT, 22, "Your vault is empty");
       text_center(W / 2, TOP + 172, DIM, 16, "Find pictures and videos in the Browser and save them here,");
       text_center(W / 2, TOP + 196, DIM, 16, "or save comics from the Comics tab.");
@@ -4008,7 +4008,7 @@ static void draw_settings(void) {
   static const char *const SECT[] = {"Appearance", "Playback", "Privacy", "Sync and sources", "Library", "Comics"};
   static const char *const SECT_ICON[] = {"sliders", "play", "info", "wifi", "photos", "book"};
   enum { NORD = sizeof ORDER / sizeof *ORDER };
-  const int rh = 58, hh = 40, top = 62, room = H - BAR - top + 8;
+  const int rh = 58, hh = 40, top = 84, room = H - BAR - top + 8;
   float ypos[NORD], total = 0;
   int at = 0;
   for (int k = 0; k < NORD; k++) { ypos[k] = total; total += ORDER[k] < 0 ? hh : rh; if (ORDER[k] == set_sel) at = k; }
@@ -4053,11 +4053,24 @@ static void draw_settings(void) {
     if (hit(30, y, RW, 54) && in.tap_y > top && in.tap_y < H - BAR) { set_sel = r; in.pressed |= SCE_CTRL_CROSS; }
   }
   if (fy >= 0) focus_ring(30, fy, RW, 54);
-  // (one of the girls peeking up from the bottom right corner, beside the tab bar)
-  decor_draw(DEC_SONICO, W - 52, H + 118, 250, 235);
   vita2d_draw_rectangle(0, 0, W, top - 4, BG);
-  text(30, 44, TEXT, 26, "Settings");
-  textf(30 + text_w(26, "Settings") + 16, 44, FAINT, 13, "%s  ·  %d items%s", vault.root, vault.n, vault.untraceable ? "  ·  Untraceable" : "");
+  // (the title: heavy and rounded, drawn thick by going round it; the count beside it)
+  for (int o = 0; o < 12; o++) { float an = o * 0.5236f; text(30 + (int)roundf(cosf(an) * 1.6f), 56 + (int)roundf(sinf(an) * 1.6f), TEXT, 32, "Settings"); }
+  text(30, 56, TEXT, 32, "Settings");
+  textf(34 + text_w(32, "Settings") + 18, 54, FAINT, 13, "%d items%s", vault.n, vault.untraceable ? "  ·  Untraceable" : "");
+  // (the girl with the peace sign, peeking over the title row's edge at the right)
+  vita2d_set_clip_rectangle(0, 0, W, top - 4);
+  vita2d_enable_clipping();
+  decor_draw(DEC_PEACE, W - 150, top + 85, 190, 235);
+  vita2d_disable_clipping();
+  // (a scroll bar at the right edge, the sections' starts marked on it)
+  if (total > room) {
+    float bt = top, bh2 = room - 12, x = W - 9;
+    rrect(x, bt, 4, bh2, 2, with_alpha(TEXT, 30));
+    for (int k = 0; k < NORD; k++) if (ORDER[k] < 0 && k > 0) rrect(x - 3, bt + ypos[k] / total * bh2 - 1, 10, 3, 1, with_alpha(ACC, 150));
+    float th2 = fmaxf(24, bh2 * room / total), ty2 = bt + (bh2 - th2) * (set_scroll / (total - room));
+    rrect(x, ty2, 4, th2, 2, with_alpha(TEXT, 170));
+  }
   // touch and the left stick scroll, whatever row they're over; a flick keeps going
   static float set_v;
   if (in.touching && in.down_y > top) { set_scroll -= in.drag_dy; set_v = 0; if (in.moved) set_follow = 0; }
@@ -4065,6 +4078,7 @@ static void draw_settings(void) {
   if (fabsf(in.ly) > 0.05f) { set_scroll += in.ly * 14 * ft; set_follow = 0; }
   set_scroll += set_v * ft;
   set_v *= decay(0.93f);
+  { static float last_ss; chrome_follow(set_scroll - last_ss, set_scroll); last_ss = set_scroll; } // (the tab bar tucks as it scrolls down)
   if (set_scroll < 0) { set_scroll = 0; set_v = 0; }
   if (set_scroll > total - room) { set_scroll = total - room > 0 ? total - room : 0; set_v = 0; }
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
@@ -4839,7 +4853,7 @@ int main(void) {
       if (sel >= nshown) sel = nshown ? nshown - 1 : 0;
     }
     // (the header and the tab bar: tucked only while the Library or the Browser scrolls down)
-    if (screen != S_LIBRARY && screen != S_WEB) chrome_target = 0;
+    if (screen != S_LIBRARY && screen != S_WEB && screen != S_SETTINGS) chrome_target = 0;
     chrome_hide += (chrome_target - chrome_hide) * ease(0.25f);
     if (fabsf(chrome_target - chrome_hide) < 0.004f) chrome_hide = chrome_target;
     if (frame_no % 30 == 0) la_poll_events();

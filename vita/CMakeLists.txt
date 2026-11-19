@@ -81,6 +81,7 @@ vita_create_vpk(${LV_VPK_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE decor/suit.webp decor/suit.webp
   FILE decor/tearju.webp decor/tearju.webp
   FILE decor/yoruichi.webp decor/yoruichi.webp
+  FILE decor/peace.webp decor/peace.webp
   FILE splash.png splash.png
   FILE sce_sys/pic0.png sce_sys/pic0.png
   FILE sounds/tick.wav sounds/tick.wav

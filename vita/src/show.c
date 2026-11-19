@@ -474,8 +474,18 @@ static void draw_show_plan(void) {
     if ((hit(px, py + 2, aw, 30) || (in.pressed & SCE_CTRL_RTRIGGER)) && !ime_open) { char d[24]; snprintf(d, sizeof d, "Mine %d", nmypre + 1); ime_start(19, "A name for these settings", d, 0); }
     if ((in.pressed & SCE_CTRL_LTRIGGER) && nmypre) mypre_use((mypre_at + 1) % nmypre);
   }
-  rrect(cx + 12, by, bw, 44, 22, ACC);
-  text_center(cx + 12 + bw / 2, by + 29, RGBA(20, 12, 16, 255), 18, go);
+  { // (the start button: a glowing pill that breathes, a shine running across it now and then, pressed in
+    //  under a finger)
+    int bx = cx + 12, pressed = in.touching && in.tx >= bx && in.tx < bx + bw && in.ty >= by && in.ty < by + 44;
+    float pulse = 0.5f + 0.5f * sinf(frame_no * 0.07f), sq = pressed ? 3 : 0;
+    rrect(bx - 5 - pulse * 3, by - 5 - pulse * 3, bw + 10 + pulse * 6, 54 + pulse * 6, 27, with_alpha(ACC, (int)(40 + 40 * pulse)));
+    rrect(bx + sq, by + 3 + sq, bw - sq * 2, 44 - sq * 2, 22, RGBA(0, 0, 0, 70));
+    rrect(bx + sq, by + sq, bw - sq * 2, 44 - sq * 2, 22, pressed ? mix_col(ACC, RGBA(0, 0, 0, 255), 0.15f) : ACC);
+    rrect(bx + 4 + sq, by + 3 + sq, bw - 8 - sq * 2, 17 - sq, 9, RGBA(255, 255, 255, pressed ? 14 : 28)); // (a glassy top)
+    float sh = fmodf(frame_no * 3.0f, bw + 400) - 40; // (the shine)
+    if (sh > 4 && sh < bw - 30) rrect(bx + sh, by + 4 + sq, 22, 36 - sq * 2, 10, RGBA(255, 255, 255, 55));
+    text_center(bx + bw / 2, by + 29 + (int)(sq / 2), RGBA(20, 12, 16, 255), 19, go);
+  }
   if (plan_sel == nf - 1) focus_ring(cx + 12, by, bw, 44);
   int start = hit(cx + 12, by, bw, 44);
   if (ss.on) {
