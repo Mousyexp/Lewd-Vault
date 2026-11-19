@@ -1306,6 +1306,33 @@ static void draw_cover(vita2d_texture *t, float x, float y, float w, float h, un
   vita2d_draw_texture_tint_part_scale(t, x, y, sx, sy, sw, sh, s, s, tint);
 }
 
+// draw_cover with rounded (squircle) corners: the picture drawn in strips, each row of the corners cut
+// in by the curve, so nothing behind it needs painting over (a picture over a picture)
+static void draw_cover_round(vita2d_texture *t, float x, float y, float w, float h, float r, unsigned tint) {
+  DRAW_GUARD(x, y, w, h);
+  x = floorf(x + 0.5f); y = floorf(y + 0.5f); w = floorf(w + 0.5f); h = floorf(h + 0.5f); // (whole pixels: no seams between the rows)
+  float tw = vita2d_texture_get_width(t), th = vita2d_texture_get_height(t);
+  float s = fmaxf(w / tw, h / th);
+  float sw = w / s, sh = h / s;
+  float sx = (tw - sw) / 2, sy = (th - sh) * 0.3f;
+  r *= 1.25f;
+  if (r > w / 2) r = w / 2;
+  if (r > h / 2) r = h / 2;
+  int rows = (int)ceilf(r);
+  for (int i = 0; i < rows; i++) {
+    float v = fmaxf(0, 1 - (i + 0.5f) / r); // (how far up the corner's curve this row is)
+    float in_ = r - r * powf(1 - powf(v, 3.5f), 1 / 3.5f);
+    float cw = w - in_ * 2;
+    if (cw <= 0) continue;
+    // (the row at the top, then its mirror at the bottom)
+    in_ = floorf(in_ + 0.5f); cw = w - in_ * 2;
+    vita2d_draw_texture_tint_part_scale(t, x + in_, y + i, sx + in_ / s, sy + i / s, cw / s, 1 / s, s, s, tint);
+    vita2d_draw_texture_tint_part_scale(t, x + in_, y + h - i - 1, sx + in_ / s, sy + (h - i - 1) / s, cw / s, 1 / s, s, s, tint);
+  }
+  if (h - rows * 2 > 0)
+    vita2d_draw_texture_tint_part_scale(t, x, y + rows, sx, sy + rows / s, sw, (h - rows * 2) / s, s, s, tint);
+}
+
 // ---------- input ----------
 typedef struct {
   unsigned now, pressed, held_ms[32];
@@ -2332,6 +2359,16 @@ static int sel_in_view(const void *grid, int sel, float scroll, float view_h) {
   for (int k = grid_first(g, scroll); k < g->n; k++) if (g->r[k].y >= scroll - 2) return k;
   return grid_first(g, scroll);
 }
+// (the Wi-Fi mark, drawn: three arcs and a dot, centred on (cx, cy) as a whole)
+static void wifi_mark(float cx, float cy, unsigned c) {
+  float by = cy + 6.5f; // (the dot: the arcs' centre)
+  circle(cx, by, 2.2f, c);
+  for (int k = 1; k <= 3; k++) {
+    float r = 4.6f * k, thick = 1.25f;
+    int n = 6 + k * 5;
+    for (int j = 0; j <= n; j++) { float an = -2.36f + 1.57f * j / n; circle(cx + cosf(an) * r, by + sinf(an) * r, thick, c); }
+  }
+}
 // (the connection as a small pressed-in button: dark inside with its shadow at the top and a lit lip
 //  below, the wifi mark green online and red not; a tap says which)
 static int online_inset(int right) {
@@ -2342,7 +2379,7 @@ static int online_inset(int right) {
   rrect_round(x + 1, y + 1, d - 2, d * 0.45f, d * 0.22f, RGBA(0, 0, 0, 70));       // (shadow inside its top)
   rrect_round(x + 7, y + d - 3, d - 14, 1.5f, 0.75f, with_alpha(TEXT, 30));          // (the lip lit below)
   circle(x + d / 2, y + d / 2, 13, with_alpha(c, 34));                                 // (its colour glowing in it)
-  icon("wifi", x + d / 2, y + d / 2 - 1, c);
+  wifi_mark(x + d / 2.0f, y + d / 2.0f, c);
   if (hit(x - 4, y - 6, d + 8, d + 12)) { sfx(SFX_TICK); say(on ? "Online" : "Offline: turn on Wi-Fi in the Vita's settings (the Library still works)"); net_state_cached = -1; }
   return d;
 }
@@ -2355,18 +2392,19 @@ static int stats_corner(void) {
   circle(W, y0, R + 2, with_alpha(BG, 200));
   circle(W, y0, R, SURF2);
   circle(W, y0, R - 1, mix_col(with_alpha(SURF2, 255), ACC, 0.18f));
-  // (a ring chart: three parts of a whole, the stats page's own look)
+  // (a chart: four bars and a line of dots across them, each dot set off from its bar by a gap)
   (void)on;
   {
-    float ccx = W - 23, ccy = y0 + 22, rr = 11;
-    static const float part[3] = {0.52f, 0.28f, 0.20f};
-    unsigned col[3] = {ACC, TEXT, with_alpha(TEXT, 90)};
-    float a0 = -1.5708f;
-    for (int k = 0; k < 3; k++) {
-      int n = (int)(part[k] * 44);
-      for (int d = 0; d < n - 1; d++) { float a = a0 + (d + 0.5f) / 44.0f * 6.2832f; circle(ccx + cosf(a) * rr, ccy + sinf(a) * rr, 3.2f, col[k]); }
-      a0 += part[k] * 6.2832f;
+    unsigned bgc = mix_col(with_alpha(SURF2, 255), ACC, 0.18f), ink = with_alpha(mix_col(TEXT, ACC, 0.55f), 205); // (quiet: in the accent)
+    float bx0 = W - 34.4f, base = y0 + 37.3f, sp = 6.5f; // (centred on the quarter circle's middle, 4R/3π from each edge)
+    static const float bh[4] = {8.5f, 16.5f, 11.5f, 22};
+    for (int k = 0; k < 4; k++) rrect_round(bx0 + k * sp - 2.1f, base - bh[k], 4.2f, bh[k], 1.3f, ink);
+    for (int k = 0; k < 3; k++) { // (the line: a row of little discs, thick and smooth)
+      float x1 = bx0 + k * sp, yA = base - bh[k], x2 = bx0 + (k + 1) * sp, yB = base - bh[k + 1];
+      for (int j = 0; j <= 12; j++) { float t = j / 12.0f; circle(x1 + (x2 - x1) * t, yA + (yB - yA) * t, 2.0f, bgc); }
+      for (int j = 0; j <= 12; j++) { float t = j / 12.0f; circle(x1 + (x2 - x1) * t, yA + (yB - yA) * t, 0.95f, ink); }
     }
+    for (int k = 0; k < 4; k++) { circle(bx0 + k * sp, base - bh[k], 3.6f, bgc); circle(bx0 + k * sp, base - bh[k], 2.3f, ink); }
   }
   // (its own touch: the corner, a little more than drawn)
   if (in.tap && in.tap_x >= W - R - 4 && in.tap_y < y0 + R + 4 && hypotf(W - in.tap_x, in.tap_y - y0) < R + 8) {
@@ -3033,7 +3071,7 @@ static void fv_back_draw(int a) {
   circle(38, 28, 15, with_alpha(TEXT, a / 16)); // (light from above)
   icon("back", 37, 34, with_alpha(TEXT, a));
 }
-static int fv_back_hit(void) { return in.tap && in.tap_x < 96 && in.tap_y < 82; }
+static int fv_back_hit(void) { return in.tap && in.tap_x < 70 && in.tap_y < 82; }
 // A picture's (or video's) resolution as a rank, by its pixels against the usual sizes:
 //   S+ 4K and up (8.3 MP)  ·  S 1440p and up, gold  ·  A+ about 1080p or a little over  ·  A a little
 //   under 1080p, green  ·  B+ about 720p, blue  ·  B  ·  C+  ·  C small, pink
@@ -3050,6 +3088,14 @@ static const char *res_rank(int w, int h, unsigned *col) {
 }
 // (the rank in a squircle beside the back button: its colour, a glassy top; S+ with a shine running
 //  across it)
+static unsigned res_info_at, res_drawn_at; // (the ranks box: open since; the badge last drawn)
+// (a tap for the badge: on it or its label, the ranks explained; while they show, any tap closes them)
+static int res_info_tap(void) {
+  if (!in.tap) return 0;
+  if (res_info_at) { res_info_at = 0; sfx(SFX_CLOSE); return 1; }
+  if (in.tap_x >= 70 && in.tap_x < 216 && in.tap_y < 58) { res_info_at = frame_no ? frame_no : 1; sfx(SFX_OPEN); return 1; }
+  return 0;
+}
 static void res_badge(int w, int h, int a) {
   if (w <= 0 || h <= 0) return;
   unsigned c;
@@ -3063,6 +3109,35 @@ static void res_badge(int w, int h, int a) {
     if (sx > -10 && sx < bw - 4) rrect(x + fmaxf(2, sx), y + 2, fminf(10, bw - 2 - fmaxf(2, sx)), bh - 4, 4, with_alpha(RGBA(255, 255, 255, 255), a * 90 / 255));
   }
   text_center((int)(x + bw / 2), (int)(y + 24), with_alpha(RGBA(24, 16, 20, 255), a), 18, r);
+  // (what it is, beside it: "Quality" and its size; a tap on either opens the ranks explained)
+  char sz[32];
+  snprintf(sz, sizeof sz, "%d \xc3\x97 %d", w, h);
+  { int lw = text_w(11, sz), qw = text_w(12, "Quality"); if (qw > lw) lw = qw;
+    rrect(x + bw + 3, y, lw + 12, bh, 9, with_alpha(RGBA(0, 0, 0, 255), a * 70 / 255)); } // (a dim plate: readable on a bright picture)
+  text((int)(x + bw + 8), (int)y + 14, with_alpha(TEXT, a), 12, "Quality");
+  text((int)(x + bw + 8), (int)y + 29, with_alpha(TEXT, a * 170 / 255), 11, sz);
+  if (res_info_at && res_drawn_at + 1 < frame_no) res_info_at = 0; // (the controls were hidden: closed with them)
+  res_drawn_at = frame_no;
+  unsigned info_at = res_info_at;
+  if (!info_at) return;
+  static const struct { const char *r, *what; } RK[8] = {
+    {"S+", "4K and up"}, {"S", "1440p and up"}, {"A+", "about 1080p"}, {"A", "a little under 1080p"},
+    {"B+", "about 720p"}, {"B", "under 720p"}, {"C+", "small"}, {"C", "very small"}};
+  float u = fminf(1, (frame_no - info_at) / 10.0f), e = 1 - (1 - u) * (1 - u);
+  int ba = (int)(a * e), bx = (int)x, by = (int)(y + bh + 8 - (1 - e) * 10), bw2 = 236, bh2 = 40 + 8 * 20;
+  rrect(bx, by, bw2, bh2, 10, RGBA(0, 0, 0, ba * 150 / 255));
+  rrect(bx + 1, by + 1, bw2 - 2, 26, 9, with_alpha(TEXT, ba / 16));
+  text(bx + 12, by + 22, with_alpha(TEXT, ba), 13, "Quality: by its resolution");
+  for (int k = 0; k < 8; k++) {
+    unsigned kc;
+    static const int px[8] = {3840 * 2160, 2560 * 1440, 1920 * 1080, 1280 * 1024, 1280 * 720, 800 * 600, 640 * 400, 1};
+    res_rank(px[k], 1, &kc);
+    int ry = by + 34 + k * 20, on = !strcmp(RK[k].r, r);
+    if (on) rrect(bx + 6, ry, bw2 - 12, 19, 6, with_alpha(TEXT, ba / 8));
+    rrect(bx + 12, ry + 2, 30, 15, 5, with_alpha(kc, ba));
+    text_center(bx + 27, ry + 14, with_alpha(RGBA(24, 16, 20, 255), ba), 11, RK[k].r);
+    text(bx + 52, ry + 14, with_alpha(TEXT, on ? ba : ba * 190 / 255), 12, RK[k].what);
+  }
 }
 static void fmt_time(uint64_t ms, char *o, size_t n);
 // "Similar to this": the two tags of these that say most what it is: specific ones (a character, a
@@ -3442,6 +3517,7 @@ static void draw_viewer(void) {
   else if (in.tap && details_y < 0.5f) {
     int chrome_on = frame_no < chrome_until || (vid && !vid_clip && lv_video_paused(vid));
     if (vid && !vid_clip && chrome_on && vctl_tap(vid, in.tap_x, in.tap_y, &vseek)) chrome_until = frame_no + 180;
+    else if (frame_no < chrome_until && res_info_tap()) chrome_until = frame_no + 600; // (the controls stay while it's read)
     else if (frame_no < chrome_until && fv_back_hit()) { sfx(SFX_BACK); close_viewer(); return; }
     else if (frame_no < chrome_until && in.tap_x > W - 70 && in.tap_y < 60) { details = 1; }
     else if (frame_no < chrome_until && view_btn_hit(is_video(it), W - 140)) { view_options_open(is_video(it)); return; }
@@ -3578,17 +3654,41 @@ static void draw_viewer(void) {
     int a = frame_no + 30 > chrome_until ? (int)((chrome_until - frame_no) * 8) : 240;
     if (a > 240 || a < 0) a = 240;
     grad(0, H - 90, W, 90, RGBA(0, 0, 0, 255), 0, 90 * a / 300, 0);
-    for (int d = -6; d <= 6; d++) {
-      int k = vk + d;
+    // (the strip glides to the new one, the ones near the middle growing as they come to it, and the
+    //  highlight gives a little bounce each time it lands on another)
+    static float fs_pos = -100;
+    static int fs_last = -1;
+    static unsigned fs_changed;
+    if (fs_pos < -50 || fabsf(fs_pos - vk) > 10) fs_pos = vk;
+    if (fs_last != vk) { fs_last = vk; fs_changed = frame_no ? frame_no : 1; }
+    fs_pos += (vk - fs_pos) * ease(0.2f);
+    if (fabsf(fs_pos - vk) < 0.002f) fs_pos = vk;
+    float pop = 0;
+    if (fs_changed) {
+      float u = (frame_no - fs_changed) / 24.0f;
+      if (u >= 1) fs_changed = 0; else pop = sinf(u * 3.14159f) * (1 - u) * 0.12f;
+    }
+    // the highlight: in the middle, a rounded ring of the accent (a glow behind it), springing
+    {
+      float hs = 66 * (1 + pop), hx = W / 2.0f - hs / 2, hy = H - 14 - 66 / 2.0f - hs / 2;
+      rrect(hx - 7, hy - 7, hs + 14, hs + 14, 16, with_alpha(ACC, a * 50 / 255));
+      rrect(hx - 3, hy - 3, hs + 6, hs + 6, 13, with_alpha(ACC, a));
+    }
+    int c0 = (int)floorf(fs_pos + 0.5f);
+    for (int d = -7; d <= 7; d++) {
+      int k = c0 + d;
       if (k < 0 || k >= nshown) continue;
-      float cx = W / 2.0f + d * 70, sz = d ? 58 : 66;
-      float x = cx - sz / 2, y = H - 14 - sz;
-      if (!d) rrect(x - 3, y - 3, sz + 6, sz + 6, 9, with_alpha(ACC, a));
+      float off = k - fs_pos, dist = fminf(1, fabsf(off));
+      float cx = W / 2.0f + off * 70, sz = 66 - 8 * dist;
+      if (cx < -40 || cx > W + 40) continue;
+      if (k == vk) sz *= 1 + pop;
+      float x = cx - sz / 2, y = H - 14 - 66 / 2.0f - sz / 2 - (1 - dist) * 2;
       vita2d_texture *ft = thumb_of(shown[k]);
-      if (ft) draw_cover(ft, x, y, sz, sz, RGBA(255, 255, 255, d ? a * 3 / 4 : a));
-      else rrect(x, y, sz, sz, 6, with_alpha(SURF2, a));
-      if (is_locked(shown[k])) vita2d_draw_rectangle(x, y, sz, sz, RGBA(14, 10, 14, 220));
-      if (d && in.tap && in.tap_x >= x && in.tap_x < x + sz && in.tap_y >= y && in.tap_y < y + sz) { sfx(SFX_TICK); show_item(k); return; }
+      int ta = (int)(a * (1 - 0.3f * dist) * (1 - fminf(1, fabsf(off) / 8) * 0.6f));
+      if (ft) draw_cover_round(ft, x, y, sz, sz, 9, RGBA(255, 255, 255, ta));
+      else rrect(x, y, sz, sz, 9, with_alpha(SURF2, ta));
+      if (is_locked(shown[k])) rrect(x, y, sz, sz, 9, RGBA(14, 10, 14, 220));
+      if (k != vk && in.tap && in.tap_x >= x && in.tap_x < x + sz && in.tap_y >= y && in.tap_y < y + sz) { sfx(SFX_TICK); show_item(k); return; }
     }
   }
 

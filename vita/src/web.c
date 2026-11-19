@@ -3390,6 +3390,7 @@ static void draw_webview(void) {
   else if (in.tap && wdetails_y < 0.5f) {
     // (a tap on the video's bar: there)
     if (wv_vid && vchrome && in.tap_y > 70 && vctl_tap(wv_vid, in.tap_x, in.tap_y, &vseek)) wchrome_until = frame_no + 180;
+    else if (frame_no < wchrome_until && res_info_tap()) wchrome_until = frame_no + 600;
     else if (frame_no < wchrome_until && fv_back_hit()) { sfx(SFX_BACK); wv_drop(); screen = wv_back; return; }
     else if (frame_no < wchrome_until && in.tap_x > W - 70 && in.tap_y < 60) wdetails = 1;
     else if (frame_no < wchrome_until && view_btn_hit(lv_post_is_video(p), wv_view_rx())) { view_options_open(lv_post_is_video(p)); return; }
