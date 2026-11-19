@@ -13,6 +13,7 @@ static struct {
   char hash[65], salt[33], decoy_hash[65], decoy_vault[512];
   int wrong;          // (wrong tries since the last right one)
   long long wrong_at; // (the last one's time)
+  int len, decoy_len;  // (how many digits each has: the pad's dots; 0 not known, from before it was kept)
 } pin;
 static char pin_typed[8];
 static int pin_sel = 4;       // (the key the D-pad is on: 0-9 are the digits' keys, 10 back, 11 OK)
@@ -35,7 +36,7 @@ static void pin_hash(const char *p, const char *salt, char out[65]) {
 static void pin_save(void) {
   FILE *f = fopen(DATA "/pin.txt.part", "w");
   if (!f) return;
-  fprintf(f, "%d\n%d\n%s\n%s\n%s\n%s\n%d\n%lld\n", pin.on, pin.on_wake, pin.hash, pin.salt, pin.decoy_hash, pin.decoy_vault, pin.wrong, pin.wrong_at);
+  fprintf(f, "%d\n%d\n%s\n%s\n%s\n%s\n%d\n%lld\n%d\n%d\n", pin.on, pin.on_wake, pin.hash, pin.salt, pin.decoy_hash, pin.decoy_vault, pin.wrong, pin.wrong_at, pin.len, pin.decoy_len);
   fclose(f);
   sceIoRemove(DATA "/pin.txt");
   sceIoRename(DATA "/pin.txt.part", DATA "/pin.txt");
@@ -60,6 +61,10 @@ static void pin_load(void) {
   pin_line(f, pin.decoy_vault, sizeof pin.decoy_vault);
   pin_line(f, b, sizeof b); pin.wrong = atoi(b);
   pin_line(f, b, sizeof b); pin.wrong_at = atoll(b);
+  pin_line(f, b, sizeof b); pin.len = atoi(b);
+  pin_line(f, b, sizeof b); pin.decoy_len = atoi(b);
+  if (pin.len < 4 || pin.len > 6) pin.len = 0;
+  if (pin.decoy_len < 4 || pin.decoy_len > 6) pin.decoy_len = 0;
   fclose(f);
   if (strlen(pin.hash) != 64 || !pin.salt[0]) pin.on = 0;
 }
@@ -70,6 +75,7 @@ static void pin_set(const char *p, int decoy) {
     for (int k = 0; k < 16; k++) snprintf(pin.salt + 2 * k, 3, "%02x", r[k]);
   }
   pin_hash(p, pin.salt, decoy ? pin.decoy_hash : pin.hash);
+  if (decoy) pin.decoy_len = (int)strlen(p); else pin.len = (int)strlen(p);
   // (turned on: it locks when the Vita wakes too, by default; a new PIN keeps the choice made)
   if (!decoy) { if (!pin.on) pin.on_wake = 1; pin.on = 1; }
   pin_save();
@@ -216,8 +222,10 @@ static void draw_pin(void) {
   // the dots: each pops in when typed, drops away when taken back or wrong; lit in turn when right
   int n = (int)strlen(pin_typed);
   const float dy0 = 112 + rise, dgap = 24;
-  for (int k = 0; k < 6; k++) {
-    float dx = cx - dgap * 2.5f + k * dgap + shake;
+  int nd = pin.len ? pin.len : n > 4 ? n : 4; // (as many as the PIN has; not known: as typed, at least four)
+  if (pin_ok_at && !pin.len) nd = n > 0 ? n : 4;
+  for (int k = 0; k < nd; k++) {
+    float dx = cx - dgap * (nd - 1) / 2.0f + k * dgap + shake;
     int filled = k < n || pin_ok_at;
     circle(dx, dy0, 6, with_alpha(TEXT, (int)(70 * in_t * fade)));
     circle(dx, dy0, 4.5f, with_alpha(BG, a)); // (an open ring until it's typed)
@@ -281,7 +289,9 @@ static void draw_pin(void) {
   if ((in.pressed & SCE_CTRL_CIRCLE) && n) { pin_dot_gone_at[n - 1] = frame_no; pin_typed[n - 1] = 0; pin_key_at[9] = frame_no ? frame_no : 1; sfx(SFX_BACK); }
   if (in.pressed & SCE_CTRL_START) pin_try();
   // (six digits: tried at once, once its pop has shown)
-  if (strlen(pin_typed) == 6 && frame_no - pin_dot_at[5] > 6) pin_try();
+  // (all its digits: tried at once, once the last one's pop has shown; the decoy's length too)
+  int tn = (int)strlen(pin_typed);
+  if (tn && (tn == 6 || tn == pin.len || tn == pin.decoy_len) && frame_no - pin_dot_at[tn - 1] > 6) pin_try();
 }
 
 // ---------- stats ----------

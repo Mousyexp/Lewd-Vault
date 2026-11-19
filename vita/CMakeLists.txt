@@ -73,7 +73,7 @@ vita_create_vpk(${LV_VPK_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
   FILE ${CMAKE_CURRENT_BINARY_DIR}/template.xml sce_sys/livearea/contents/template.xml
   FILE font.ttf font.ttf
-  FILE cacert.pem cacert.pem
+  FILE certs.bin certs.bin
   FILE splash.png splash.png
   FILE sce_sys/pic0.png sce_sys/pic0.png
   FILE sounds/tick.wav sounds/tick.wav

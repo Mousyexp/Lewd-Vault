@@ -653,6 +653,15 @@ static void web_start(void) {
 // ---------- searches ----------
 
 static Grid wgrid;
+// (the Browser's cards: three sizes as the Library's, pinched bigger or smaller)
+static const int WSIZE_H[] = {120, 168, 220};
+static float post_aspect(int k);
+static void web_regrid(void) {
+  int keep = ROW_H, sz = cfg.wsize >= 1 && cfg.wsize <= 3 ? cfg.wsize - 1 : 1;
+  ROW_H = WSIZE_H[sz];
+  grid_build(&wgrid, nposts, post_aspect);
+  ROW_H = keep;
+}
 static float post_aspect(int k) { return posts[k].width > 0 && posts[k].height > 0 ? (float)posts[k].width / posts[k].height : 0.75f; }
 static float wscroll, wscroll_v;
 // picking up where the Browser was: the pages to load again and the post to go back to (-1: none)
@@ -726,6 +735,7 @@ static void sw_open(void);
 static void wv_offline(void);
 static int fav_find(int kind, const char *page);
 static LvVideo *wv_vid;
+static GifPlay *wv_gif; // (an animated GIF playing in the full view)
 static int wv_vid_post = -1; // (the post it plays)
 static const LvGrow *wv_stream; // (the player's download, while it's still coming)
 static float wzoom = 1, wpan_x, wpan_y, wswipe;
@@ -824,6 +834,7 @@ static void wv_drop(void) {
   wv_resume_to = -1;
   if (wv_vid) { video_close_later(wv_vid); wv_vid = NULL; }
   wv_vid_post = -1;
+  if (wv_gif) { gif_play_close(wv_gif); wv_gif = NULL; }
   plain_wipe_ask();
   wv_stream = NULL;
   release_tex(wv_tex);
@@ -851,6 +862,142 @@ static void wv_show(int k) {
   pthread_mutex_unlock(&wmx);
   // (and the next ones: their previews ahead of time)
 }
+// ---------- the downloads pane: the edge tab at the right, or a swipe in from it ----------
+// What's being saved and what was, newest first: its preview, its name, how big, how fast, and a
+// progress pill while it comes. The same size as the Library's tags pane. A tap beside it, the arrow,
+// a swipe right or ○ close it.
+typedef struct { char name[96], site[40]; int post; unsigned gen; int state; int64_t have, total; float speed; unsigned t0, t1; char why[80]; } DlItem;
+#define DL_MAX 20
+static DlItem dls[DL_MAX];
+static int ndl;
+static int dlp_open, dlp_seen; // (open; the downloads looked at: the tab's dot for new ones)
+static float dlp_t, dlp_scroll;
+static void dl_begin(int post) {
+  if (post < 0 || post >= nposts) return;
+  memmove(dls + 1, dls, (DL_MAX - 1) * sizeof *dls);
+  if (ndl < DL_MAX) ndl++;
+  DlItem *d = &dls[0];
+  memset(d, 0, sizeof *d);
+  const LvPost *pp = &posts[post];
+  const char *f = pp->file ? strrchr(pp->file, '/') : NULL;
+  snprintf(d->name, sizeof d->name, "%s", f && f[1] ? f + 1 : pp->page ? pp->page : "a post");
+  d->name[strcspn(d->name, "?#")] = 0;
+  snprintf(d->site, sizeof d->site, "%s", LV_SITES[pp->site1 > 0 && pp->site1 <= LV_NSITES ? pp->site1 - 1 : cfg.site].name);
+  d->post = post; d->gen = wgen; d->t0 = frame_no;
+}
+static void dl_end(int ok, const char *why) {
+  if (!ndl || dls[0].state) return;
+  dls[0].state = ok ? 1 : 2;
+  dls[0].t1 = frame_no;
+  if (dls[0].total <= 0) dls[0].total = dls[0].have;
+  if (why) snprintf(dls[0].why, sizeof dls[0].why, "%s", why);
+}
+// (each frame: the one going, its bytes and speed)
+static void dl_tick(void) {
+  if (!ndl || dls[0].state) return;
+  int64_t now = 0, total = 0;
+  lv_http_progress_bytes(&big_progress, &now, &total);
+  static int64_t last;
+  static unsigned last_at;
+  DlItem *d = &dls[0];
+  if (now < d->have) last = now; // (another transfer behind the same pointer: from its start)
+  if (frame_no - last_at >= 30) {
+    float sp = (float)(now - last) * 60.0f / (float)(frame_no - last_at ? frame_no - last_at : 1);
+    d->speed = d->speed > 0 ? d->speed * 0.6f + sp * 0.4f : sp;
+    last = now; last_at = frame_no;
+  }
+  d->have = now; if (total > 0) d->total = total;
+}
+static void fmt_bytes(int64_t b, char *o, size_t n) {
+  if (b >= 1024 * 1024) snprintf(o, n, "%.1f MB", b / 1048576.0);
+  else snprintf(o, n, "%d KB", (int)(b / 1024));
+}
+static int dl_going(void) { return ndl && !dls[0].state; }
+// (the edge tab: a download icon and the arrow, a dot when something's come since it was looked at)
+static void draw_dlp_tab(void) {
+  if (dlp_t > 0.01f) return;
+  int tx = W - 40, ty = H / 2 - 64, tw = 48, th = 128;
+  rrect(tx, ty, tw, th, 16, with_alpha(SURF2, 235));
+  rrect(tx + 1, ty + 1, tw - 2, th / 2, 15, with_alpha(TEXT, 10));
+  icon("save", tx + 20, ty + 40, dl_going() ? ACC : TEXT);
+  icon("chev_l", tx + 20, ty + 84, DIM);
+  if (dl_going()) {
+    float f = dls[0].total > 0 ? (float)dls[0].have / dls[0].total : 0;
+    rrect_round(tx + 8, ty + th - 18, 24, 5, 2.5f, with_alpha(TEXT, 40));
+    rrect_round(tx + 8, ty + th - 18, 24 * f, 5, 2.5f, ACC);
+  } else if (ndl > dlp_seen) circle(tx + 34, ty + 18, 6, ACC2);
+}
+static int dlp_gesture(void) {
+  if (dlp_open) return 0; // (the caller: only with no sheet up)
+  if (hit(W - 44, H / 2 - 70, 44, 140)) { dlp_open = 1; dlp_scroll = 0; dlp_seen = ndl; sfx(SFX_OPEN); return 1; }
+  if (in.touching && in.down_x > W - 30 && in.down_y > TOP && in.down_y < H - BAR && in.down_x - in.tx > 46 && abs(in.down_x - in.tx) > 2 * abs(in.ty - in.down_y)) { dlp_open = 1; dlp_scroll = 0; dlp_seen = ndl; sfx(SFX_OPEN); return 1; }
+  return 0;
+}
+static vita2d_texture *preview_of(int k);
+// 1 while it's on screen (it has the input then)
+static int draw_dlp(void) {
+  dlp_t += ((dlp_open ? 1.0f : 0.0f) - dlp_t) * ease(0.32f);
+  if (fabsf(dlp_t - dlp_open) < 0.01f) dlp_t = (float)dlp_open;
+  if (dlp_t <= 0) return 0;
+  const int pw = 340; // (the tags pane's width)
+  int x = W - (int)(pw * dlp_t);
+  vita2d_draw_rectangle(0, 0, x, H, RGBA(0, 0, 0, (int)(120 * dlp_t)));
+  vita2d_draw_rectangle(x, 0, pw, H, SURF);
+  vita2d_draw_rectangle(x, 0, 2, H, with_alpha(TEXT, 20));
+  icon("save", x + 28, 30, ACC);
+  text(x + 48, 37, TEXT, 20, "Downloads");
+  rrect(x + pw - 58, 10, 48, 40, 20, SURF2);
+  icon("chev_r", x + pw - 34, 30, TEXT);
+  int closing = hit(x + pw - 62, 6, 56, 48);
+  if (!ndl) {
+    text_center(x + pw / 2, H / 2 - 10, DIM, 16, "Nothing saved yet");
+    text_center(x + pw / 2, H / 2 + 16, FAINT, 13, "What you save shows here as it comes");
+  }
+  const int rh = 96, top = 62;
+  float maxs = fmaxf(0, ndl * rh - (H - top - 10));
+  if (in.touching && in.down_x > x && in.ty > top) dlp_scroll -= in.drag_dy;
+  dlp_scroll += in.ly * 10 * ft;
+  if (dlp_scroll < 0) dlp_scroll = 0;
+  if (dlp_scroll > maxs) dlp_scroll = maxs;
+  for (int k = 0; k < ndl; k++) {
+    DlItem *d = &dls[k];
+    int y = top + k * rh - (int)dlp_scroll;
+    if (y + rh < top || y > H) continue;
+    rrect(x + 12, y, pw - 24, rh - 8, 16, SURF2);
+    // its preview (while the search it came from is still the one shown), else an icon
+    vita2d_texture *pv = d->gen == wgen && d->post >= 0 && d->post < nposts ? preview_of(d->post) : NULL;
+    if (pv) draw_cover(pv, x + 22, y + 10, 68, 68, RGBA(255, 255, 255, 255));
+    else { rrect(x + 22, y + 10, 68, 68, 12, with_alpha(ACC, 40)); icon("image", x + 56, y + 44, ACC); }
+    text_fit(x + 102, y + 26, TEXT, 15, d->name, pw - 130);
+    char a[48], b[48], line[140];
+    fmt_bytes(d->have, a, sizeof a);
+    fmt_bytes(d->total, b, sizeof b);
+    if (d->state == 0) {
+      char sp[32];
+      fmt_bytes((int64_t)d->speed, sp, sizeof sp);
+      if (d->total > 0) snprintf(line, sizeof line, "%s of %s  ·  %s/s", a, b, sp);
+      else snprintf(line, sizeof line, "%s  ·  %s/s", a, sp);
+      text_fit(x + 102, y + 48, DIM, 13, line, pw - 130);
+      float f = d->total > 0 ? (float)d->have / d->total : 0;
+      rrect_round(x + 102, y + 60, pw - 140, 10, 5, with_alpha(BG, 255));
+      if (f > 0) rrect_round(x + 102, y + 60, fmaxf(10, (pw - 140) * f), 10, 5, ACC);
+      else { float run = fmodf(frame_no / 60.0f, 1.0f); rrect_round(x + 102 + (pw - 170) * run, y + 60, 30, 10, 5, ACC); }
+    } else if (d->state == 1) {
+      float secs = (d->t1 - d->t0) / 60.0f;
+      snprintf(line, sizeof line, "✓ Saved  ·  %s  ·  %s  ·  %.0f s", d->total > 0 ? b : a, d->site, secs < 1 ? 1 : secs);
+      text_fit(x + 102, y + 48, ACC, 13, line, pw - 130);
+    } else {
+      snprintf(line, sizeof line, "✕ %s", d->why[0] ? d->why : "It didn't save");
+      text_fit(x + 102, y + 48, ACC2, 13, line, pw - 130);
+    }
+    if (d->state) text_fit(x + 102, y + 68, FAINT, 12, d->site, pw - 130);
+  }
+  if (closing || (in.tap && in.tap_x < x) || (in.pressed & SCE_CTRL_CIRCLE) ||
+      (in.flicked && in.fvx > 0 && in.down_x > x && fabsf(in.fvx) > fabsf(in.fvy))) { dlp_open = 0; sfx(SFX_CLOSE); }
+  dlp_seen = ndl;
+  in.pressed = 0; in.tap = 0; in.touching = 0; in.flicked = 0; in.ly = 0;
+  return 1;
+}
 // (the save page's choices; -1 level: from the post's rating; "" category: the usual one)
 static int sw_nsfw = -1, sw_stars = 5, sw_notags;
 static char sw_cat[64];
@@ -861,6 +1008,7 @@ static void wv_save(void) {
   int video = lv_post_is_video(&posts[wv]);
   if (wv_raw_post != wv || (!wv_raw && !video)) { say("Still loading…"); return; }
   saving = 1;
+  dl_begin(wv);
   pthread_mutex_lock(&wmx);
   big_job.post = wv;
   big_job.gen = wgen;
@@ -907,7 +1055,7 @@ static void web_take_results(void) {
         // (the ones not taken: freed with the array below)
         if (count < page_ready.count) { for (int k = count; k < page_ready.count; k++) { LvPost *q = &got[k]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); } }
         nposts += count;
-        grid_build(&wgrid, nposts, post_aspect);
+        web_regrid();
 
         if (nposts > 0 && page_ready.page > 1) sfx(SFX_MORE);
         free(got);
@@ -969,10 +1117,16 @@ static void web_take_results(void) {
         wv_rawn = d->an;
         wv_raw_post = d->post;
         snprintf(wv_ext, sizeof wv_ext, "%s", d->ext);
+        // (a GIF: played, its frames on a thread of their own; the preview meanwhile)
+        if (wv < nposts && !strcmp(posts[wv].ext, "gif") && wv_raw && !wv_gif) {
+          wv_gif = gif_play_open(wv_raw, wv_rawn);
+          LOG("gif %dx%d -> %p\n", wv_gif ? wv_gif->w : 0, wv_gif ? wv_gif->h : 0, (void *)wv_gif);
+          if (wv_gif) { wv_err[0] = 0; wv_failed = 0; }
+        }
         if (wv < nposts && lv_post_is_video(&posts[wv]) && !d->err[0] && !wv_vid) { // (not if it's already playing as it came)
           make_room(32u << 20); // (a player: room first)
           wv_vid = lv_video_open(video_path, NULL, 1);
-          LOG("video open %s -> %p\n", video_path, (void *)wv_vid);
+          LOG("video open %s %dx%d %s -> %p\n", posts[wv].ext, posts[wv].width, posts[wv].height, video_path, (void *)wv_vid);
           if (wv_vid) { lv_video_set_volume(wv_vid, cfg.volume * 32768 / 100); wv_vid_post = wv; wres_arm(); }
           else snprintf(wv_err, sizeof wv_err, "This video can't be played on the Vita (it can still be saved)");
         }
@@ -981,6 +1135,7 @@ static void web_take_results(void) {
       }
     } else if (d->kind == WD_SAVE) {
       saving = 0;
+      dl_end(!d->err[0] && d->added.uid[0], d->err[0] ? d->err : NULL);
       if (d->err[0] || !d->added.uid[0]) { sfx(SFX_ERROR); say(d->err[0] ? d->err : "It couldn't be saved"); }
       else if (d->vgen == vgen && loaded_vault) {
         // on the card already (the save thread wrote it): now into the loaded vault
@@ -2084,7 +2239,44 @@ static void draw_web(void) {
   float view_h = H - TOP - BAR;
   float max_scroll = fmaxf(0, content - view_h);
   int sheet_open = sheet != SH_NONE;
+  dl_tick();
+  if (!sheet_open && !dlp_open) dlp_gesture();
+  int pane_input = dlp_t > 0.01f || dlp_open; // (the pane open: the grid takes no input)
+  Input pane_saved = in;
+  if (pane_input) { in.pressed = 0; in.tap = 0; in.touching = 0; in.flicked = 0; in.ly = 0; in.lx = 0; in.tcount = 0; in.dbl = 0; }
 
+  // (two fingers pinched apart or together: the cards a size bigger or smaller; the card between the
+  //  fingers stays where it is)
+  {
+    static float pd0;
+    if (!sheet_open && in.tcount >= 2) {
+      float d = hypotf(in.t2x - in.tx, in.t2y - in.ty);
+      if (pd0 <= 0) pd0 = d;
+      else if (d > pd0 * 1.35f || d < pd0 * 0.74f) {
+        int cur = cfg.wsize >= 1 && cfg.wsize <= 3 ? cfg.wsize - 1 : 1, ns = cur + (d > pd0 ? 1 : -1);
+        pd0 = d;
+        if (ns >= 0 && ns <= 2) {
+          float mx = (in.tx + in.t2x) / 2.0f, my = (in.ty + in.t2y) / 2.0f, ay = my;
+          int anchor = -1;
+          for (int k = grid_first(&wgrid, wscroll - 8); k < wgrid.n; k++) {
+            Rect r = wgrid.r[k];
+            float ry = TOP + 6 + r.y - wscroll;
+            if (ry > H) break;
+            if (mx >= r.x && mx < r.x + r.w && my >= ry && my < ry + r.h) { anchor = k; ay = ry; break; }
+          }
+          if (anchor < 0) anchor = wsel;
+          cfg.wsize = ns + 1;
+          cfg_save();
+          web_regrid();
+          if (anchor >= 0 && anchor < wgrid.n) { wscroll = TOP + 6 + wgrid.r[anchor].y - ay; wsel = anchor; }
+          sfx(SFX_TOGGLE);
+          static const char *const NM[] = {"Small", "Medium", "Large"};
+          say(NM[ns]);
+        }
+      }
+      in.touching = 0; in.tap = 0; in.flicked = 0; // (a pinch isn't a scroll or a tap)
+    } else if (in.tcount < 2) pd0 = 0;
+  }
   if (!sheet_open) {
     if (in.touching && in.ty > TOP && in.ty < H - BAR) { wscroll -= in.drag_dy; wscroll_v = 0; }
     if (in.flicked && in.down_y > TOP) wscroll_v = -in.fvy * 1.6f;
@@ -2259,6 +2451,8 @@ static void draw_web(void) {
     if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = site_tile_of(cfg.site); sites_tab = 0; sites_scroll = 0; }
   }
   draw_bar();
+  if (!sheet_open) draw_dlp_tab();
+  if (pane_input) { in = pane_saved; draw_dlp(); }
   if (sheet == SH_SITES) draw_sites_sheet();
   else if (sheet == SH_FILTER) draw_filter_sheet();
   else if (sheet == SH_SEARCH) draw_search_sheet();
@@ -2734,6 +2928,9 @@ static int wv_similar(const LvPost *p) {
   char q[160];
   similar_tags(p->tags, NULL, q, sizeof q);
   if (!q[0]) { sfx(SFX_ERROR); say("No tags here to go by"); return 0; }
+  // (only the one that says most what it is: a site's search wants every tag asked for, and two
+  //  specific ones together seldom find anything but this)
+  q[strcspn(q, " ")] = 0;
   sfx(SFX_SELECT);
   snprintf(cfg.wquery, sizeof cfg.wquery, "%s", q);
   wv_drop();
@@ -2745,6 +2942,55 @@ static int wv_similar(const LvPost *p) {
   say(m);
   return 1;
 }
+// 1 when an MP4's index (moov) comes before its pictures (mdat) in its first bytes, 0 when after, -1
+// not known yet (the top-level boxes walked through the first `have` bytes)
+static int mp4_moov_first(const char *path, int64_t have) {
+  SceUID fd = sceIoOpen(path, SCE_O_RDONLY, 0);
+  if (fd < 0) return -1;
+  int64_t at = 0;
+  int r = -1;
+  for (int k = 0; k < 64 && at + 8 <= have; k++) {
+    uint8_t h[16];
+    if (sceIoPread(fd, h, 16, at) < 8) break;
+    uint64_t sz = (uint64_t)h[0] << 24 | h[1] << 16 | h[2] << 8 | h[3];
+    if (sz == 1) sz = (uint64_t)h[8] << 56 | (uint64_t)h[9] << 48 | (uint64_t)h[10] << 40 | (uint64_t)h[11] << 32 | (uint64_t)h[12] << 24 | h[13] << 16 | h[14] << 8 | h[15];
+    if (!memcmp(h + 4, "moov", 4)) { r = 1; break; }
+    if (!memcmp(h + 4, "mdat", 4)) { r = 0; break; }
+    if (sz < 8) break;
+    at += (int64_t)sz;
+  }
+  sceIoClose(fd);
+  return r;
+}
+// The Save pill: big, at the foot on the right, always there for a picture or a GIF (its own ✕□ too),
+// dimmer while the controls are hidden. Not for an episode (its ♥ Favorite and ↓ Offline) or a video
+// (its controls are along the foot).
+static int wv_save_pill(int *x, int *y, int *w, int *h) {
+  if (wv >= nposts || wv_is_long() || lv_post_is_video(&posts[wv]) || sw_on || wdetails) return 0;
+  const char *l = is_saved(&posts[wv]) ? "Saved" : saving ? "Saving\u2026" : "Save";
+  *h = 52; *w = text_w(19, l) + 74; *x = W - 18 - *w; *y = H - 18 - *h;
+  return 1;
+}
+static int wv_save_pill_hit(void) {
+  int x, y, w, h;
+  return wv_save_pill(&x, &y, &w, &h) && in.tap_x >= x - 8 && in.tap_x < x + w + 8 && in.tap_y >= y - 8 && in.tap_y < y + h + 8;
+}
+static void wv_save_pill_draw(int chrome) {
+  int x, y, w, h;
+  if (!wv_save_pill(&x, &y, &w, &h)) return;
+  int saved = is_saved(&posts[wv]), a = chrome ? 255 : 170;
+  const char *l = saved ? "Saved" : saving ? "Saving\u2026" : "Save";
+  rrect_round(x - 1, y + 2, w + 2, h, h / 2.0f, RGBA(0, 0, 0, a / 3));
+  if (saved) glass(x, y, w, h, 1);
+  else {
+    rrect_round(x, y, w, h, h / 2.0f, with_alpha(ACC, a));
+    rrect_round(x + 3, y + 2, w - 6, h * 0.45f, h * 0.22f, with_alpha(TEXT, a / 7)); // (a sheen on top)
+  }
+  unsigned ink = saved ? with_alpha(TEXT, a) : RGBA(20, 12, 16, a);
+  if (saving) spinner(x + 30, y + h / 2, 9);
+  else icon(saved ? "save" : "save", x + 30, y + h / 2, ink);
+  text(x + 50, y + h / 2 + 7, ink, 19, l);
+}
 static void draw_webview(void) {
   if (!nposts) { screen = wv_back; return; }
   { static int last_wv = -1; if (wv != last_wv) { last_wv = wv; if (!whero.closing) memset(&whero, 0, sizeof whero); } } // (a new one: not mid-swipe)
@@ -2753,9 +2999,13 @@ static void draw_webview(void) {
   static int stream_tried = -1, stream_tried_gen; // (once a video: a player that won't open isn't asked every frame)
   if (!wv_vid && dl_post == wv && dl_gen == wgen && wv < nposts && lv_post_is_video(&posts[wv]) && !strcmp(posts[wv].ext, "mp4") && !(stream_tried == wv && stream_tried_gen == wgen)) {
     LvGrow *g = &dl_grow[dl_slot];
-    // (a head start first: 2 MB, or 2% of the file, whichever is more)
+    // (a head start first: 2 MB, or 2% of the file, whichever is more. Played while it comes only when
+    //  it's big (short ones are all here in moments, and then play without waiting on the download) and
+    //  its index (moov) comes before its pictures: one with it at the end can't start until it's all
+    //  here, and a player waiting on reads stalls and jumps)
     int64_t need = g->total > 0 && g->total / 50 > 2 * 1024 * 1024 ? g->total / 50 : 2 * 1024 * 1024;
-    if (g->have >= need || (g->total > 0 && g->have >= g->total)) {
+    int streamable = g->total > 24ll * 1024 * 1024 && g->have >= need && mp4_moov_first(dl_path[dl_slot], g->have) == 1;
+    if (streamable) {
       stream_tried = wv; stream_tried_gen = wgen;
       make_room(32u << 20); // (a player: room first)
       wv_vid = lv_video_open_growing(dl_path[dl_slot], g);
@@ -2770,6 +3020,21 @@ static void draw_webview(void) {
   vita2d_texture *t = NULL;
   int is_frame = 0;
   if (wv_vid) { t = lv_video_frame(wv_vid); is_frame = t != NULL; }
+  if (!t && wv_gif) t = gif_play_frame(wv_gif);
+  // (a video playing with no picture after a few seconds: say why, where it's known: the Vita's
+  //  hardware shows up to 1920 x 1088; bigger ones play only their sound)
+  {
+    static unsigned nopic_since;
+    if (wv_vid && !is_frame && lv_video_pos(wv_vid) > 0) {
+      if (!nopic_since) nopic_since = frame_no;
+      if (frame_no - nopic_since > 180 && !wv_err[0] && wv < nposts) {
+        const LvPost *vp = &posts[wv];
+        if ((long)vp->width * vp->height > 1920L * 1088) snprintf(wv_err, sizeof wv_err, "This video is %d x %d: bigger than the Vita can show (1920 x 1080), so only its sound plays", vp->width, vp->height);
+        else snprintf(wv_err, sizeof wv_err, "The Vita can't show this video's picture (only its sound plays)");
+        LOG("video without a picture: %s %dx%d\n", vp->ext, vp->width, vp->height);
+      }
+    } else nopic_since = 0;
+  }
   // (picked up where it was left: once its length is known, and while downloading once that far is here)
   if (wv_vid && wv_resume_to >= 0 && lv_video_duration(wv_vid) > 0) {
     uint64_t d = lv_video_duration(wv_vid);
@@ -2828,11 +3093,16 @@ static void draw_webview(void) {
     return;
   }
   if (wv_loading) {
-    spinner(W / 2, H / 2 - 30, 22);
+    // (a striped pill under the middle, with how much: up where the eye is, not at the very foot)
     float f = big_progress;
-    rrect(W / 2 - 120, H - 30, 240, 6, 3, with_alpha(TEXT, 50));
-    if (f > 0) rrect(W / 2 - 120, H - 30, 240 * fminf(1, f), 6, 3, ACC);
-    if (lv_post_is_video(p)) text_center(W / 2, H - 40, DIM, 14, "Downloading the video…");
+    int64_t got = 0, all = 0;
+    lv_http_progress_bytes(&big_progress, &got, &all);
+    pill_progress(W / 2 - 160, H / 2 + 40, 320, 22, f > 0 ? f : -1, 255);
+    char m[80], a1[24], a2[24];
+    fmt_bytes(got, a1, sizeof a1); fmt_bytes(all, a2, sizeof a2);
+    if (all > 0) snprintf(m, sizeof m, "%s%s of %s", lv_post_is_video(p) ? "The video: " : "", a1, a2);
+    else snprintf(m, sizeof m, "%s", lv_post_is_video(p) ? "Downloading the video\u2026" : "Loading\u2026");
+    text_center(W / 2, H / 2 + 88, DIM, 16, m);
   }
   if (wv_err[0]) text_center(W / 2, (int)avail_h - 50, ACC2, 15, wv_err);
 
@@ -2879,6 +3149,7 @@ static void draw_webview(void) {
   // (an episode loading or paused: its card, whose taps are its own)
   int card_tap = wdetails_y < 0.05f && whero.drag <= 0 && wv_is_long() && (!wv_vid || lv_video_paused(wv_vid)) && !sw_on && wv_episode_card(p);
   if (card_tap) {}
+  else if (in.tap && wv_save_pill_hit()) { if (!is_saved(p) && !saving) sw_open(); else sfx(SFX_TICK); return; }
   else if (in.dbl && wv_vid && wdetails_y < 0.5f && vctl_dbl_side(in.tap_x)) {
     int sd = vctl_dbl_side(in.tap_x);
     vseek = (int64_t)lv_video_pos(wv_vid) + sd * 10000;
@@ -2888,7 +3159,7 @@ static void draw_webview(void) {
   else if (in.tap && wdetails_y < 0.5f) {
     // (a tap on the video's bar: there)
     if (wv_vid && vchrome && in.tap_y > 70 && vctl_tap(wv_vid, in.tap_x, in.tap_y, &vseek)) wchrome_until = frame_no + 180;
-    else if (frame_no < wchrome_until && in.tap_x < 70 && in.tap_y < 60) { sfx(SFX_BACK); wv_drop(); screen = wv_back; return; }
+    else if (frame_no < wchrome_until && fv_back_hit()) { sfx(SFX_BACK); wv_drop(); screen = wv_back; return; }
     else if (frame_no < wchrome_until && in.tap_x > W - 70 && in.tap_y < 60) wdetails = 1;
     else if (frame_no < wchrome_until && view_btn_hit(lv_post_is_video(p), wv_view_rx())) { view_options_open(lv_post_is_video(p)); return; }
     else if (frame_no < wchrome_until && in.tap_y < 60 && in.tap_x < W - 64 && in.tap_x > W - 420) {
@@ -2923,15 +3194,13 @@ static void draw_webview(void) {
   }
   if (vseek != INT64_MIN && wv_vid) { wv_seek(vseek < 0 ? 0 : vseek); wchrome_until = frame_no + 150; }
 
+  if (whero.drag <= 0) wv_save_pill_draw(frame_no < wchrome_until);
   // --- the controls on top ---
   if ((frame_no < wchrome_until || wdetails) && whero.drag <= 0) {
     int a = frame_no + 30 > wchrome_until && !wdetails ? (int)((wchrome_until - frame_no) * 8) : 240;
     if (a > 240 || a < 0) a = 240;
     grad(0, 0, W, 64, RGBA(0, 0, 0, 255), 64 * a / 400, 0, 0);
-    vita2d_draw_line(30, 30, 42, 18, with_alpha(TEXT, a));
-    vita2d_draw_line(30, 30, 42, 42, with_alpha(TEXT, a));
-    vita2d_draw_line(31, 30, 43, 18, with_alpha(TEXT, a));
-    vita2d_draw_line(31, 30, 43, 42, with_alpha(TEXT, a));
+    fv_back_draw(a);
     char pos[80];
     snprintf(pos, sizeof pos, "%s  ·  %d of %d%s", LV_SITES[cfg.site].name, wv + 1, nposts, wend ? "" : "+");
     text_center(W / 2, 36, with_alpha(TEXT, a), 16, pos);

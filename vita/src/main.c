@@ -597,7 +597,10 @@ static struct {
   int ifit, iorient, vfit, vorient;
   int tscale;  // text size, in percent: 90, 100, 112 or 125 (0: 100)
   int accpic;  // the accent follows the picture shown
-} cfg = {"", 0, 0, 5, 0, 80, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
+  int wsize;   // the Browser's card size: 1-3 (small, medium, large); 0 not set (medium)
+  int rear_l, rear_r; // the rear touchpad's halves: REAR_* (0 not set: their defaults)
+  int autorot; // portrait pictures turned to fill the screen held on its side
+} cfg = {"", 0, 0, 5, 0, 100, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
 static void cfg_load(void) {
   cfg.sndpack = 3; // (Bubbly, from the start)
   FILE *f = fopen(DATA "/config.txt", "r");
@@ -643,12 +646,15 @@ static void cfg_load(void) {
     else if (!strcmp(line, "onboarded")) cfg.onboarded = atoi(eq) != 0;
     else if (!strcmp(line, "tscale")) cfg.tscale = atoi(eq);
     else if (!strcmp(line, "accpic")) cfg.accpic = atoi(eq) != 0;
+    else if (!strcmp(line, "wsize")) cfg.wsize = atoi(eq);
+    else if (!strcmp(line, "rear")) sscanf(eq, "%d,%d", &cfg.rear_l, &cfg.rear_r);
+    else if (!strcmp(line, "autorot")) cfg.autorot = atoi(eq) != 0;
     else if (!strcmp(line, "view")) sscanf(eq, "%d,%d,%d,%d", &cfg.ifit, &cfg.iorient, &cfg.vfit, &cfg.vorient);
     else if (!strcmp(line, "comic")) sscanf(eq, "%d,%d,%d,%d,%d,%d,%d", &cfg.cmode, &cfg.corient, &cfg.canim, &cfg.cdir, &cfg.ctap, &cfg.cdbl, &cfg.cback);
   }
   fclose(f);
   if (cfg.interval < 2 || cfg.interval > 60) cfg.interval = 5;
-  if (cfg.volume < 0 || cfg.volume > 100) cfg.volume = 80;
+  if (cfg.volume < 0 || cfg.volume > 150) cfg.volume = 100;
   if (cfg.site < 0 || cfg.site >= 64) cfg.site = 0;
   if (!(cfg.ratings & 15)) cfg.ratings = 15;
   if (cfg.wsort < 0 || cfg.wsort > 3) cfg.wsort = 0;
@@ -680,10 +686,10 @@ static void cfg_write(void) {
   cfg_dirty_at = 0;
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\nview=%d,%d,%d,%d\ntscale=%d\naccpic=%d\nsndv=2\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\nview=%d,%d,%d,%d\ntscale=%d\naccpic=%d\nsndv=2\nwsize=%d\nrear=%d,%d\nautorot=%d\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
           cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v, cfg.onboarded,
-          cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback, cfg.ifit, cfg.iorient, cfg.vfit, cfg.vorient, cfg.tscale, cfg.accpic);
+          cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback, cfg.ifit, cfg.iorient, cfg.vfit, cfg.vorient, cfg.tscale, cfg.accpic, cfg.wsize, cfg.rear_l, cfg.rear_r, cfg.autorot);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -1984,6 +1990,50 @@ static unsigned mix_col(unsigned a, unsigned b, float t) { // (a to b; alpha fro
 }
 // Liquid glass, as iOS has it: the chosen thing in a lens of glass, a breath of the accent in it, a
 // faint even rim, light from above as a soft gradient, a faint shadow under it. round: a pill (the tab bar); else squircle corners (segments).
+// A progress pill: an indented track (shadow inside its top, a lit lip at its foot), the done part
+// the accent with diagonal stripes running along it and a glass sheen on top; f < 0: not known how
+// far, a striped part sliding to and fro. The stripes are a small repeating texture.
+static vita2d_texture *stripe_tex;
+static void make_stripes(void) {
+  if (stripe_tex) return;
+  stripe_tex = tex_new(64, 64);
+  if (!stripe_tex) return;
+  uint8_t *d = vita2d_texture_get_datap(stripe_tex);
+  unsigned stride = vita2d_texture_get_stride(stripe_tex);
+  for (int y = 0; y < 64; y++)
+    for (int x = 0; x < 64; x++) {
+      float u = fmodf(x + y + 0.5f, 32.0f), edge = fminf(fabsf(u - 8), fabsf(u - 24)); // (a band 16 wide every 32)
+      float a = u > 8 && u < 24 ? 1.0f : 0.0f;
+      a = fminf(1, fmaxf(0, edge < 0.7f ? 0.5f + (a > 0 ? edge : -edge) / 1.4f : a));
+      uint8_t *p = d + y * stride + x * 4;
+      p[0] = p[1] = p[2] = 255; p[3] = (uint8_t)(a * 255);
+    }
+  vita2d_texture_set_filters(stripe_tex, SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
+  sceGxmTextureSetUAddrMode(&stripe_tex->gxm_tex, SCE_GXM_TEXTURE_ADDR_REPEAT);
+  sceGxmTextureSetVAddrMode(&stripe_tex->gxm_tex, SCE_GXM_TEXTURE_ADDR_REPEAT);
+}
+static void rrect_round(float x, float y, float w, float h, float r, unsigned c);
+static void pill_progress(float x, float y, float w, float h, float f, int a) {
+  make_stripes();
+  float r = h / 2;
+  // the track, pressed in
+  rrect_round(x - 1, y - 1, w + 2, h + 2, r + 1, with_alpha(RGBA(0, 0, 0, 255), a * 70 / 255));
+  rrect_round(x, y, w, h, r, with_alpha(mix_col(BG, RGBA(0, 0, 0, 255), 0.35f), a));
+  rrect_round(x + 1, y + 1, w - 2, h * 0.45f, fminf(r - 1, h * 0.22f), with_alpha(RGBA(0, 0, 0, 255), a * 60 / 255)); // (its shadow inside)
+  rrect_round(x + r * 0.6f, y + h - 2.5f, w - r * 1.2f, 1.5f, 0.75f, with_alpha(TEXT, a * 22 / 255));                  // (the lip lit below)
+  float fx = x, fw;
+  if (f < 0) { float run = 0.5f + 0.5f * sinf(frame_no / 60.0f * 2.4f); fw = fmaxf(h * 2, w * 0.3f); fx = x + (w - fw) * run; }
+  else fw = fmaxf(f > 0 ? h : 0, w * fminf(1, f));
+  if (fw <= 0) return;
+  rrect_round(fx, y, fw, h, r, with_alpha(ACC, a));
+  // the stripes, along the straight part (the ends stay plain), running
+  if (stripe_tex && fw > h) {
+    float sc = h / 64.0f, off = fmodf(frame_no * 0.6f, 32.0f);
+    float sx = fx + r * 0.7f, sw = fw - r * 1.4f;
+    vita2d_draw_texture_tint_part_scale(stripe_tex, sx, y, -off, 0, sw / sc, 64, sc, sc, with_alpha(mix_col(ACC, TEXT, 0.35f), a * 90 / 255));
+  }
+  rrect_round(fx + 2, y + 1.5f, fw - 4, h * 0.42f, fminf(r - 1.5f, h * 0.21f), with_alpha(TEXT, a * 55 / 255)); // (glass on top)
+}
 static void glass(float x, float y, float w, float h, int round) {
   void (*rr)(float, float, float, float, float, unsigned) = round ? rrect_round : rrect;
   float r = round ? h / 2 : h * 0.34f;
@@ -2871,6 +2921,15 @@ static void show_item(int k) {
   }
   ask_big(shown[vk]);
 }
+// The full views' back button (the Library's and the Browser's): a round glass button with the back
+// arrow, big enough for a thumb, the whole corner answering a tap
+static void fv_back_draw(int a) {
+  circle(38, 34, 25, with_alpha(RGBA(0, 0, 0, 255), a * 90 / 255));
+  circle(38, 34, 23, with_alpha(mix_col(SURF2, ACC, 0.18f), a * 215 / 255));
+  circle(38, 28, 15, with_alpha(TEXT, a / 16)); // (light from above)
+  icon("back", 37, 34, with_alpha(TEXT, a));
+}
+static int fv_back_hit(void) { return in.tap && in.tap_x < 96 && in.tap_y < 82; }
 static void fmt_time(uint64_t ms, char *o, size_t n);
 // "Similar to this": the two tags of these that say most what it is: specific ones (a character, a
 // series: long, with underscores or brackets) before generic ones, never the generic ones of a list,
@@ -3249,7 +3308,7 @@ static void draw_viewer(void) {
   else if (in.tap && details_y < 0.5f) {
     int chrome_on = frame_no < chrome_until || (vid && !vid_clip && lv_video_paused(vid));
     if (vid && !vid_clip && chrome_on && vctl_tap(vid, in.tap_x, in.tap_y, &vseek)) chrome_until = frame_no + 180;
-    else if (frame_no < chrome_until && in.tap_x < 70 && in.tap_y < 60) { close_viewer(); return; }
+    else if (frame_no < chrome_until && fv_back_hit()) { sfx(SFX_BACK); close_viewer(); return; }
     else if (frame_no < chrome_until && in.tap_x > W - 70 && in.tap_y < 60) { details = 1; }
     else if (frame_no < chrome_until && view_btn_hit(is_video(it), W - 140)) { view_options_open(is_video(it)); return; }
     else if (frame_no < chrome_until && in.tap_x > W - 140 && in.tap_x < W - 70 && in.tap_y < 60) { char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); }
@@ -3354,10 +3413,7 @@ static void draw_viewer(void) {
     if (a > 240 || a < 0) a = 240;
     grad(0, 0, W, 64, RGBA(0, 0, 0, 255), 64 * a / 400, 0, 0);
     // back
-    vita2d_draw_line(30, 30, 42, 18, with_alpha(TEXT, a));
-    vita2d_draw_line(30, 30, 42, 42, with_alpha(TEXT, a));
-    vita2d_draw_line(31, 30, 43, 18, with_alpha(TEXT, a));
-    vita2d_draw_line(31, 30, 43, 42, with_alpha(TEXT, a));
+    fv_back_draw(a);
     char pos[48];
     snprintf(pos, sizeof pos, "%d of %d", vk + 1, nshown);
     text_center(W / 2, 36, with_alpha(TEXT, a), 17, pos);
@@ -3658,7 +3714,7 @@ static void draw_settings(void) {
   char vview[48];
   snprintf(vview, sizeof vview, "%s · %s", VF_SHORT[cfg.ifit], VF_SHORT[cfg.vfit]);
   char v3[64];
-  snprintf(v3, sizeof v3, "%d%%", cfg.volume);
+  snprintf(v3, sizeof v3, cfg.volume > 100 ? "%d%% (louder)" : "%d%%", cfg.volume);
   char v4[16];
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
@@ -3666,7 +3722,7 @@ static void draw_settings(void) {
   enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
-    {"Video volume", v3, "← → to change"},
+    {"Video volume", v3, "← → to change; past 100% it's made louder than the video itself"},
     {"Interface sounds", v4, "The Vita's own clicks and chimes"},
     {"Double tap in the full view", cfg.dbltap ? "Heart" : "Zoom", "Zooms in, or gives it a heart"},
     {"Glow behind pictures", cfg.glow ? "On" : "Off", "The picture's own colours fill the screen around it"},
@@ -3674,7 +3730,7 @@ static void draw_settings(void) {
     {"Wi-Fi transfer", "", "Send pictures and videos from a phone or PC on the same Wi-Fi"},
     {"Lock with a PIN", !pin.on || decoy_session ? "Off" : pin.on_wake ? "On, and when it wakes" : "On, when it starts", pin.on ? "✕ a new PIN · ←→ when · □ turns it off" : "A PIN pad before anything shows"},
     {"Decoy PIN", vd, pin.on ? "Another PIN that opens a harmless vault (←→ which, □ off)" : "Needs the PIN lock on"},
-    {"SELECT hides the app behind", cfg.hide ? "A calculator" : "A clock", cfg.hide ? "It calculates; your PIN and = gets back in (no PIN: hold the display)" : "A plain clock; SELECT again comes back"},
+    {"SELECT hides the app behind", cfg.hide ? "A calculator" : "A clock", cfg.hide ? "It calculates; SELECT again gets back (through the PIN pad, if there's a PIN), or your PIN and =" : "A plain clock; SELECT again comes back"},
     {"Touch lock", TL_NAMES[cfg.tlock & 3], "Hold L and R for a second: touch and buttons do nothing (again to unlock)"},
     {"Your stats", "", "What's here and how it's been looked at"},
     {"Clean up", "", "One at a time: swipe away what you don't want any more"},
@@ -3767,7 +3823,7 @@ static void draw_settings(void) {
   if (d) {
     switch (set_sel) {
       case ST_SEARCH: if (cross && !ime_open) ime_start(2, "Search tags, names, categories", query, 0); break;
-      case ST_VOL: cfg.volume += d * 10; if (cfg.volume > 100) cfg.volume = 0; if (cfg.volume < 0) cfg.volume = 100; break;
+      case ST_VOL: cfg.volume += d * 10; if (cfg.volume > 150) cfg.volume = 150; if (cfg.volume < 0) cfg.volume = 0; break;
       case ST_DBL: cfg.dbltap = !cfg.dbltap; sfx(SFX_TOGGLE); break;
       case ST_GLOW: cfg.glow = !cfg.glow; sfx(SFX_TOGGLE); break;
       case ST_SOUNDS: cfg.sounds += d * 10; if (cfg.sounds > 100) cfg.sounds = 0; if (cfg.sounds < 0) cfg.sounds = 100; sfx_volume(cfg.sounds); sfx(SFX_TOGGLE); break;
@@ -4057,6 +4113,7 @@ static void library_grew(int before) {
   refilter_wanted = 1;
 }
 
+#include "gifplay.c"
 #include "web.c"
 #include "wifi.c"
 #include "vbrowse.c"
@@ -4582,6 +4639,8 @@ int main(void) {
     // SELECT: the cover, from anywhere (and back)
     if (in.pressed & SCE_CTRL_SELECT) {
       if (screen == S_COVER) screen = cover_return;
+      // (the calculator: SELECT again gets back, past the PIN pad when there's a PIN)
+      else if (screen == S_CALC) { if (pin.on) { int back = calc_return; calc_reset(); pin_lock(back); } else calc_leave(); }
       else if (screen != S_UNLOCKING && screen != S_CALC) {
         if (vid) lv_video_pause(vid, 1);
         if (wv_vid) lv_video_pause(wv_vid, 1);

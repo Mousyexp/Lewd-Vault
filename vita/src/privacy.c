@@ -50,7 +50,17 @@ static void calc_key(const char *k) {
     if (pin.on && calc_typed[0]) {
       char h[65];
       pin_hash(calc_typed, pin.salt, h);
-      if (!strcmp(h, pin.hash)) { calc_leave(); return; }
+      // (the PIN or the decoy's: opened as the PIN pad opens it, its own way)
+      if (!strcmp(h, pin.hash) || (pin.decoy_hash[0] && !strcmp(h, pin.decoy_hash))) {
+        char typed[16];
+        snprintf(typed, sizeof typed, "%s", calc_typed);
+        int back = calc_return;
+        calc_reset();
+        pin_lock(back); // (the pad, its typing cleared)
+        snprintf(pin_typed, sizeof pin_typed, "%s", typed);
+        pin_try();      // (and at once: its welcome, then in)
+        return;
+      }
     }
     if (calc_op) { double r = calc_apply(calc_acc, calc_op, atof(calc_disp)); if (isnan(r)) strcpy(calc_disp, "Error"); else calc_show(r); calc_op = 0; }
     calc_fresh = 1;

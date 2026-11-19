@@ -12,6 +12,8 @@ void lv_net_warm(void); // the Vita's network only (quick): the online light, th
 int lv_net_online(void); // 1 when connected (Wi-Fi)
 // How the certificate list went ('certificates: all 140 read', or what failed): the log and reports
 const char *lv_net_ca_status(void);
+// The bytes of the transfer that reports through progress: how far, and of how many (0: not known)
+void lv_http_progress_bytes(volatile float *p, int64_t *now, int64_t *total);
 typedef struct LvHttp LvHttp;
 LvHttp *lv_http_new(void);
 void lv_http_free(LvHttp *h);

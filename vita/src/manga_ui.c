@@ -7,7 +7,7 @@
 
 #define MG_CW 148
 #define MG_CH 210
-#define MG_MAX 300  // (books in a list)
+#define MG_MAX 900  // (books in a list)
 #define MG_TEX 48   // (covers kept as textures: those on screen and about to be)
 
 static const char *MD_ORDER[3] = {"Popular", "Latest", "New"};
@@ -1115,7 +1115,7 @@ static void draw_manga(void) {
     if (hit((int)x, (int)y, MG_CW, MG_CH + 30) && in.tap_y > TOP && in.tap_y < H - BAR) { mg.sel = i; sfx(SFX_SELECT); mg_open_book(i); return; }
   }
   // more, before the end is reached
-  if (last + cols * 2 >= mg.nbooks) mg_list_more();
+  if (last + cols * 4 >= mg.nbooks) mg_list_more(); // (asked for four rows ahead: never a wait at the end)
   if (!mg.nbooks) {
     if (mg.loading) spinner(W / 2, TOP + 150, 22);
     else text_center(W / 2, TOP + 150, DIM, 17, mg.err[0] ? mg.err : "Nothing found");

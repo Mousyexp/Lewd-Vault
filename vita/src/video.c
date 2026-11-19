@@ -228,20 +228,23 @@ static int av_add_main(SceSize args, void *argp) {
   return sceKernelExitDeleteThread(0);
 }
 
+// (the volume: the port at full, the samples scaled here, so it can go past it (up to 150%), clipped)
+static void gain_into(int16_t *dst, const int16_t *src, int n, int vol) {
+  for (int k = 0; k < n; k++) {
+    int x = (int)src[k] * vol / SCE_AUDIO_VOLUME_0DB;
+    dst[k] = (int16_t)(x > 32767 ? 32767 : x < -32768 ? -32768 : x);
+  }
+}
 static int av_sound_main(SceSize args, void *argp) {
   sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << 2); // (off the drawing thread's core)
   LvVideo *v = *(LvVideo **)argp;
   int rate = 48000, ch = 2;
-  int port = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_BGM, GRAIN, rate, SCE_AUDIO_OUT_MODE_STEREO);
+  int port = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN, GRAIN, rate, SCE_AUDIO_OUT_MODE_STEREO);
   int16_t *silence = memalign(64, GRAIN * 2 * sizeof(int16_t));
   memset(silence, 0, GRAIN * 2 * sizeof(int16_t));
-  int vol = -1;
+  int16_t *gbuf = memalign(64, GRAIN * 2 * sizeof(int16_t));
+  if (port >= 0) { int lr[2] = {SCE_AUDIO_VOLUME_0DB, SCE_AUDIO_VOLUME_0DB}; sceAudioOutSetVolume(port, SCE_AUDIO_VOLUME_FLAG_L_CH | SCE_AUDIO_VOLUME_FLAG_R_CH, lr); }
   while (v->run) {
-    if (port >= 0 && vol != v->volume) {
-      vol = v->volume;
-      int lr[2] = {vol, vol};
-      sceAudioOutSetVolume(port, SCE_AUDIO_VOLUME_FLAG_L_CH | SCE_AUDIO_VOLUME_FLAG_R_CH, lr);
-    }
     SceAvPlayerFrameInfo f;
     if (v->ready && !v->paused && sceAvPlayerIsActive(v->h_av) && sceAvPlayerGetAudioData(v->h_av, &f)) {
       int r = (int)f.details.audio.sampleRate, c = f.details.audio.channelCount;
@@ -249,7 +252,8 @@ static int av_sound_main(SceSize args, void *argp) {
         rate = r; ch = c;
         sceAudioOutSetConfig(port, GRAIN, rate, ch == 1 ? SCE_AUDIO_OUT_MODE_MONO : SCE_AUDIO_OUT_MODE_STEREO);
       }
-      if (port >= 0) sceAudioOutOutput(port, f.pData);
+      if (port >= 0 && gbuf) { gain_into(gbuf, (const int16_t *)f.pData, GRAIN * ch, v->volume); sceAudioOutOutput(port, gbuf); }
+      else if (port >= 0) sceAudioOutOutput(port, f.pData);
     } else if (port >= 0) {
       sceAudioOutOutput(port, silence); // (keeps the port's timing; also waits a block)
     } else {
@@ -258,6 +262,7 @@ static int av_sound_main(SceSize args, void *argp) {
   }
   if (port >= 0) { sceAudioOutOutput(port, NULL); sceAudioOutReleasePort(port); }
   free(silence);
+  free(gbuf);
   v->snd_done = 1;
   return sceKernelExitDeleteThread(0);
 }
@@ -356,15 +361,11 @@ static void ring_put(LvVideo *v, const int16_t *s, int frames) {
 static void *sw_sound_main(void *arg) {
   sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << 2); // (off the drawing thread's core)
   LvVideo *v = arg;
-  int port = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_BGM, GRAIN, 48000, SCE_AUDIO_OUT_MODE_STEREO);
+  int port = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN, GRAIN, 48000, SCE_AUDIO_OUT_MODE_STEREO);
   int16_t *blk = memalign(64, GRAIN * 2 * sizeof(int16_t));
-  int vol = -1;
+  int16_t *gbuf = memalign(64, GRAIN * 2 * sizeof(int16_t));
+  if (port >= 0) { int lr[2] = {SCE_AUDIO_VOLUME_0DB, SCE_AUDIO_VOLUME_0DB}; sceAudioOutSetVolume(port, SCE_AUDIO_VOLUME_FLAG_L_CH | SCE_AUDIO_VOLUME_FLAG_R_CH, lr); }
   while (v->run) {
-    if (port >= 0 && vol != v->volume) {
-      vol = v->volume;
-      int lr[2] = {vol, vol};
-      sceAudioOutSetVolume(port, SCE_AUDIO_VOLUME_FLAG_L_CH | SCE_AUDIO_VOLUME_FLAG_R_CH, lr);
-    }
     int real = 0;
     pthread_mutex_lock(&v->mx);
     if (!v->paused && v->ring_n >= GRAIN) {
@@ -380,12 +381,14 @@ static void *sw_sound_main(void *arg) {
     }
     pthread_mutex_unlock(&v->mx);
     if (!real) memset(blk, 0, GRAIN * 2 * sizeof(int16_t));
+    if (real && gbuf) { gain_into(gbuf, blk, GRAIN * 2, v->volume); memcpy(blk, gbuf, GRAIN * 2 * sizeof(int16_t)); }
     if (port >= 0) sceAudioOutOutput(port, blk);
     else sceKernelDelayThread(21000);
     if (real) v->played += GRAIN;
   }
   if (port >= 0) { sceAudioOutOutput(port, NULL); sceAudioOutReleasePort(port); }
   free(blk);
+  free(gbuf);
   v->snd_done = 1;
   return NULL;
 }

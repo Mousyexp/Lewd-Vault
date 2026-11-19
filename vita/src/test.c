@@ -353,7 +353,8 @@ static void tk_step(void) {
           net_res = calloc(64 + MS_N, sizeof *net_res);
           if (!net_res) { tk_finish_test(); break; }
           for (int k = 0; k < LV_NSITES && net_total < 64; k++) {
-            if (LV_SITES[k].hidden || !LV_SITES[k].base) continue;
+            int vsite = LV_SITES[k].kind == BK_KVS || LV_SITES[k].kind == BK_XV || LV_SITES[k].kind == BK_HWORLD || LV_SITES[k].kind == BK_HCLOUD || LV_SITES[k].kind == BK_HCITY;
+            if ((LV_SITES[k].hidden && !vsite) || !LV_SITES[k].base) continue; // (the video browser's sites too)
             snprintf(net_res[net_total].name, sizeof net_res[0].name, "%s", LV_SITES[k].name);
             snprintf(net_res[net_total].url, sizeof net_res[0].url, "%s/", LV_SITES[k].base);
             net_total++;

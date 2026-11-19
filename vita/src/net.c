@@ -40,7 +40,7 @@ int inet_pton(int af, const char *src, void *dst) {
   return 1;
 }
 static int up;
-static char proxy[256], cafile[256] = "app0:cacert.pem";
+static char proxy[256], cafile[256] = "app0:certs.bin";
 
 #include <pthread.h>
 #ifdef LV_DEBUG
@@ -79,24 +79,27 @@ static int b64v(int c) {
 static int ca_by_subject(X509_LOOKUP *lu, X509_LOOKUP_TYPE type, X509_NAME *name, X509_OBJECT *ret) {
   if (type != X509_LU_X509 || !name) return 0;
   unsigned long h = X509_NAME_hash(name);
-  for (int k = 0; k < ca_n; k++) {
+  X509_STORE *st = X509_LOOKUP_get_store(lu);
+  int got = 0;
+  // (every one with that name goes into the store: two can share a name (a root renewed, an
+  //  intermediate cross-signed), and OpenSSL then tries each against the signature)
+  for (int k = 0; k < ca_n && st; k++) {
     if (ca_ent[k].hash != h) continue;
     const unsigned char *dp = ca_der + ca_ent[k].off;
     X509 *x = d2i_X509(NULL, &dp, (long)ca_ent[k].len);
     if (!x) continue;
     ca_made++;
-    if (X509_NAME_cmp(X509_get_subject_name(x), name) != 0) { X509_free(x); continue; }
-    X509_STORE *st = X509_LOOKUP_get_store(lu);
-    // (references: 1 ours; the store's; ret's, which the caller treats as its own and never gives back,
-    //  as OpenSSL's own lookups arrange it: so ours and that one are let go, leaving the store's)
-    if (!st || !X509_STORE_add_cert(st, x) || !X509_OBJECT_set1_X509(ret, x)) { X509_free(x); ERR_clear_error(); return 0; }
+    if (X509_NAME_cmp(X509_get_subject_name(x), name) != 0 || !X509_STORE_add_cert(st, x)) { X509_free(x); ERR_clear_error(); continue; }
+    // (references: 1 ours, 1 the store's; the first one found also goes in ret, whose reference the
+    //  caller keeps and never gives back (as OpenSSL's own lookups arrange it): so that one's let go too)
+    if (!got) {
+      if (X509_OBJECT_set1_X509(ret, x)) { got = 1; X509_free(x); }
+    }
     X509_free(x);
-    X509_free(x);
-    ca_found++;
-    return 1;
   }
-  ca_missed++;
-  return 0;
+  if (got) ca_found++; else ca_missed++;
+  ERR_clear_error();
+  return got;
 }
 static int ca_load(void) {
   pthread_mutex_lock(&ca_mx);
@@ -114,7 +117,27 @@ static int ca_load(void) {
       if (pem) pem[got] = 0;
     }
     if (!pem || !got) snprintf(ca_status, sizeof ca_status, "certificates: %s couldn't be read (%08x)", cafile, (unsigned)fd);
-    else {
+    else if (got > 5 && !memcmp(pem, "LVCA1", 5)) {
+      // certs.bin (tools/make-certs.py): kind, subject hash, length, DER; nothing to parse, the bytes kept
+      int cap = 0, roots = 0;
+      for (size_t at = 5; at + 9 <= got; cap++) { uint32_t len; memcpy(&len, pem + at + 5, 4); at += 9 + len; }
+      ca_ent = calloc(cap + 1, sizeof *ca_ent);
+      if (ca_ent) {
+        ca_der = (uint8_t *)pem; pem = NULL; // (the file is the store of bytes)
+        for (size_t at = 5; at + 9 <= got && ca_n < cap;) {
+          uint32_t h, len;
+          memcpy(&h, ca_der + at + 1, 4); memcpy(&len, ca_der + at + 5, 4);
+          if (at + 9 + len > got) break;
+          roots += ca_der[at] == 0;
+          ca_ent[ca_n].hash = h; ca_ent[ca_n].off = (unsigned)(at + 9); ca_ent[ca_n].len = len;
+          ca_n++;
+          at += 9 + len;
+        }
+        ca_meth = X509_LOOKUP_meth_new("lewd vault certificates");
+        if (ca_meth) X509_LOOKUP_meth_set_get_by_subject(ca_meth, ca_by_subject);
+      }
+      snprintf(ca_status, sizeof ca_status, "certificates: %d roots, %d intermediates", roots, ca_n - roots);
+    } else {
       int cap = 0;
       for (char *p = pem; (p = strstr(p, "-----BEGIN CERTIFICATE-----")); p += 27) cap++;
       ca_ent = calloc(cap + 1, sizeof *ca_ent);
@@ -321,9 +344,21 @@ static size_t on_data(char *p, size_t sz, size_t nm, void *u) {
   s->n += n;
   return n;
 }
+// (the bytes behind each progress pointer: a transfer's size and how far, for those who show it)
+static struct { volatile float *p; volatile int64_t now, total; } prog_bytes[4];
+void lv_http_progress_bytes(volatile float *p, int64_t *now, int64_t *total) {
+  *now = *total = 0;
+  for (int k = 0; k < 4; k++) if (prog_bytes[k].p == p) { *now = prog_bytes[k].now; *total = prog_bytes[k].total; return; }
+}
 static int on_progress(void *u, curl_off_t total, curl_off_t now, curl_off_t ut, curl_off_t un) {
   Sink *s = u;
   if (s->progress && total > 0) *s->progress = (float)now / (float)total;
+  if (s->progress) {
+    int k = 0;
+    while (k < 4 && prog_bytes[k].p && prog_bytes[k].p != s->progress) k++;
+    if (k == 4) k = 0;
+    prog_bytes[k].p = s->progress; prog_bytes[k].now = now; prog_bytes[k].total = total;
+  }
   if (s->total && total > 0) *s->total = (int64_t)total;
   return s->cancel && *s->cancel;
 }
@@ -540,6 +575,13 @@ static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const
     if (s->too_big) snprintf(why, sizeof why, "Too big for the Vita");
     else if (s->cancel && *s->cancel) snprintf(why, sizeof why, "Cancelled");
     else if (!why[0]) snprintf(why, sizeof why, "%s", curl_easy_strerror(r));
+    { // (which address failed, and why: in the log, for the reports; the address cut at its path)
+      char host[120];
+      const char *hp = strstr(url, "://");
+      snprintf(host, sizeof host, "%s", hp ? hp + 3 : url);
+      host[strcspn(host, "/?")] = 0;
+      LOG("net fail %s: %d %s\n", host, (int)r, why);
+    }
     // (a certificate "not yet valid" or "expired" everywhere is usually the Vita's own clock: it's
     //  said so, and the check stays on)
     if ((r == CURLE_PEER_FAILED_VERIFICATION || r == CURLE_SSL_CACERT_BADFILE || r == CURLE_SSL_CERTPROBLEM) &&
