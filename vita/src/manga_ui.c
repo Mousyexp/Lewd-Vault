@@ -1038,7 +1038,19 @@ static void draw_manga(void) {
   float max_scroll = fmaxf(0, content - view_h);
   // moving: touch, the stick, the D-pad
   if (in.touching && in.ty > TOP) mg.scroll -= in.drag_dy;
-  mg.scroll += in.ly * 14 * ft - in.bdy * 1.5f;
+  mg.scroll -= in.bdy * 1.5f;
+  in.pressed |= stick_dirs(); // (the left stick moves the selection, as the D-pad)
+  if (mg.sel >= 0 && mg.nbooks && (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_LEFT | SCE_CTRL_DOWN | SCE_CTRL_UP))) {
+    // (scrolled away from it: the first cover in sight is where the D-pad starts)
+    float y = (mg.sel / cols) * (MG_CH + 52) + cont_h;
+    if (y + MG_CH < mg.scroll || y > mg.scroll + view_h - 40) {
+      int row = (int)((mg.scroll - cont_h + MG_CH + 51) / (MG_CH + 52));
+      if (row < 0) row = 0;
+      int v = row * cols;
+      if (v >= mg.nbooks) v = mg.nbooks - 1;
+      mg.sel = v; in.pressed &= ~(SCE_CTRL_RIGHT | SCE_CTRL_LEFT | SCE_CTRL_DOWN | SCE_CTRL_UP); sfx(SFX_TICK);
+    }
+  }
   int before = mg.sel;
   if (mg.sel < 0) { // (in the Continue row: -1 its first)
     int c = -1 - mg.sel;

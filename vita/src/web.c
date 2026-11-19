@@ -2393,9 +2393,14 @@ static void draw_web(void) {
   if (!sheet_open) {
     if (in.touching && in.ty > TOP && in.ty < H - BAR) { wscroll -= in.drag_dy; wscroll_v = 0; }
     if (in.flicked && in.down_y > TOP) wscroll_v = -in.fvy * 1.6f;
-    wscroll += (wscroll_v + in.ly * 14) * ft - in.bdy * 1.5f;
+    wscroll += wscroll_v * ft - in.bdy * 1.5f;
     wscroll_v *= decay(0.94f);
     if (fabsf(wscroll_v) < 0.2f) wscroll_v = 0;
+    in.pressed |= stick_dirs(); // (the left stick moves the selection, as the D-pad)
+    if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_LEFT | SCE_CTRL_DOWN | SCE_CTRL_UP)) {
+      int v = sel_in_view(&wgrid, wsel, wscroll, view_h);
+      if (v >= 0 && v != wsel) { wsel = v; in.pressed &= ~(SCE_CTRL_RIGHT | SCE_CTRL_LEFT | SCE_CTRL_DOWN | SCE_CTRL_UP); sfx(SFX_TICK); }
+    }
     int before = wsel;
     if (in.pressed & SCE_CTRL_RIGHT) wsel++;
     if (in.pressed & SCE_CTRL_LEFT) wsel--;

@@ -2297,6 +2297,30 @@ static int online_button(int right) {
   return 44;
 }
 
+// The left stick as the D-pad, for the grids: a push is a press, held it repeats (sooner the further
+// it's pushed), so it moves the selection as the D-pad does
+static unsigned stick_dirs(void) {
+  static unsigned held, next_at;
+  unsigned d = 0;
+  if (in.ly < -0.5f) d = SCE_CTRL_UP; else if (in.ly > 0.5f) d = SCE_CTRL_DOWN;
+  else if (in.lx < -0.5f) d = SCE_CTRL_LEFT; else if (in.lx > 0.5f) d = SCE_CTRL_RIGHT;
+  if (!d) { held = 0; return 0; }
+  float m = fmaxf(fabsf(in.lx), fabsf(in.ly));
+  if (d != held) { held = d; next_at = frame_no + 16; return d; }
+  if (frame_no >= next_at) { next_at = frame_no + (unsigned)(12 - 8 * (m - 0.5f) * 2); return d; }
+  return 0;
+}
+// (the selection scrolled out of sight by a touch or a flick: a D-pad press starts from the first
+//  card in view instead of jumping back to it)
+static int sel_in_view(const void *grid, int sel, float scroll, float view_h) {
+  const Grid *g = grid;
+  if (sel < 0 || sel >= g->n) return -1;
+  Rect r = g->r[sel];
+  if (r.y + r.h > scroll + 4 && r.y < scroll + view_h - 4) return sel;
+  // (the first card whose top is in sight)
+  for (int k = grid_first(g, scroll); k < g->n; k++) if (g->r[k].y >= scroll - 2) return k;
+  return grid_first(g, scroll);
+}
 // (the connection as a small pressed-in button: dark inside with its shadow at the top and a lit lip
 //  below, the wifi mark green online and red not; a tap says which)
 static int online_inset(int right) {
@@ -2563,7 +2587,12 @@ static void draw_library(void) {
   scroll += scroll_v * ft;
   scroll_v *= decay(0.94f);
   if (fabsf(scroll_v) < 0.2f) scroll_v = 0;
-  scroll += in.ly * 14 * ft - in.bdy * 1.5f;
+  scroll -= in.bdy * 1.5f;
+  in.pressed |= stick_dirs(); // (the left stick moves the selection, as the D-pad)
+  if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_LEFT | SCE_CTRL_DOWN | SCE_CTRL_UP)) {
+    int v = sel_in_view(&lgrid, sel, scroll, view_h);
+    if (v >= 0 && v != sel) { sel = v; in.pressed &= ~(SCE_CTRL_RIGHT | SCE_CTRL_LEFT | SCE_CTRL_DOWN | SCE_CTRL_UP); sfx(SFX_TICK); }
+  }
   int before = sel;
   if (in.pressed & SCE_CTRL_RIGHT) sel++;
   if (in.pressed & SCE_CTRL_LEFT) sel--;
