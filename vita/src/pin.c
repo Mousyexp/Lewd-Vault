@@ -301,9 +301,10 @@ static void draw_stats(void) {
   //  every item)
   static long long views, hearts;
   static double secs;
-  static int kinds[3], never, top[5], s_n = -1, s_nviews = -1, s_vgen = -1;
-  static unsigned s_frame;
+  static int kinds[3], never, top[5], months[12], month_lbl[12], s_n = -1, s_nviews = -1, s_vgen = -1;
+  static unsigned s_frame, opened_at;
   int fresh = frame_no - s_frame > 2 || s_n != vault.n || s_nviews != vault.nviews || s_vgen != vgen;
+  if (frame_no - s_frame > 2) opened_at = frame_no;
   s_frame = frame_no;
   if (fresh) {
     s_n = vault.n; s_nviews = vault.nviews; s_vgen = vgen;
@@ -321,43 +322,104 @@ static void draw_stats(void) {
         if (top[k] < 0 || v > lv_views_of(&vault, &vault.items[top[k]])) { memmove(&top[k + 1], &top[k], (4 - k) * sizeof *top); top[k] = i; break; }
       }
     }
+    // (the last twelve months: how many were added in each; added is yyyymmddhhmmss)
+    time_t now = time(NULL);
+    struct tm l;
+    lv_local_tm(now, &l);
+    int ym_now = (l.tm_year + 1900) * 12 + l.tm_mon;
+    for (int k = 0; k < 12; k++) { months[k] = 0; month_lbl[k] = (ym_now - 11 + k) % 12; }
+    for (int i = 0; i < vault.n; i++) {
+      int64_t ad = vault.hot[i].added;
+      int y = (int)(ad / 10000000000LL), m = (int)(ad / 100000000LL % 100);
+      int idx = y * 12 + (m - 1) - (ym_now - 11);
+      if (y > 1900 && m >= 1 && m <= 12 && idx >= 0 && idx < 12) months[idx]++;
+    }
   }
+  float grow = fminf(1, (frame_no - opened_at) / 30.0f);
+  grow = 1 - (1 - grow) * (1 - grow) * (1 - grow); // (the bars rise as it opens)
   char b[160];
-  int y = 92;
-  struct { const char *name; char v[64]; } tiles[6];
-  snprintf(tiles[0].v, 64, "%d", vault.n); tiles[0].name = "items";
-  snprintf(tiles[1].v, 64, "%d · %d · %d", kinds[0], kinds[1], kinds[2]); tiles[1].name = "pictures · GIFs · videos";
-  snprintf(tiles[2].v, 64, "%lld", views); tiles[2].name = "times opened";
-  snprintf(tiles[3].v, 64, "%lld", hearts); tiles[3].name = "hearts";
-  if (secs >= 3600) snprintf(tiles[4].v, 64, "%d h %d min", (int)(secs / 3600), (int)secs % 3600 / 60);
-  else snprintf(tiles[4].v, 64, "%d min", (int)(secs / 60));
-  tiles[4].name = "spent looking";
-  snprintf(tiles[5].v, 64, "%d", never); tiles[5].name = "never opened";
-  for (int k = 0; k < 6; k++) {
-    int x = 30 + (k % 3) * 304, ty = y + (k / 3) * 92;
-    rrect(x, ty, 292, 80, 16, SURF);
-    text(x + 18, ty + 40, ACC, 26, tiles[k].v);
-    text(x + 18, ty + 66, DIM, 15, tiles[k].name);
+  // the totals, small, across the top
+  {
+    char v[4][48];
+    const char *nm[4] = {"items", "times opened", "hearts", "spent looking"};
+    snprintf(v[0], 48, "%d", vault.n);
+    snprintf(v[1], 48, "%lld", views);
+    snprintf(v[2], 48, "%lld", hearts);
+    if (secs >= 3600) snprintf(v[3], 48, "%d h %d min", (int)(secs / 3600), (int)secs % 3600 / 60);
+    else snprintf(v[3], 48, "%d min", (int)(secs / 60));
+    for (int k = 0; k < 4; k++) {
+      int x = 30 + k * 228, ty = 60;
+      rrect(x, ty, 216, 62, 16, SURF);
+      text(x + 16, ty + 32, ACC, 22, v[k]);
+      text(x + 16, ty + 52, DIM, 13, nm[k]);
+    }
+  }
+  // added, month by month: twelve bars
+  {
+    int x0 = 30, y0 = 134, pw = 560, ph = 186;
+    rrect(x0, y0, pw, ph, 18, SURF);
+    text(x0 + 16, y0 + 28, TEXT, 16, "Added, month by month");
+    int mx = 1;
+    for (int k = 0; k < 12; k++) if (months[k] > mx) mx = months[k];
+    static const char *const MON = "JFMAMJJASOND";
+    float bw = (pw - 32 - 11 * 10) / 12.0f, base = y0 + ph - 26, hmax = ph - 74;
+    for (int k = 0; k < 12; k++) {
+      float bx = x0 + 16 + k * (bw + 10), bh = months[k] ? fmaxf(6, hmax * months[k] / mx * grow) : 3;
+      rrect_round(bx, base - hmax, bw, hmax, 6, with_alpha(TEXT, 10));
+      rrect_round(bx, base - bh, bw, bh, fminf(6, bh / 2), k == 11 ? ACC : with_alpha(ACC, 150));
+      if (months[k]) { snprintf(b, sizeof b, "%d", months[k]); text_center((int)(bx + bw / 2), (int)(base - bh - 6), DIM, 11, b); }
+      char ml[2] = {MON[month_lbl[k]], 0};
+      text_center((int)(bx + bw / 2), (int)base + 18, k == 11 ? TEXT : FAINT, 12, ml);
+    }
+  }
+  // pictures, GIFs, videos: a ring
+  {
+    int x0 = 602, y0 = 134, pw = 328, ph = 186;
+    rrect(x0, y0, pw, ph, 18, SURF);
+    text(x0 + 16, y0 + 28, TEXT, 16, "What's in it");
+    float ccx = x0 + 86, ccy = y0 + 106, rr = 52;
+    int tot = kinds[0] + kinds[1] + kinds[2];
+    unsigned col[3] = {ACC, ACC2, mix_col(ACC, TEXT, 0.55f)};
+    const char *nm[3] = {"Pictures", "GIFs", "Videos"};
+    float a0 = -1.5708f;
+    const int N = 120;
+    for (int d = 0; d < N; d++) circle(ccx + cosf(a0 + d * 6.2832f / N) * rr, ccy + sinf(a0 + d * 6.2832f / N) * rr, 9, with_alpha(TEXT, 12));
+    for (int k = 0; k < 3 && tot; k++) {
+      float part = kinds[k] / (float)tot * grow;
+      int n = (int)(part * N);
+      for (int d = 0; d < n; d++) { float an = a0 + (d + 0.5f) * 6.2832f / N; circle(ccx + cosf(an) * rr, ccy + sinf(an) * rr, 9, col[k]); }
+      a0 += part * 6.2832f;
+    }
+    snprintf(b, sizeof b, "%d", tot);
+    text_center((int)ccx, (int)ccy + 4, TEXT, 20, b);
+    text_center((int)ccx, (int)ccy + 22, FAINT, 11, "in all");
+    for (int k = 0; k < 3; k++) {
+      int ly = y0 + 62 + k * 34;
+      circle(x0 + 172, ly - 5, 6, col[k]);
+      snprintf(b, sizeof b, "%s  %d", nm[k], kinds[k]);
+      text(x0 + 186, ly, TEXT, 14, b);
+    }
+    snprintf(b, sizeof b, "%d never opened", never);
+    text(x0 + 172, y0 + 168, FAINT, 12, b);
   }
   // the most opened, and the categories
-  y += 200;
+  int y = 344;
   text(30, y, DIM, 16, "Most opened");
   for (int k = 0; k < 5 && top[k] >= 0; k++) {
     const LvItem *it = &vault.items[top[k]];
     snprintf(b, sizeof b, "%lld×", lv_views_of(&vault, it));
-    text(30, y + 28 + k * 26, ACC, 15, b);
-    text_fit(80, y + 28 + k * 26, TEXT, 15, it->name[0] ? it->name : it->file, 380);
+    text(30, y + 26 + k * 24, ACC, 14, b);
+    text_fit(80, y + 26 + k * 24, TEXT, 14, it->name[0] ? it->name : it->file, 380);
   }
   text(490, y, DIM, 16, "Categories");
+  int cmax = 1;
+  for (int k = 0; k < vault.ncats && k < 5; k++) if (vault.cat_counts[k] > cmax) cmax = vault.cat_counts[k];
   for (int k = 0; k < vault.ncats && k < 5; k++) {
-    float f = vault.n ? vault.cat_counts[k] / (float)vault.n : 0;
-    rrect(490, y + 14 + k * 26, 300 * f + 6, 18, 9, with_alpha(ACC, 150));
+    float f = vault.cat_counts[k] / (float)cmax * grow;
+    rrect_round(490, y + 12 + k * 24, 440, 18, 9, with_alpha(TEXT, 10));
+    rrect_round(490, y + 12 + k * 24, fmaxf(18, 440 * f), 18, 9, with_alpha(ACC, 150));
     snprintf(b, sizeof b, "%s  %d", vault.cats[k], vault.cat_counts[k]);
-    text(500, y + 28 + k * 26, TEXT, 14, b);
-  }
-  if (ss.on && ss.nst) {
-    snprintf(b, sizeof b, "Slideshow session: level %d reached", ss.st_hi[stage_now()]);
-    text(30, H - BAR - 14, FAINT, 14, b);
+    text(500, y + 26 + k * 24, TEXT, 13, b);
   }
   if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = stats_back; }
   draw_bar();

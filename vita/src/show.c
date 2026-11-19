@@ -497,12 +497,21 @@ static void draw_show_plan(void) {
     circle(x + 30, y + 30, 16, with_alpha(ACC, on ? 255 : 60));
     icon(t[k].icon, x + 30, y + 30, on ? RGBA(20, 12, 16, 255) : ACC);
     text(x + 56, y + 36, DIM, 14, t[k].name);
-    text_fit(x + 18, y + th - 20, TEXT, th > 90 ? 24 : 20, t[k].value, tw - 70);
-    // ‹ › to change it
-    text(x + tw - 50, y + th - 20, on ? ACC : FAINT, 22, "‹");
-    text(x + tw - 26, y + th - 20, on ? ACC : FAINT, 22, "›");
+    text_fit(x + 18, y + th - 20, TEXT, th > 90 ? 24 : 20, t[k].value, tw - 112);
+    // two round glass buttons to change it, big enough for a thumb: − and + (‹ › for a choice)
+    int numeric = t[k].id == R_FROM || t[k].id == R_FIRST || t[k].id == R_MIN || t[k].id == R_PACE || t[k].id == R_INTERVAL || t[k].id == R_SLEEP;
+    for (int b = 0; b < 2; b++) {
+      float bcx = x + tw - 74 + b * 46, bcy = y + th - 28, r = 19;
+      int pressed = in.touching && hypotf(in.tx - bcx, in.ty - bcy) < r + 8;
+      circle(bcx, bcy + 1.5f, r, RGBA(0, 0, 0, 70));
+      circle(bcx, bcy, r, pressed ? with_alpha(ACC, 200) : mix_col(SURF2, ACC, on ? 0.30f : 0.10f));
+      circle(bcx, bcy - r * 0.35f, r * 0.62f, with_alpha(TEXT, pressed ? 30 : 14)); // (light from above)
+      const char *g = numeric ? (b ? "+" : "−") : (b ? "›" : "‹");
+      text_center((int)bcx, (int)bcy + 8, pressed ? RGBA(20, 12, 16, 255) : (on ? TEXT : DIM), 22, g);
+      if (in.tap && hypotf(in.tap_x - bcx, in.tap_y - bcy) < r + 10) { tapped = k; tap_d = b ? 1 : -1; in.tap = 0; }
+    }
     if (on) focus_ring(x, y, tw, th);
-    if (hit(x, y, tw, th)) { tapped = k; tap_d = in.tap_x < x + tw / 2 ? -1 : 1; }
+    if (hit(x, y, tw, th)) { tapped = k; tap_d = in.tap_x < x + tw / 2 ? -1 : 1; } // (the rest of the tile, as before)
   }
   if (tapped >= 0) { plan_sel = tapped + 1; d = tap_d; }
 

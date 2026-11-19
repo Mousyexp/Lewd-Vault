@@ -689,14 +689,19 @@ static void side_set(int open) {
 // (before the Library takes the touch: the arrow tab, or a swipe in from the edge)
 static int side_gesture(void) {
   if (lsheet != LS_NONE || side_open || selecting) return 0;
-  if (hit(W - 30, H / 2 - 40, 30, 80)) { side_set(1); return 1; }
+  if (hit(W - 44, H / 2 - 70, 44, 140)) { side_set(1); return 1; }
   if (in.touching && in.down_x > W - 30 && in.down_y > TOP && in.down_y < H - BAR && in.down_x - in.tx > 46 && abs(in.down_x - in.tx) > 2 * abs(in.ty - in.down_y)) { side_set(1); return 1; }
   return 0;
 }
 static void draw_side_tab(void) {
   if (side_t > 0.01f) return;
-  rrect(W - 22, H / 2 - 36, 30, 72, 12, with_alpha(SURF2, 230));
-  icon("chev_l", W - 11, H / 2, DIM);
+  // (a tab at the edge that says what it opens: the tag icon, "Tags", the arrow)
+  int tx = W - 40, ty = H / 2 - 64, tw = 48, th = 128;
+  rrect(tx, ty, tw, th, 16, with_alpha(SURF2, 235));
+  rrect(tx + 1, ty + 1, tw - 2, th / 2, 15, with_alpha(TEXT, 10));
+  icon("tag", tx + 20, ty + 34, ACC);
+  text_center(tx + 20, ty + 66, TEXT, 12, "Tags");
+  icon("chev_l", tx + 20, ty + 96, DIM);
 }
 // the search's words: where the k-th starts and its length (-1: no such word)
 static int query_word(int k, int *len) {

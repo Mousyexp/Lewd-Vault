@@ -1307,6 +1307,7 @@ static void draw_cover(vita2d_texture *t, float x, float y, float w, float h, un
 typedef struct {
   unsigned now, pressed, held_ms[32];
   float lx, ly;
+  float rx; int r_flick; // the right stick across; a flick of it this frame (-1, 1)
   int touching, tx, ty, tcount, t2x, t2y;
   int tap, tap_x, tap_y, dbl;
   float drag_dx, drag_dy; // since the last frame
@@ -1340,6 +1341,14 @@ static void read_input(void) {
   in.ly = (c.ly - 128) / 128.0f;
   if (fabsf(in.lx) < 0.25f) in.lx = 0;
   if (fabsf(in.ly) < 0.25f) in.ly = 0;
+  {
+    // (the right stick: a flick across, once, until it's back near the middle)
+    static int rlatched;
+    in.rx = (c.rx - 128) / 128.0f;
+    in.r_flick = 0;
+    if (!rlatched && fabsf(in.rx) > 0.65f) { in.r_flick = in.rx > 0 ? 1 : -1; rlatched = 1; }
+    else if (rlatched && fabsf(in.rx) < 0.3f) rlatched = 0;
+  }
 
   SceTouchData t;
   // the rear touchpad: drags only (it's easily touched by the hands holding the Vita: no taps)
@@ -2134,6 +2143,16 @@ static void draw_bar(void) {
     else { favs_open(0); }
   }
   if (long_fired) in.tap = 0;
+  // the right stick, flicked across: the next tab or the one before
+  if (in.r_flick && sel_tab >= 0 && screen != S_DRIVE && screen != S_WIFI && screen != S_HEALTH && screen != S_DUPES) {
+    int k = (sel_tab + in.r_flick + 4) % 4;
+    sfx(SFX_TAB);
+    if (k == 0) screen = S_LIBRARY;
+    if (k == 1) screen = S_WEB;
+    if (k == 2) { screen = S_SHOW; plan_sel = 0; }
+    if (k == 3) screen = S_SETTINGS;
+    in.r_flick = 0;
+  }
   for (int k = 0; k < 4; k++) {
     int cx = px + k * tw + tw / 2;
     int on = k == sel_tab;
@@ -2143,11 +2162,17 @@ static void draw_bar(void) {
     int iy = t > 0.5f ? py + PILL_H / 2 : py + 23;
     // (the Library: how many came in from the Browser since it was looked at)
     if (k == 0 && lib_new > 0 && !on) {
+      // (a bigger badge, ringed, with a soft beat: it's seen)
       char b[8];
       snprintf(b, sizeof b, "%d", lib_new > 99 ? 99 : lib_new);
-      int bw = text_w(11, b) + 10;
-      rrect(cx + 8, iy - 18, bw < 18 ? 18 : bw, 18, 9, ACC);
-      text_center(cx + 8 + (bw < 18 ? 18 : bw) / 2, iy - 5, RGBA(20, 12, 16, 255), 11, b);
+      int bw = text_w(13, b) + 12, bh = 22;
+      if (bw < bh) bw = bh;
+      float pulse = 0.5f + 0.5f * sinf(frame_no * 0.09f);
+      float bx = cx + 6, by = iy - 24;
+      rrect_round(bx - 4 - pulse * 3, by - 4 - pulse * 3, bw + 8 + pulse * 6, bh + 8 + pulse * 6, (bh + 8 + pulse * 6) / 2, with_alpha(ACC2, (int)(70 * (1 - pulse) + 30)));
+      rrect_round(bx - 2, by - 2, bw + 4, bh + 4, (bh + 4) / 2.0f, SURF2);
+      rrect_round(bx, by, bw, bh, bh / 2.0f, ACC2);
+      text_center(bx + bw / 2, by + 16, RGBA(255, 255, 255, 255), 13, b);
     }
     // (the Browser: a ring round it while something's being saved or converted)
     if (k == 1) {
@@ -2163,7 +2188,7 @@ static void draw_bar(void) {
     }
     // (the button that leads here: ○ goes round Library, Browser, Slideshow, Settings)
     int next = sel_tab >= 0 && k == (sel_tab + 1) % 4 && screen != S_DRIVE && screen != S_WIFI && screen != S_STATS && screen != S_HEALTH;
-    if (next && t < 0.5f) btn_hint_circle(cx + 26, py + 14, with_alpha(TEXT, 110)); // (one ring: the ○ button)
+    (void)next; // (no ring by it: the Library's badge is the only mark on the bar)
     // (the whole quarter of the pill, and a little round it, is the tab's)
     if (in.tap && in.tap_x >= px + k * tw - (k == 0 ? 20 : 0) && in.tap_x < px + (k + 1) * tw + (k == 3 ? 20 : 0) && in.tap_y >= py - 10) {
       sfx(SFX_TAB);
@@ -2262,6 +2287,20 @@ static int online_button(int right) {
   return 44;
 }
 
+// (the connection as a small pressed-in button: dark inside with its shadow at the top and a lit lip
+//  below, the wifi mark green online and red not; a tap says which)
+static int online_inset(int right) {
+  int on = online_now(), d = 36, x = right - d, y = HDR_Y + 10;
+  unsigned c = on ? RGBA(90, 214, 120, 255) : RGBA(240, 84, 84, 255);
+  rrect_round(x - 1, y - 1, d + 2, d + 2, d / 2 + 1, with_alpha(RGBA(0, 0, 0, 255), 80));
+  rrect_round(x, y, d, d, d / 2, mix_col(SURF2, RGBA(0, 0, 0, 255), 0.45f));
+  rrect_round(x + 1, y + 1, d - 2, d * 0.45f, d * 0.22f, RGBA(0, 0, 0, 70));       // (shadow inside its top)
+  rrect_round(x + 7, y + d - 3, d - 14, 1.5f, 0.75f, with_alpha(TEXT, 30));          // (the lip lit below)
+  circle(x + d / 2, y + d / 2, 13, with_alpha(c, 34));                                 // (its colour glowing in it)
+  icon("wifi", x + d / 2, y + d / 2 - 1, c);
+  if (hit(x - 4, y - 6, d + 8, d + 12)) { sfx(SFX_TICK); say(on ? "Online" : "Offline: turn on Wi-Fi in the Vita's settings (the Library still works)"); net_state_cached = -1; }
+  return d;
+}
 // The Library's corner: a quarter circle in the screen's top right, Your stats behind it (its bars),
 // and the connection's light on it, green or red, so the corner does both in the room of one button
 static int stats_corner(void) {
@@ -2271,8 +2310,19 @@ static int stats_corner(void) {
   circle(W, y0, R + 2, with_alpha(BG, 200));
   circle(W, y0, R, SURF2);
   circle(W, y0, R - 1, mix_col(with_alpha(SURF2, 255), ACC, 0.18f));
-  icon("stats", W - 22, y0 + 22, TEXT);
-  circle(W - 41, y0 + 9, 3, on ? RGBA(90, 214, 120, 255) : RGBA(240, 84, 84, 255));
+  // (a ring chart: three parts of a whole, the stats page's own look)
+  (void)on;
+  {
+    float ccx = W - 23, ccy = y0 + 22, rr = 11;
+    static const float part[3] = {0.52f, 0.28f, 0.20f};
+    unsigned col[3] = {ACC, TEXT, with_alpha(TEXT, 90)};
+    float a0 = -1.5708f;
+    for (int k = 0; k < 3; k++) {
+      int n = (int)(part[k] * 44);
+      for (int d = 0; d < n - 1; d++) { float a = a0 + (d + 0.5f) / 44.0f * 6.2832f; circle(ccx + cosf(a) * rr, ccy + sinf(a) * rr, 3.2f, col[k]); }
+      a0 += part[k] * 6.2832f;
+    }
+  }
   // (its own touch: the corner, a little more than drawn)
   if (in.tap && in.tap_x >= W - R - 4 && in.tap_y < y0 + R + 4 && hypotf(W - in.tap_x, in.tap_y - y0) < R + 8) {
     sfx(SFX_OPEN); stats_back = S_LIBRARY; screen = S_STATS; in.tap = 0;
@@ -2683,7 +2733,7 @@ static void draw_library(void) {
   int nf = (cfg.kind != 0) + (lf.nsfw_max != 0) + (lf.stars_min != 0) + (lf.album != 0) + (lf.coll[0] != 0 && !book_inside);
   if (nf) snprintf(kl, sizeof kl, "Filters \u00b7 %d", nf); else snprintf(kl, sizeof kl, "Filters");
   int hb;
-  sx -= stats_corner() + 2; // (Your stats, and the connection's light, in the corner)
+  sx -= stats_corner() + 2; // (Your stats, in the corner)
   // (Videos and Comics: their favourites, kept as links)
   if (!book_inside && (cfg.lmode == 2 || cfg.lmode == 3)) {
     int x = sx - 44, y = HDR_Y;
@@ -2698,6 +2748,7 @@ static void draw_library(void) {
   }
   sx -= head_button(sx, "sliders", kl, nf ? with_alpha(ACC, 110) : SURF2, &hb) + 8;
   if (hb || (!selecting && (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); lsheet = LS_FILTERS; lsheet_sel = 0; }
+  sx -= online_inset(sx) + 8; // (the connection, left of Filters: a small pressed-in button, green or red)
   if (query[0] && sx - title_end > 90) {
     char q[160];
     snprintf(q, sizeof q, "\u201c%.12s%s\u201d", query, strlen(query) > 12 ? "\u2026" : "");
@@ -3777,14 +3828,16 @@ static void draw_settings(void) {
   int at = 0;
   for (int k = 0; k < NORD; k++) { ypos[k] = total; total += ORDER[k] < 0 ? hh : rh; if (ORDER[k] == set_sel) at = k; }
   // (the chosen row kept in sight, its section's header too when it's the first)
+  // (only while going by the D-pad: a touch or the stick scrolls freely, the choice stays where it is)
+  static int set_follow = 1;
   float want = ypos[at] - (at > 0 && ORDER[at - 1] < 0 ? hh : 0);
-  if (ypos[at] + rh - set_scroll > room) set_scroll = ypos[at] + rh - room;
-  if (want < set_scroll) set_scroll = want;
+  if (set_follow && ypos[at] + rh - set_scroll > room) set_scroll = ypos[at] + rh - room;
+  if (set_follow && want < set_scroll) set_scroll = want;
   float fy = -1;
   // (the preview has a column of its own at the right while Theme or Background is chosen: the rows
   //  narrow smoothly to make room, so it never covers their values)
   static float rw_now = 0;
-  int pv = set_sel == ST_THEME || set_sel == ST_BGS;
+  int pv = 0; // (no preview column: the rows keep their width, and the screen stays light)
   float rw_want = pv ? W - 60 - 262 : W - 60;
   if (rw_now < 1) rw_now = rw_want;
   rw_now += (rw_want - rw_now) * ease(0.3f);
@@ -3813,17 +3866,32 @@ static void draw_settings(void) {
   vita2d_draw_rectangle(0, 0, W, top - 4, BG);
   text(30, 44, TEXT, 26, "Settings");
   textf(30 + text_w(26, "Settings") + 16, 44, FAINT, 13, "%s  ·  %d items%s", vault.root, vault.n, vault.untraceable ? "  ·  Untraceable" : "");
-  if (in.touching && in.down_y > top) set_scroll -= in.drag_dy;
-  if (set_scroll < 0) set_scroll = 0;
-  if (set_scroll > total - room) set_scroll = total - room > 0 ? total - room : 0;
+  // touch and the left stick scroll, whatever row they're over; a flick keeps going
+  static float set_v;
+  if (in.touching && in.down_y > top) { set_scroll -= in.drag_dy; set_v = 0; if (in.moved) set_follow = 0; }
+  if (in.flicked && in.down_y > top) { set_v = -in.fvy * 1.4f; set_follow = 0; }
+  if (fabsf(in.ly) > 0.05f) { set_scroll += in.ly * 14 * ft; set_follow = 0; }
+  set_scroll += set_v * ft;
+  set_v *= decay(0.93f);
+  if (set_scroll < 0) { set_scroll = 0; set_v = 0; }
+  if (set_scroll > total - room) { set_scroll = total - room > 0 ? total - room : 0; set_v = 0; }
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) sfx(SFX_TICK);
   if (in.pressed & (SCE_CTRL_DOWN | SCE_CTRL_UP)) {
     int step = (in.pressed & SCE_CTRL_DOWN) ? 1 : -1, k = at;
-    do k = (k + step + NORD) % NORD; while (ORDER[k] < 0);
-    set_sel = ORDER[k];
+    if (!set_follow) {
+      // (scrolled away: the D-pad picks up from the first row in sight)
+      k = -1;
+      for (int j = 0; j < NORD && k < 0; j++) if (ORDER[j] >= 0 && ypos[j] >= set_scroll - 4) k = j;
+      if (k < 0) k = at;
+      set_sel = ORDER[k];
+    } else {
+      do k = (k + step + NORD) % NORD; while (ORDER[k] < 0);
+      set_sel = ORDER[k];
+    }
+    set_follow = 1;
   }
+  if (in.tap && in.tap_y > top) set_follow = 0; // (a row tapped: it's where it is, no jump)
   // the theme (or background) chosen: a little Library, in its colours, to see it before leaving
-  if (pv && RW < W - 60 - 200) theme_preview(W - 30 - 236, top + 16);
   int d = (in.pressed & SCE_CTRL_RIGHT) ? 1 : (in.pressed & SCE_CTRL_LEFT) ? -1 : 0;
   int cross = (in.pressed & SCE_CTRL_CROSS) != 0, square = (in.pressed & SCE_CTRL_SQUARE) != 0;
   if (cross) d = d ? d : 1;

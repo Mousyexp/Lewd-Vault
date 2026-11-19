@@ -919,8 +919,9 @@ static void draw_dlp_tab(void) {
   int tx = W - 40, ty = H / 2 - 64, tw = 48, th = 128;
   rrect(tx, ty, tw, th, 16, with_alpha(SURF2, 235));
   rrect(tx + 1, ty + 1, tw - 2, th / 2, 15, with_alpha(TEXT, 10));
-  icon("save", tx + 20, ty + 40, dl_going() ? ACC : TEXT);
-  icon("chev_l", tx + 20, ty + 84, DIM);
+  icon("save", tx + 20, ty + 34, dl_going() ? ACC : TEXT);
+  text_center(tx + 20, ty + 66, TEXT, 11, "Saves");
+  icon("chev_l", tx + 20, ty + 96, DIM);
   if (dl_going()) {
     float f = dls[0].total > 0 ? (float)dls[0].have / dls[0].total : 0;
     rrect_round(tx + 8, ty + th - 18, 24, 5, 2.5f, with_alpha(TEXT, 40));
