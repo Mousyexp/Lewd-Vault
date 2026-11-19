@@ -1603,6 +1603,72 @@ static void find_add(int k) {
   }
   r->site = site;
 }
+// ---------- your own video source: a site, its tags, a name ----------
+// (from the finder's Videos side: ←→ the site, ✕ on Tags or Name to type, then Add; it's a source
+//  like the others, with its rows, and □ in the switcher removes it)
+static int own_open, own_sel, own_site_i;
+static char own_tags[64], own_title[48];
+static int own_sites(int *out) {
+  int n = 0;
+  for (int s2 = 0; s2 < LV_NSITES && n < 64; s2++) {
+    const LvSite *st = &LV_SITES[s2];
+    int vid = st->kind == BK_KVS || st->kind == BK_XV || st->kind == BK_HWORLD || st->kind == BK_HCLOUD || st->kind == BK_HCITY ||
+              ((st->kind == BK_DANBOORU || st->kind == BK_GELBOORU || st->kind == BK_MOEBOORU) && !st->hidden);
+    if (vid && st->base) out[n++] = s2;
+  }
+  return n;
+}
+static int vsrc_add_own(const char *site, const char *tags, const char *title);
+static void own_window_open(void) { own_open = 1; own_sel = 0; own_tags[0] = 0; own_title[0] = 0; sfx(SFX_OPEN); }
+static void draw_own_window(void) {
+  int sites[64], ns = own_sites(sites);
+  if (own_site_i >= ns) own_site_i = 0;
+  const LvSite *st = ns ? &LV_SITES[sites[own_site_i]] : NULL;
+  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 170));
+  const int ww = 600, wh = 330, wx = (W - ww) / 2, wy = (H - wh) / 2;
+  rrect(wx, wy + 4, ww, wh, 24, RGBA(0, 0, 0, 90));
+  rrect(wx, wy, ww, wh, 24, SURF);
+  rrect(wx + 2, wy + 2, ww - 4, 60, 22, with_alpha(TEXT, 8));
+  icon("plus", wx + 32, wy + 32, ACC);
+  text(wx + 54, wy + 40, TEXT, 21, "Your own video source");
+  const char *lab[3] = {"Site", "Tags", "Name"};
+  char val[3][96];
+  snprintf(val[0], 96, "‹  %s  ›", st ? st->name : "(none)");
+  snprintf(val[1], 96, "%s", own_tags[0] ? own_tags : "✕ to type (like overwatch, or milf uncensored)");
+  snprintf(val[2], 96, "%s", own_title[0] ? own_title : "✕ to type (it's what the source is called)");
+  for (int k = 0; k < 3; k++) {
+    int ry = wy + 74 + k * 58, on = k == own_sel;
+    if (on) glass(wx + 16, ry, ww - 32, 50, 0); else rrect(wx + 16, ry, ww - 32, 50, 16, with_alpha(SURF2, 150));
+    text(wx + 34, ry + 32, DIM, 15, lab[k]);
+    text_fit(wx + 110, ry + 32, (k && !(k == 1 ? own_tags[0] : own_title[0])) ? FAINT : TEXT, 16, val[k], ww - 150);
+    if (hit(wx + 16, ry, ww - 32, 50)) {
+      own_sel = k;
+      if (k == 0) { int d = in.tap_x < wx + ww / 2 ? -1 : 1; own_site_i = (own_site_i + d + ns) % (ns ? ns : 1); sfx(SFX_TICK); }
+      else in.pressed |= SCE_CTRL_CROSS;
+    }
+  }
+  int ok = st && own_tags[0];
+  int bw = 160, bx = wx + ww - 16 - bw, by = wy + wh - 62;
+  rrect_round(bx, by, bw, 46, 23, ok ? ACC : with_alpha(SURF2, 200));
+  text_center(bx + bw / 2, by + 30, ok ? RGBA(20, 12, 16, 255) : FAINT, 17, "Add");
+  text(wx + 24, by + 30, FAINT, 13, "↑↓ choose  ·  ←→ site  ·  ✕ type  ·  START add  ·  ○ close");
+  int add = (hit(bx, by, bw, 46) || (in.pressed & SCE_CTRL_START)) && ok;
+  if (in.pressed & SCE_CTRL_DOWN) { own_sel = (own_sel + 1) % 3; sfx(SFX_TICK); }
+  if (in.pressed & SCE_CTRL_UP) { own_sel = (own_sel + 2) % 3; sfx(SFX_TICK); }
+  if (own_sel == 0 && (in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_RIGHT)) && ns) { own_site_i = (own_site_i + ((in.pressed & SCE_CTRL_RIGHT) ? 1 : ns - 1)) % ns; sfx(SFX_TICK); }
+  if ((in.pressed & SCE_CTRL_CROSS) && !ime_open) {
+    if (own_sel == 1) ime_start(20, "Tags to ask the site for", own_tags, 0);
+    else if (own_sel == 2) ime_start(21, "A name for the source", own_title[0] ? own_title : own_tags, 0);
+  }
+  if (add) {
+    char title[48];
+    snprintf(title, sizeof title, "%s", own_title[0] ? own_title : own_tags);
+    if (vsrc_add_own(st->name, own_tags, title) == 0) { sfx(SFX_DONE); say("Added to the video sources"); own_open = 0; }
+    else { sfx(SFX_ERROR); say("No room, or one has that name already"); }
+  }
+  if ((in.pressed & SCE_CTRL_CIRCLE) || (in.tap && !(in.tap_x >= wx && in.tap_x < wx + ww && in.tap_y >= wy && in.tap_y < wy + wh))) { own_open = 0; sfx(SFX_CLOSE); }
+  in.pressed = 0; in.tap = 0; in.touching = 0;
+}
 static void draw_find_sheet(void) {
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 170));
   int wx = 60, wy = 18, ww = W - 120, wh = H - 36 - BAR + 40;
@@ -1684,7 +1750,16 @@ static void draw_find_sheet(void) {
   rrect(wx + 20, fy, bw, 38, 19, SURF2);
   icon("search", wx + 42, fy + 19, TEXT);
   text(wx + 58, fy + 25, TEXT, 15, "Type an address");
-  text(wx + 40 + bw, fy + 25, FAINT, 13, "□ type an address   ○ close");
+  text(wx + 40 + bw, fy + 25, FAINT, 13, find_tab ? "□ type an address  △ your own  ○ close" : "□ type an address   ○ close");
+  if (find_tab) {
+    // (your own: a site and its tags, as a video source; △)
+    int ox = wx + ww - 20 - (text_w(15, "Your own source") + 50);
+    int ow = text_w(15, "Your own source") + 50;
+    rrect_round(ox, fy, ow, 38, 19, with_alpha(ACC, 200));
+    icon("plus", ox + 22, fy + 19, RGBA(20, 12, 16, 255));
+    text(ox + 38, fy + 25, RGBA(20, 12, 16, 255), 15, "Your own source");
+    if ((hit(ox, fy, ow, 38) || (in.pressed & SCE_CTRL_TRIANGLE)) && !ime_open) { sheet = SH_NONE; own_window_open(); in.pressed = 0; in.tap = 0; return; }
+  }
   if ((hit(wx + 20, fy, bw, 38) || (in.pressed & SCE_CTRL_SQUARE)) && !ime_open) { sheet = SH_NONE; ime_start(14, "The site's address (like booru.example.org)", "", 0); }
   else if ((in.pressed & SCE_CTRL_CIRCLE) || (in.tap && !(in.tap_x >= wx && in.tap_x < wx + ww && in.tap_y >= wy && in.tap_y < wy + wh))) { sfx(SFX_CLOSE); sheet = SH_SITES; }
   in.pressed = 0;
@@ -2355,7 +2430,7 @@ static void draw_web(void) {
   int pane_input = dlp_t > 0.01f || dlp_open; // (the pane open: the grid takes no input)
   Input pane_saved = in;
   Input qm_saved = in; // (the quick menu, when it's up, has the input: the grid none)
-  if (qm_open) { in.pressed = 0; in.tap = 0; in.touching = 0; in.flicked = 0; in.ly = 0; in.lx = 0; in.tcount = 0; in.dbl = 0; }
+  if (qm_open || own_open) { in.pressed = 0; in.tap = 0; in.touching = 0; in.flicked = 0; in.ly = 0; in.lx = 0; in.tcount = 0; in.dbl = 0; }
   if (pane_input) { in.pressed = 0; in.tap = 0; in.touching = 0; in.flicked = 0; in.ly = 0; in.lx = 0; in.tcount = 0; in.dbl = 0; }
 
   // (two fingers pinched apart or together: the cards a size bigger or smaller; the card between the
@@ -2602,6 +2677,7 @@ static void draw_web(void) {
   if (!sheet_open) draw_dlp_tab();
   if (pane_input) { in = pane_saved; draw_dlp(); }
   if (qm_open) { in = qm_saved; draw_qm(wscroll); }
+  if (own_open) { in = qm_saved; draw_own_window(); }
   if (sheet == SH_SITES) draw_sites_sheet();
   else if (sheet == SH_FILTER) draw_filter_sheet();
   else if (sheet == SH_SEARCH) draw_search_sheet();

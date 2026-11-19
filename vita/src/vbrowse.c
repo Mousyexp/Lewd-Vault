@@ -35,7 +35,7 @@ static const VSource VSRC_BUILTIN[] = {
 #define VSRC_MAX 32 // (the built-in ones, 16 now, and room for as many added: icon slots 32-63)
 static VSource VSRC[VSRC_MAX];
 static int NVSRC, vsrc_built, nvs_added;
-static char vs_name[VSRC_MAX][48], vs_tags[VSRC_MAX][64];
+static char vs_name[VSRC_MAX][48], vs_tags[VSRC_MAX][64], vs_title[VSRC_MAX][48]; // (vs_title: your own source's name; "" an added site's)
 static void vsrc_build(void) {
   // (the video browser's thread reads the list, under its lock: rebuilt under it too)
   pthread_mutex_lock(&vbmx);
@@ -49,7 +49,8 @@ static void vsrc_build(void) {
     int gone = 0;
     for (int s = 0; s < LV_NSITES; s++) if (!strcmp(LV_SITES[s].name, vs_name[k])) { ic = LV_SITES[s].icon; gone = LV_SITES[s].hidden && LV_SITES[s].kind != BK_KVS; }
     if (gone) continue; // (a site no longer offered: AIBooru)
-    VSRC[NVSRC++] = (VSource){vs_name[k], vs_name[k], vs_tags[k], ic, "Added: videos", 0};
+    VSRC[NVSRC++] = vs_title[k][0] ? (VSource){vs_title[k], vs_name[k], vs_tags[k], ic, "Yours: videos", 0}
+                                   : (VSource){vs_name[k], vs_name[k], vs_tags[k], ic, "Added: videos", 0};
   }
   for (int k = 0; k < NVSRC_BUILTIN; k++) if (VSRC_BUILTIN[k].blocked && NVSRC < VSRC_MAX) VSRC[NVSRC++] = VSRC_BUILTIN[k];
   if (vb_src >= NVSRC) vb_src = -1; // (a source removed under the thread: it stops asking)
@@ -64,8 +65,11 @@ static void vsrc_load(void) {
     char *t = strchr(ln, '\t');
     if (!t || t == ln) continue;
     *t = 0;
+    char *t2 = strchr(t + 1, '\t'); // (a third part: your own source's name)
+    if (t2) *t2 = 0;
     snprintf(vs_name[nvs_added], sizeof vs_name[0], "%s", ln);
     snprintf(vs_tags[nvs_added], sizeof vs_tags[0], "%s", t + 1);
+    snprintf(vs_title[nvs_added], sizeof vs_title[0], "%s", t2 ? t2 + 1 : "");
     nvs_added++;
   }
   if (f) fclose(f);
@@ -74,7 +78,7 @@ static void vsrc_load(void) {
 static void vsrc_save(void) {
   FILE *f = fopen(DATA "/video_sources.txt.part", "w");
   if (!f) return;
-  for (int k = 0; k < nvs_added; k++) fprintf(f, "%s\t%s\n", vs_name[k], vs_tags[k]);
+  for (int k = 0; k < nvs_added; k++) { if (vs_title[k][0]) fprintf(f, "%s\t%s\t%s\n", vs_name[k], vs_tags[k], vs_title[k]); else fprintf(f, "%s\t%s\n", vs_name[k], vs_tags[k]); }
   fclose(f);
   sceIoRemove(DATA "/video_sources.txt");
   sceIoRename(DATA "/video_sources.txt.part", DATA "/video_sources.txt");
@@ -91,6 +95,25 @@ static int vsrc_add(const char *site, const char *tags) {
   pthread_mutex_lock(&vbmx);
   snprintf(vs_name[nvs_added], sizeof vs_name[0], "%s", site);
   snprintf(vs_tags[nvs_added], sizeof vs_tags[0], "%s", tags);
+  vs_title[nvs_added][0] = 0;
+  nvs_added++;
+  pthread_mutex_unlock(&vbmx);
+  vsrc_save();
+  vsrc_build();
+  return 0;
+}
+// Your own: a site with videos and the tags to ask it for, under a name of yours (the same site can be
+// several of these). -1 when there's no room, or one already has that name.
+static int vsrc_add_own(const char *site, const char *tags, const char *title) {
+  if (!vsrc_built) vsrc_load();
+  if (nvs_added >= VSRC_MAX - NVSRC_BUILTIN || !title[0]) return -1;
+  for (int k = 0; k < NVSRC; k++) if (VSRC[k].name && !strcmp(VSRC[k].name, title)) return -1;
+  pthread_mutex_lock(&vbmx);
+  snprintf(vs_name[nvs_added], sizeof vs_name[0], "%s", site);
+  snprintf(vs_tags[nvs_added], sizeof vs_tags[0], "%s", tags);
+  snprintf(vs_title[nvs_added], sizeof vs_title[0], "%s", title);
+  for (char *c = vs_title[nvs_added]; *c; c++) if (*c == '\t') *c = ' ';
+  for (char *c = vs_tags[nvs_added]; *c; c++) if (*c == '\t') *c = ' ';
   nvs_added++;
   pthread_mutex_unlock(&vbmx);
   vsrc_save();
@@ -98,12 +121,12 @@ static int vsrc_add(const char *site, const char *tags) {
   return 0;
 }
 // (□ on an added one in the switcher: gone)
-static int vsrc_is_added(int k) { return k >= 0 && k < NVSRC && !strcmp(VSRC[k].about, "Added: videos"); }
+static int vsrc_is_added(int k) { return k >= 0 && k < NVSRC && (!strcmp(VSRC[k].about, "Added: videos") || !strcmp(VSRC[k].about, "Yours: videos")); }
 static void vsrc_remove(int k) {
   pthread_mutex_lock(&vbmx);
   for (int j = 0; j < nvs_added; j++)
-    if (!strcmp(vs_name[j], VSRC[k].name)) {
-      for (int m = j; m < nvs_added - 1; m++) { memcpy(vs_name[m], vs_name[m + 1], sizeof vs_name[0]); memcpy(vs_tags[m], vs_tags[m + 1], sizeof vs_tags[0]); }
+    if (!strcmp(vs_title[j][0] ? vs_title[j] : vs_name[j], VSRC[k].name)) {
+      for (int m = j; m < nvs_added - 1; m++) { memcpy(vs_name[m], vs_name[m + 1], sizeof vs_name[0]); memcpy(vs_tags[m], vs_tags[m + 1], sizeof vs_tags[0]); memcpy(vs_title[m], vs_title[m + 1], sizeof vs_title[0]); }
       nvs_added--;
       break;
     }

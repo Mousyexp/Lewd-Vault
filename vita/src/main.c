@@ -4743,6 +4743,8 @@ int main(void) {
       if (r == 1 && ime_for == 19) mypre_save(got);
       if (r == 1 && ime_for == 7 && got[0]) { snprintf(drive_new_id, sizeof drive_new_id, "%s", got); drive_ask_secret = 1; }
       if (r == 1 && ime_for == 14 && got[0]) add_site_start(got);
+      if (r == 1 && ime_for == 20) snprintf(own_tags, sizeof own_tags, "%s", got);   // (your own source's tags)
+      if (r == 1 && ime_for == 21) snprintf(own_title, sizeof own_title, "%s", got); // (and its name)
       if (r == 1 && ime_for == 15) { snprintf(mg.query, sizeof mg.query, "%s", got); mg_search(); }
       if (r == 1 && ime_for == 17 && got[0]) { snprintf(conv_keys[conv_sel], sizeof conv_keys[conv_sel], "%s", got); conv_keys_save(); sfx(SFX_DONE); say("Key saved"); }
       if (r == 1 && ime_for == 16 && got[0]) { for (char *c = got; *c; c++) if (*c == ',' || *c == '"') *c = ' '; snprintf(sw_cat, sizeof sw_cat, "%.63s", got); sw_catsel = sw_ncats() - 1; }
