@@ -179,6 +179,7 @@ vita_create_vpk(${LV_VPK_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE ui/gear_fill.png ui/gear_fill.png
   FILE ui/heart.png ui/heart.png
   FILE ui/heart_fill.png ui/heart_fill.png
+  FILE ui/heart_big.png ui/heart_big.png
   FILE ui/image.png ui/image.png
   FILE ui/info.png ui/info.png
   FILE ui/more.png ui/more.png

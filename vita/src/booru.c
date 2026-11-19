@@ -522,13 +522,15 @@ static LvPost *episodes_parse(const LvSite *s, const char *text, int *n) {
       q.id = (long long)(h >> 1);
     } else if (s->kind == BK_HWORLD) {
       attr(p, end, "aria-label=", title, sizeof title);
+      if (!title[0]) attr(p, end, "alt=", title, sizeof title); // (the site's newer cards: the title on the cover's alt)
       attr(p, end, "href=", href, sizeof href);
       attr(p, end, "src=", img, sizeof img);
       // (the smaller cover: 268 wide, near a card's size)
       char *c5 = strstr(img, "cover-536.webp");
       if (c5) memcpy(c5, "cover-268", 9);
-      const char *d = strstr(p, "tabular-nums\">");
-      if (d && d < end) { d += 14; size_t k = 0; while (d[k] && d[k] != '<' && k < sizeof dur - 1) { dur[k] = d[k]; k++; } dur[k] = 0; }
+      const char *d = strstr(p, "tabular-nums");
+      if (d && d < end) d = strchr(d, '>'); // (whatever attributes follow it)
+      if (d && d < end) { d += 1; size_t k = 0; while (d[k] && d[k] != '<' && k < sizeof dur - 1) { dur[k] = d[k]; k++; } dur[k] = 0; }
       q.duration = dur_of(dur);
       q.width = 268; q.height = 394;
       unsigned long long h = 1469598103934665603ull;

@@ -1969,6 +1969,12 @@ static void draw_sites_sheet(void) {
     if (hit(segx + t * tw3, segy, tw3, 40)) { if (sites_tab != t) { sites_tab = t; sheet_sel = 0; sites_scroll = 0; sfx(SFX_TAB); } in.tap = 0; }
   }
   text(wx + 20, segy + 27, FAINT, 13, "L / R");
+  // (a way out, staying on the source: the ✕ at the top right, a tap outside the window, or ○)
+  circle(wx + ww - 34, segy + 20, 18, SURF2);
+  icon("xmark", wx + ww - 34, segy + 20, DIM);
+  if ((in.tap && (hypotf(in.tap_x - (wx + ww - 34), in.tap_y - (segy + 20)) < 24 || in.tap_y > wy + wh || in.tap_x < wx || in.tap_x > wx + ww)) || (in.pressed & SCE_CTRL_CIRCLE)) {
+    in.tap = 0; in.pressed &= ~SCE_CTRL_CIRCLE; sfx(SFX_CLOSE); sheet = SH_NONE; return;
+  }
   if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
     sites_tab = (sites_tab + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : 2)) % 3;
     sheet_sel = 0; sites_scroll = 0; sfx(SFX_TAB);

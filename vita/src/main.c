@@ -494,7 +494,9 @@ static vita2d_texture *ui_icon(const char *name);
 static void heart(float cx, float cy, float s, unsigned c) {
   DRAW_GUARD(cx, cy, s);
   // (the icon's filled heart, scaled: one quad, not two circles and a dozen one-pixel lines)
-  vita2d_texture *hf = ui_icon("heart_fill");
+  vita2d_texture *hf = s > 9 ? ui_icon("heart_big") : NULL; // (a big one: drawn from a big picture, crisp)
+  if (hf) { float sc = s * 2.3f / vita2d_texture_get_width(hf); vita2d_draw_texture_tint_scale(hf, cx - s * 1.15f, cy - s * 1.15f, sc, sc, c); return; }
+  hf = ui_icon("heart_fill");
   if (hf) { float sc = s * 2.3f / vita2d_texture_get_width(hf); vita2d_draw_texture_tint_scale(hf, cx - s * 1.15f, cy - s * 1.1f, sc, sc, c); return; }
   circle(cx - s * 0.5f, cy - s * 0.2f, s * 0.55f, c);
   circle(cx + s * 0.5f, cy - s * 0.2f, s * 0.55f, c);
@@ -4091,7 +4093,7 @@ static void draw_settings(void) {
     // (opening Settings: the rows slide in from the right, one after another)
     { static unsigned seen_at, opened; if (frame_no - seen_at > 2) opened = frame_no; seen_at = frame_no;
       float u = fminf(1, fmaxf(0, (frame_no - opened - k * 1.2f) / 14.0f)); u = 1 - (1 - u) * (1 - u) * (1 - u);
-      set_slide = (int)((1 - u) * 60); }
+      (void)u; set_slide = 0; } // (no slide on opening: they start where they belong)
     if (r == set_sel) glass(30 + set_slide, y, RW, 54, 0);
     else rrect(30 + set_slide, y, RW, 54, 14, SURF);
     if (r == set_sel) fy = y;
@@ -5112,6 +5114,7 @@ int main(void) {
       text_center(W / 2, ty + 26, with_alpha(TEXT, a), 16, message);
     }
     ev_watch();
+    sheet_cover_draw();
     rear_sign_draw();
     ev_sign_draw();
     PT("the screen");

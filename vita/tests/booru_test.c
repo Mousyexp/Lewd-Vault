@@ -103,6 +103,14 @@ int main(void) {
     for (int k = 0; p && k < c; k++) CHECK(strstr(p[k].preview, "cover-268.webp") && !strncmp(p[k].page, "https://hentaiworld.tv/videos/", 30) && p[k].duration > 60 && lv_is_long(&hw, &p[k]), "hw card %d %s %d", k, p[k].preview, p[k].duration);
     lv_posts_free(p, c);
     free(t);
+    // (the site's newer cards, 2026-11: the title on the cover's alt, more after the duration's class)
+    t = slurp("tests/booru/hworld_list2.html", &n);
+    c = 0;
+    p = lv_booru_parse(&hw, t, n, LV_R_ALL, &c);
+    CHECK(p && c >= 8, "hw2 cards %d", c);
+    for (int k = 0; p && k < c; k++) CHECK(strstr(p[k].preview, "cover-268.webp") && !strncmp(p[k].page, "https://hentaiworld.tv/videos/", 30) && p[k].duration > 60, "hw2 card %d %s %d", k, p[k].preview, p[k].duration);
+    lv_posts_free(p, c);
+    free(t);
     t = slurp("tests/booru/hworld_episode.html", &n);
     LvPost q = {0};
     q.file = strdup("x");

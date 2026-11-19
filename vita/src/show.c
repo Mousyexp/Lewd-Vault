@@ -516,8 +516,9 @@ static void draw_show_plan(void) {
     rrect(x, y, tw, th, 18, on ? SURF2 : SURF);
     circle(x + 30, y + 30, 16, with_alpha(ACC, on ? 255 : 60));
     icon(t[k].icon, x + 30, y + 30, on ? RGBA(20, 12, 16, 255) : ACC);
-    text(x + 56, y + 36, DIM, 14, t[k].name);
-    text_fit(x + 18, y + th - 20, TEXT, th > 90 ? 24 : 20, t[k].value, tw - 112);
+    text(x + 56, y + 37, TEXT, 17, t[k].name); // (its name: big enough to read at a glance)
+    { int vs = th > 90 ? 24 : 20; while (vs > 14 && text_w(vs, t[k].value) > tw - 112) vs -= 2; // (a long value made smaller to fit whole, not cut)
+      text_fit(x + 18, y + th - 20, TEXT, vs, t[k].value, tw - 112); }
     // two round glass buttons to change it, big enough for a thumb: − and + (‹ › for a choice)
     int numeric = t[k].id == R_FROM || t[k].id == R_FIRST || t[k].id == R_MIN || t[k].id == R_PACE || t[k].id == R_INTERVAL || t[k].id == R_SLEEP;
     for (int b = 0; b < 2; b++) {

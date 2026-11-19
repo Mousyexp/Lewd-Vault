@@ -483,6 +483,8 @@ static void lib_after_change(void) { refilter(); if (sel >= nshown) sel = nshown
 
 // A sheet's backdrop and body. Opening (not drawn the frame before): the dim comes in, and an
 // outline springs out from it and settles, a little past and back, as it lands.
+static unsigned sheet_clip_at; // (a sheet opening: what's drawn after it is cut at the edge it has reached)
+static void sheet_cover_draw(void) { if (sheet_clip_at == frame_no) vita2d_disable_clipping(); } // (main loop, after the screen)
 static void sheet_frame(int x, int y, int w, int h) {
   static unsigned last, opened;
   if (frame_no - last > 2) opened = frame_no;
@@ -490,12 +492,10 @@ static void sheet_frame(int x, int y, int w, int h) {
   unsigned age = frame_no - opened;
   float p = fminf(1, age / 14.0f);
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, (int)(150 * fminf(1, age / 6.0f))));
+  // (opening: it unrolls from its left edge; what is past the edge reached is not drawn yet)
+  float e = 1 - (1 - p) * (1 - p) * (1 - p);
+  if (p < 1) { vita2d_set_clip_rectangle(0, 0, x + (int)(w * e), H); vita2d_enable_clipping(); sheet_clip_at = frame_no; }
   rrect(x, y, w, h, 16, SURF);
-  if (p < 1) {
-    // (a damped spring: out past the edge, back, settling)
-    float g = 10 * expf(-5 * p) * cosf(p * 9.0f);
-    ring9(x - g, y - g, w + 2 * g, h + 2 * g, with_alpha(ACC, (int)(200 * (1 - p))));
-  }
 }
 static int sheet_row(int k, int x, int y, int w, int rh, const char *name, const char *value) {
   if (k == lsheet_sel) rrect(x + 6, y, w - 12, rh - 4, 10, SURF2);
