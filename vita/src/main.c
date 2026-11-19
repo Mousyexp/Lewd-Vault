@@ -2315,9 +2315,14 @@ static int head_button(int right, const char *ic, const char *label, unsigned bg
 }
 // (following the scroll: down a little way tucks the header and the bar away, up brings them back)
 static void chrome_follow(float dscroll, float pos) {
+  // (a new target is kept a moment: the page moving as the bar tucks doesn't flip it straight back)
+  static unsigned set_at;
+  float was = chrome_target;
   if (pos < 40) chrome_target = 0;
+  else if (frame_no - set_at < 24) return;
   else if (dscroll > 2.5f) chrome_target = 1;
   else if (dscroll < -2.5f) chrome_target = 0;
+  if (chrome_target != was) set_at = frame_no;
 }
 // The connection's light: green online, red not; a tap says which (and what to do)
 static int net_state_cached = -1;
@@ -2743,7 +2748,13 @@ static void draw_library(void) {
       icon("book", x + 21, y + 19, RGBA(20, 12, 16, 255));
       text(x + 32, y + 23, RGBA(20, 12, 16, 255), 11, bl);
     }
-    if (lv_likes_of(&vault, it) > 0) heart(x + 16, y + ch - 16, 6, ACC);
+    if (lv_likes_of(&vault, it) > 0) { // (its hearts: how many times it's been appreciated)
+      int nl = lv_likes_of(&vault, it);
+      char nb[12]; snprintf(nb, sizeof nb, "%d", nl);
+      rrect(x + 6, y + ch - 26, 24 + (nl > 1 ? text_w(11, nb) + 4 : 0), 20, 10, RGBA(0, 0, 0, 140));
+      heart(x + 16, y + ch - 16, 6, ACC);
+      if (nl > 1) text(x + 25, y + ch - 11, TEXT, 11, nb);
+    }
     if (is_locked(i)) { // (above the level the slideshow session has reached)
       vita2d_draw_rectangle(x, y, cw, ch, RGBA(14, 10, 14, 225));
       rrect(x + cw / 2 - 7, y + ch / 2 - 10, 14, 12, 3, DIM);
@@ -2780,7 +2791,7 @@ static void draw_library(void) {
       text_center(W / 2, TOP + 180, FAINT, 16, "Save a chapter from the Comics tab, or give a collection the category Comics");
     } else if (vault.n == 0 && !query[0]) {
       // (a new vault: where things come from)
-      decor_draw(DEC_TEARJU, W - 150, H + 4, 300, -150); // (still, and fainter: a negative alpha) // (one of the girls, waiting by it)
+      decor_draw(DEC_TEARJU, W - 150, H - 70, 300, -150); // (still, and fainter: a negative alpha) // (one of the girls, waiting by it)
       text_center(W / 2, TOP + 140, TEXT, 22, "Your vault is empty");
       text_center(W / 2, TOP + 172, DIM, 16, "Find pictures and videos in the Browser and save them here,");
       text_center(W / 2, TOP + 196, DIM, 16, "or save comics from the Comics tab.");
@@ -2836,6 +2847,13 @@ static void draw_library(void) {
   if (!book_inside) {
     sx -= head_button(sx, "sort", SORTS[cfg.sort], SURF2, &hb) + 8;
     if (hb || (!selecting && (in.pressed & SCE_CTRL_TRIANGLE))) { sfx(SFX_OPEN); lsheet = LS_SORT; lsheet_sel = cfg.sort; }
+  }
+  if (nf) { // (one tap clears them all)
+    int cx2 = sx - 40, cy2 = HDR_Y + 8;
+    rrect(cx2, cy2, 40, 40, 20, with_alpha(ACC, 80));
+    icon("xmark", cx2 + 20, cy2 + 20, TEXT);
+    if (hit(cx2, cy2 - 4, 40, 48)) { sfx(SFX_CLOSE); cfg.kind = 0; lf.nsfw_max = 0; lf.stars_min = 0; lf.album = 0; if (!book_inside) lf.coll[0] = 0; refilter(); say("Filters cleared"); }
+    sx -= 48;
   }
   sx -= head_button(sx, "sliders", kl, nf ? with_alpha(ACC, 110) : SURF2, &hb) + 8;
   if (hb || (!selecting && (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); lsheet = LS_FILTERS; lsheet_sel = 0; }
@@ -3096,10 +3114,18 @@ static int res_info_tap(void) {
   if (in.tap_x >= 70 && in.tap_x < 216 && in.tap_y < 58) { res_info_at = frame_no ? frame_no : 1; sfx(SFX_OPEN); return 1; }
   return 0;
 }
+static int res_rel; // (the Library's badge: ranked against the vault's biggest picture, not the usual sizes)
+static long long vault_max_px(void) {
+  static long long mx; static int at_n = -1;
+  if (at_n != vault.n) { mx = 0; for (int i = 0; i < vault.n; i++) { long long p = (long long)vault.items[i].width * vault.items[i].height; if (p > mx) mx = p; } at_n = vault.n; }
+  return mx;
+}
 static void res_badge(int w, int h, int a) {
   if (w <= 0 || h <= 0) return;
   unsigned c;
-  const char *r = res_rank(w, h, &c);
+  long long mx = res_rel ? vault_max_px() : 0;
+  float boost = mx > 0 && mx < 8000000 ? 8000000.0f / mx : 1;
+  const char *r = res_rank((int)(w * sqrtf(boost)), (int)(h * sqrtf(boost) + 0.5f), &c);
   float x = 74, y = 16, bw = 46, bh = 34;
   rrect(x - 1, y + 2, bw + 2, bh, 12, with_alpha(RGBA(0, 0, 0, 255), a * 80 / 255));
   rrect(x, y, bw, bh, 12, with_alpha(c, a));
@@ -3127,7 +3153,7 @@ static void res_badge(int w, int h, int a) {
   int ba = (int)(a * e), bx = (int)x, by = (int)(y + bh + 8 - (1 - e) * 10), bw2 = 236, bh2 = 40 + 8 * 20;
   rrect(bx, by, bw2, bh2, 10, RGBA(0, 0, 0, ba * 150 / 255));
   rrect(bx + 1, by + 1, bw2 - 2, 26, 9, with_alpha(TEXT, ba / 16));
-  text(bx + 12, by + 22, with_alpha(TEXT, ba), 13, "Quality: by its resolution");
+  text(bx + 12, by + 22, with_alpha(TEXT, ba), 13, res_rel ? "Quality: against your biggest" : "Quality: by its resolution");
   for (int k = 0; k < 8; k++) {
     unsigned kc;
     static const int px[8] = {3840 * 2160, 2560 * 1440, 1920 * 1080, 1280 * 1024, 1280 * 720, 800 * 600, 640 * 400, 1};
@@ -3624,13 +3650,23 @@ static void draw_viewer(void) {
     grad(0, 0, W, 64, RGBA(0, 0, 0, 255), 64 * a / 400, 0, 0);
     // back
     fv_back_draw(a);
-    res_badge(it->width, it->height, a); // (its resolution's rank)
+    res_rel = 1; res_badge(it->width, it->height, a); res_rel = 0; // (its resolution's rank, against the vault's biggest)
     char pos[48];
     snprintf(pos, sizeof pos, "%d of %d", vk + 1, nshown);
     text_center(W / 2, 36, with_alpha(TEXT, a), 17, pos);
     // heart and details
     view_btn_draw(is_video(it), a, W - 136);
-    heart(W - 104, 30, 8, lv_likes_of(&vault, it) ? with_alpha(ACC, a) : with_alpha(TEXT, a / 2));
+    { // (the heart: how many times, and a pop with a +1 rising when it's given another)
+      static int last_n = -1, last_it = -1; static unsigned pop_at;
+      int nl = lv_likes_of(&vault, it);
+      if (last_it == vk && nl > last_n && last_n >= 0) pop_at = frame_no ? frame_no : 1;
+      last_it = vk; last_n = nl;
+      float pu = pop_at ? (frame_no - pop_at) / 30.0f : 1, sc = 1;
+      if (pu < 1) sc = 1 + 0.6f * sinf(pu * 3.14159f) * (1 - pu); else pop_at = 0;
+      heart(W - 104, 30, 8 * sc, nl ? with_alpha(ACC, a) : with_alpha(TEXT, a / 2));
+      if (nl > 0) { char nb[12]; snprintf(nb, sizeof nb, "%d", nl); text(W - 92, 44, with_alpha(TEXT, a), 11, nb); }
+      if (pu < 1) text_center(W - 104, (int)(16 - pu * 22), with_alpha(ACC, (int)(255 * (1 - pu))), 14, "+1");
+    }
     circle(W - 38, 30, 13, with_alpha(TEXT, a));
     circle(W - 38, 30, 11, RGBA(0, 0, 0, a));
     text_center(W - 38, 36, with_alpha(TEXT, a), 15, "i");
@@ -4129,7 +4165,8 @@ static void draw_settings(void) {
     float g = sb_drag ? 2 : 0, hx = x + 3 - g, hw = tw2 - 6 + g * 2;
     rrect(hx, ty2 + 2, hw, th2, 9, RGBA(0, 0, 0, 100));
     rrect(hx, ty2, hw, th2, 9, mix_col(ACC, RGBA(0, 0, 0, 255), 0.35f));
-    for (int j = 1; j <= 4; j++) rrect(hx + j * 1.5f, ty2 + 1, hw - j * 3, th2 - 2, 9 - j, with_alpha(mix_col(ACC, RGBA(0, 0, 0, 255), 0.35f - j * 0.09f), 255));
+    for (int j = 1; j <= 4; j++) rrect(hx + j * 1.5f, ty2 + 1, hw - j * 3, th2 - 2, 9 - j, with_alpha(mix_col(ACC, RGBA(0, 0, 0, 255), fmaxf(0, 0.35f - j * 0.085f)), 255));
+    rrect(hx + hw * 0.36f, ty2 + 3, hw * 0.16f, th2 - 6, 2, RGBA(255, 255, 255, 70)); // (the light along it)
     for (int r = -1; r <= 1; r++) vita2d_draw_rectangle(hx + 5, ty2 + th2 / 2 + r * 4, hw - 10, 1, with_alpha(mix_col(ACC, RGBA(0, 0, 0, 255), 0.5f), 200)); // (ridges)
     // the section's name in a see-through bubble beside it, while dragged
     if (sb_drag && sec_k >= 0) {

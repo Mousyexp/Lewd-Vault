@@ -523,6 +523,12 @@ static void draw_show_plan(void) {
     for (int b = 0; b < 2; b++) {
       float bcx = x + tw - 74 + b * 46, bcy = y + th - 28, r = 19;
       int pressed = in.touching && hypotf(in.tx - bcx, in.ty - bcy) < r + 8;
+      static unsigned pop_at[16][2];
+      float pu = pop_at[k & 15][b] ? (frame_no - pop_at[k & 15][b]) / 20.0f : 1;
+      if (pu >= 1) pop_at[k & 15][b] = 0;
+      else { circle(bcx, bcy, r + 4 + pu * 16, with_alpha(ACC, (int)(120 * (1 - pu)))); circle(bcx, bcy, r + 3 + pu * 14, with_alpha(SURF, (int)(255 * (1 - pu)))); } // (a ring spreading out)
+      r *= pressed ? 0.86f : pu < 1 ? 1 + 0.18f * sinf(pu * 3.14159f) * (1 - pu) : 1; // (squeezed, then a bounce)
+      if (in.tap && hypotf(in.tap_x - bcx, in.tap_y - bcy) < 19 + 10) pop_at[k & 15][b] = frame_no ? frame_no : 1;
       circle(bcx, bcy + 1.5f, r, RGBA(0, 0, 0, 70));
       circle(bcx, bcy, r, pressed ? with_alpha(ACC, 200) : mix_col(SURF2, ACC, on ? 0.30f : 0.10f));
       circle(bcx, bcy - r * 0.35f, r * 0.62f, with_alpha(TEXT, pressed ? 30 : 14)); // (light from above)

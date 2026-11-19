@@ -1249,6 +1249,7 @@ static void web_take_results(void) {
       }
     } else if (d->kind == WD_SAVE) {
       saving = 0;
+      if (ndl && dls[0].have <= 0 && d->added.path[0]) { SceIoStat st; if (sceIoGetstat(d->added.path, &st) >= 0) dls[0].have = st.st_size; } // (too quick for the progress: the file's own size)
       dl_end(!d->err[0] && d->added.uid[0], d->err[0] ? d->err : NULL);
       if (d->err[0] || !d->added.uid[0]) { sfx(SFX_ERROR); say(d->err[0] ? d->err : "It couldn't be saved"); }
       else if (d->vgen == vgen && loaded_vault) {

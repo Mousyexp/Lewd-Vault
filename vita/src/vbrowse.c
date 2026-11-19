@@ -583,8 +583,9 @@ static void draw_videos(void) {
     // (the chosen card kept in sight)
     float want = vb_col[r] * (VB_CW + 12) - (W - 60 - VB_CW) / 2.0f;
     if (want < 0) want = 0;
-    if (r == vb_row || vb_x[r] > want + W) vb_x[r] += (want - vb_x[r]) * ease(0.25f);
-    if (in.touching && in.down_y > ry && in.down_y < ry + VB_CH + 40) { vb_x[r] -= in.drag_dx; vb_row = r; }
+    int held = in.touching && in.down_y > ry && in.down_y < ry + VB_CH + 40;
+    if (held) { vb_x[r] -= in.drag_dx; vb_row = r; if (in.moved) { int c = (int)((vb_x[r] + (W - 60 - VB_CW) / 2.0f) / (VB_CW + 12) + 0.5f); int mxc = row->n < VB_SHOW ? row->n : VB_SHOW; vb_col[r] = c < 0 ? 0 : c > mxc ? mxc : c; } } // (dragged: the card nearest the middle becomes the chosen one, so it doesn't spring back)
+    else if (r == vb_row || vb_x[r] > want + W) vb_x[r] += (want - vb_x[r]) * ease(0.25f);
     for (int k = 0; k < row->n && k < VB_SHOW; k++) {
       float x = 30 + k * (VB_CW + 12) - vb_x[r];
       if (x > W || x + VB_CW < 0) continue;
@@ -634,8 +635,8 @@ static void draw_videos(void) {
       text(30, ry + 20, r == vb_row ? TEXT : DIM, 18, "Up next \u00b7 your Favourites");
       float want = vb_col[r] * (VB_CW + 12) - (W - 60 - VB_CW) / 2.0f;
       if (want < 0) want = 0;
-      if (r == vb_row) vb_x[r] += (want - vb_x[r]) * ease(0.25f);
-      if (in.touching && in.down_y > ry && in.down_y < ry + VB_CH + 40) { vb_x[r] -= in.drag_dx; vb_row = r; }
+      if (in.touching && in.down_y > ry && in.down_y < ry + VB_CH + 40) { vb_x[r] -= in.drag_dx; vb_row = r; if (in.moved) { int c = (int)((vb_x[r] + (W - 60 - VB_CW) / 2.0f) / (VB_CW + 12) + 0.5f); vb_col[r] = c < 0 ? 0 : c >= nup ? (nup ? nup - 1 : 0) : c; } }
+      else if (r == vb_row) vb_x[r] += (want - vb_x[r]) * ease(0.25f);
       for (int k = 0; k < nup; k++) {
         float x = 30 + k * (VB_CW + 12) - vb_x[r], cy = ry + 32;
         if (x > W || x + VB_CW < 0) continue;
