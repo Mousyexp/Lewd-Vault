@@ -62,7 +62,8 @@ gd_open_gif(const char *fname)
     }
     /* Version */
     read(fd, sigver, 3);
-    if (memcmp(sigver, "89a", 3) != 0) {
+    /* (Lewd Vault: 87a as well; gifdec reads both alike) */
+    if (memcmp(sigver, "89a", 3) != 0 && memcmp(sigver, "87a", 3) != 0) {
         fprintf(stderr, "invalid version\n");
         goto fail;
     }
@@ -72,10 +73,9 @@ gd_open_gif(const char *fname)
     /* FDSZ */
     read(fd, &fdsz, 1);
     /* Presence of GCT */
-    if (!(fdsz & 0x80)) {
-        fprintf(stderr, "no global color table\n");
-        goto fail;
-    }
+    /* (Lewd Vault: no global color table is allowed: each frame has its own, and the table
+     *  stands empty, greys, until one does) */
+    int has_gct = (fdsz & 0x80) != 0;
     /* Color Space's Depth */
     depth = ((fdsz >> 4) & 7) + 1;
     /* Ignore Sort Flag. */
@@ -94,7 +94,8 @@ gd_open_gif(const char *fname)
     gif->depth  = depth;
     /* Read GCT */
     gif->gct.size = gct_sz;
-    read(fd, gif->gct.colors, 3 * gif->gct.size);
+    if (has_gct) read(fd, gif->gct.colors, 3 * gif->gct.size);
+    else { gif->gct.size = 256; for (int c = 0; c < 256; c++) gif->gct.colors[c * 3] = gif->gct.colors[c * 3 + 1] = gif->gct.colors[c * 3 + 2] = (uint8_t)c; }
     gif->palette = &gif->gct;
     gif->bgindex = bgidx;
     gif->frame = calloc(4, width * height);

@@ -303,6 +303,15 @@ static void *list_main(void *arg) {
     lv_booru_url_ex(s, q, ratings, sort, span, key[0] ? key : NULL, page, url, sizeof url);
     // (no address: the site has no more pages)
     int st = url[0] ? lv_http_get(h, url, &b, &n, 8 * 1024 * 1024, NULL, NULL, &err) : 200;
+    // (a site that's busy or hiccuping, 5xx or 429: asked again by itself, after a moment, a few
+    //  times, unless the search changed meanwhile)
+    for (int tries = 0; url[0] && (st == 429 || (st >= 500 && st <= 599)) && tries < 4 && gen == wgen; tries++) {
+      LOG("list: %d from the site, again (%d)\n", st, tries + 1);
+      free(b); b = NULL; n = 0; err = NULL;
+      for (int w8 = 0; w8 < (tries + 1) * 15 && gen == wgen; w8++) sceKernelDelayThread(100000); // (1.5 s, 3 s, 4.5 s, 6 s)
+      if (gen != wgen) break;
+      st = lv_http_get(h, url, &b, &n, 8 * 1024 * 1024, NULL, NULL, &err);
+    }
     if (!url[0]) { b = (uint8_t *)strdup(s->kind == BK_BOORUIO ? "{\"data\":[]}" : "[]"); n = b ? strlen((char *)b) : 0; }
     int count = 0;
     LvPost *got = st == 200 ? lv_booru_parse(s, (const char *)b, n, ratings, &count) : NULL;
@@ -545,6 +554,13 @@ static void *sample_main(void *arg) {
     }
     if (save) {
       d.kind = WD_SAVE;
+      // (saved from the grid: nothing downloaded yet, the picture's sample fetched here first)
+      if (!raw && !lv_post_is_video(&post) && post.sample) {
+        uint8_t *b = NULL;
+        size_t n = 0;
+        if (lv_http_get(h, post.sample, &b, &n, 32u * 1024 * 1024, &big_cancel, &big_progress, NULL) == 200 && n) { raw = b; rawn = n; }
+        else free(b);
+      }
       // full size: the original instead of the sample (pictures; GIFs and videos are whole anyway)
       if (full && !lv_post_is_video(&post) && strcmp(post.ext, "gif") && strcmp(post.file, post.sample)) {
         uint8_t *b = NULL;
@@ -999,9 +1015,102 @@ static int draw_dlp(void) {
   in.pressed = 0; in.tap = 0; in.touching = 0; in.flicked = 0; in.ly = 0;
   return 1;
 }
-// (the save page's choices; -1 level: from the post's rating; "" category: the usual one)
 static int sw_nsfw = -1, sw_stars = 5, sw_notags;
 static char sw_cat[64];
+static const char *save_category(void);
+// ---------- the grid's quick menu: △ on a card, or a finger held on it ----------
+// The card lifts out, a third bigger, over the others (dimmed), with a menu beside it: Save (straight
+// to the vault, as the full view's Save does, with the usual choices) and Find similar. ↑↓ choose,
+// ✕ do it, ○ or △ close; a tap on a row does it, a tap elsewhere closes.
+static int qm_open, qm_post, qm_sel;
+static unsigned qm_at;
+static int wv_similar(const LvPost *p);
+// (a save from the grid: the same job as the full view's, the picture fetched by the save itself)
+static void grid_save(int k) {
+  if (saving || k < 0 || k >= nposts) return;
+  const LvPost *pp = &posts[k];
+  if (is_saved(pp)) { sfx(SFX_ERROR); say("Already in your vault"); return; }
+  if (!loaded_vault) { say("Open a vault first"); return; }
+  if (lv_post_is_video(pp)) { say("A video saves from its full view (it downloads there)"); return; }
+  saving = 1;
+  dl_begin(k);
+  pthread_mutex_lock(&wmx);
+  big_job.post = k;
+  big_job.gen = wgen;
+  big_job.save = 1;
+  big_job.vgen = vgen;
+  big_job.full = cfg.wfull;
+  snprintf(big_job.cat, sizeof big_job.cat, "%s", sw_cat[0] ? sw_cat : save_category());
+  big_job.nsfw = sw_nsfw; big_job.stars = sw_stars; big_job.notags = sw_notags;
+  big_job.raw = NULL;
+  big_job.rawn = 0;
+  pthread_cond_broadcast(&wcv);
+  pthread_mutex_unlock(&wmx);
+  sfx(SFX_SAVED);
+  say("Saving… (the Saves pane at the right edge shows it)");
+}
+static void qm_show(int k) { if (k < 0 || k >= nposts) return; qm_open = 1; qm_post = k; qm_sel = 0; qm_at = frame_no; sfx(SFX_OPEN); }
+// 1 while it's up (it has the input then)
+static int draw_qm(float scroll) {
+  if (!qm_open || qm_post >= nposts || qm_post >= wgrid.n) { qm_open = 0; return 0; }
+  float t = fminf(1, (frame_no - qm_at) / 10.0f);
+  t = 1 - (1 - t) * (1 - t);
+  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, (int)(150 * t)));
+  // the card, lifted: a third bigger about its own middle, kept on the screen
+  Rect r = wgrid.r[qm_post];
+  float cx = r.x + r.w / 2, cy = TOP + 6 + r.y - scroll + r.h / 2;
+  float sc = 1 + 0.3f * t, w = r.w * sc, h = r.h * sc;
+  float x = cx - w / 2, y = cy - h / 2;
+  // (the menu's room beside it: right if it fits, else left)
+  const float mw = 236, mh = 2 * 58 + 16;
+  int right = x + w + 14 + mw < W - 10;
+  float minx = 10, maxx = W - 10 - w - (right ? mw + 14 : 0);
+  if (!right) minx = 10 + mw + 14;
+  if (x < minx) x = minx;
+  if (x > maxx) x = maxx;
+  if (y < 10) y = 10;
+  if (y + h > H - 10) y = H - 10 - h;
+  vita2d_texture *pv = preview_of(qm_post);
+  rrect(x - 2, y + 6, w + 4, h + 4, 14, RGBA(0, 0, 0, (int)(120 * t)));
+  if (pv) draw_cover(pv, x, y, w, h, RGBA(255, 255, 255, 255));
+  else skeleton(x, y, w, h, 12);
+  ring9(x - 3, y - 3, w + 6, h + 6, with_alpha(ACC, (int)(255 * t)));
+  // the menu: glass, two rows with icons
+  float mx = right ? x + w + 14 : x - 14 - mw, my = y + h / 2 - mh / 2;
+  if (my < 10) my = 10;
+  if (my + mh > H - 10) my = H - 10 - mh;
+  rrect(mx - 1, my + 3, mw + 2, mh, 18, RGBA(0, 0, 0, (int)(110 * t)));
+  rrect(mx, my, mw, mh, 18, with_alpha(SURF, (int)(250 * t)));
+  rrect(mx + 2, my + 2, mw - 4, mh * 0.4f, 16, with_alpha(TEXT, (int)(10 * t)));
+  const LvPost *pp = &posts[qm_post];
+  int saved = is_saved(pp);
+  const char *lab[2] = {saved ? "Saved" : saving ? "Saving…" : "Save", "Find similar"};
+  const char *ic[2] = {"save", "search"};
+  int act = -1;
+  for (int k = 0; k < 2; k++) {
+    float ry = my + 8 + k * 58;
+    int on = k == qm_sel;
+    if (on) glass(mx + 8, ry, mw - 16, 50, 0);
+    circle(mx + 36, ry + 25, 17, with_alpha(ACC, on ? 255 : 60));
+    icon(ic[k], mx + 36, ry + 25, on ? RGBA(20, 12, 16, 255) : ACC);
+    text(mx + 64, ry + 31, k == 0 && saved ? DIM : TEXT, 17, lab[k]);
+    if (in.tap && in.tap_x >= mx && in.tap_x < mx + mw && in.tap_y >= ry && in.tap_y < ry + 54) { qm_sel = k; act = k; }
+  }
+  text_center((int)(mx + mw / 2), (int)(my + mh + 20), with_alpha(FAINT, (int)(255 * t)), 12, "✕ do it  ·  ○ close");
+  if (in.pressed & (SCE_CTRL_UP | SCE_CTRL_DOWN)) { qm_sel ^= 1; sfx(SFX_TICK); }
+  if (in.pressed & SCE_CTRL_CROSS) act = qm_sel;
+  int close = (in.pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_TRIANGLE)) || (in.tap && act < 0 && !(in.tap_x >= x && in.tap_x < x + w && in.tap_y >= y && in.tap_y < y + h));
+  if (in.tap && act < 0 && in.tap_x >= x && in.tap_x < x + w && in.tap_y >= y && in.tap_y < y + h) {
+    // (the lifted card tapped: its full view)
+    qm_open = 0; wsel = qm_post; sfx(SFX_SELECT); wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; wv_back = S_WEB; screen = S_WEBVIEW; wv_show(qm_post);
+  } else if (act == 0) { qm_open = 0; grid_save(qm_post); }
+  else if (act == 1) { qm_open = 0; wv_similar(pp); }
+  else if (close) { qm_open = 0; sfx(SFX_CLOSE); }
+  in.pressed = 0; in.tap = 0; in.touching = 0; in.flicked = 0; in.ly = 0; in.lx = 0;
+  return 1;
+}
+// (the save page's choices; -1 level: from the post's rating; "" category: the usual one)
+// (the save page's choices: sw_nsfw, sw_stars, sw_notags, sw_cat, declared above)
 static void wv_save(void) {
   if (saving || wv >= nposts) return;
   if (is_saved(&posts[wv])) { sfx(SFX_ERROR); say("Already in your vault"); return; }
@@ -1123,6 +1232,7 @@ static void web_take_results(void) {
           wv_gif = gif_play_open(wv_raw, wv_rawn);
           LOG("gif %dx%d -> %p\n", wv_gif ? wv_gif->w : 0, wv_gif ? wv_gif->h : 0, (void *)wv_gif);
           if (wv_gif) { wv_err[0] = 0; wv_failed = 0; }
+          else snprintf(wv_err, sizeof wv_err, "This GIF couldn't be played: its preview is shown");
         }
         if (wv < nposts && lv_post_is_video(&posts[wv]) && !d->err[0] && !wv_vid) { // (not if it's already playing as it came)
           make_room(32u << 20); // (a player: room first)
@@ -2244,6 +2354,8 @@ static void draw_web(void) {
   if (!sheet_open && !dlp_open) dlp_gesture();
   int pane_input = dlp_t > 0.01f || dlp_open; // (the pane open: the grid takes no input)
   Input pane_saved = in;
+  Input qm_saved = in; // (the quick menu, when it's up, has the input: the grid none)
+  if (qm_open) { in.pressed = 0; in.tap = 0; in.touching = 0; in.flicked = 0; in.ly = 0; in.lx = 0; in.tcount = 0; in.dbl = 0; }
   if (pane_input) { in.pressed = 0; in.tap = 0; in.touching = 0; in.flicked = 0; in.ly = 0; in.lx = 0; in.tcount = 0; in.dbl = 0; }
 
   // (two fingers pinched apart or together: the cards a size bigger or smaller; the card between the
@@ -2343,9 +2455,24 @@ static void draw_web(void) {
       text(x + cw - tw - 10, y + ch - 11, TEXT, 12, badge);
     }
     if (is_saved(p)) { circle(x + 17, y + 17, 11, ACC); text_center(x + 17, y + 23, RGBA(20, 12, 16, 255), 14, "\u2713"); }
-    if (!sheet_open && hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR) { wsel = k; sfx(SFX_SELECT); wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; wv_back = S_WEB; screen = S_WEBVIEW; wv_show(k); return; }
+    if (!sheet_open && !qm_open && hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR) { wsel = k; sfx(SFX_SELECT); wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; wv_back = S_WEB; screen = S_WEBVIEW; wv_show(k); return; }
   }
   if (fr_x >= 0) focus_ring(fr_x, fr_y, fr_w, fr_h);
+  // the quick menu: △ on the chosen card, or a finger held still on one for half a second
+  if (!sheet_open && !qm_open && !pane_input) {
+    if ((in.pressed & SCE_CTRL_TRIANGLE) && nposts) { qm_show(wsel); in.pressed &= ~SCE_CTRL_TRIANGLE; }
+    static int held_fired;
+    if (!in.touching) held_fired = 0;
+    if (in.touching && !in.moved && !held_fired && frame_no - in.down_frame > 30 && in.down_y > TOP && in.down_y < H - BAR) {
+      for (int k = grid_first(&wgrid, wscroll - 8); k < nposts && k < wgrid.n; k++) {
+        Rect rc = wgrid.r[k];
+        float yy = TOP + 6 + rc.y - wscroll;
+        if (yy > H) break;
+        if (in.down_x >= rc.x && in.down_x < rc.x + rc.w && in.down_y >= yy && in.down_y < yy + rc.h) { held_fired = 1; wsel = k; qm_show(k); break; }
+      }
+    }
+    if (held_fired) in.tap = 0; // (the finger lifting isn't a tap on the card)
+  }
   // (the last word typed could be one of these: chips over the grid for a while, or while there's
   //  nothing found)
   if (strip_on && nac) {
@@ -2378,7 +2505,21 @@ static void draw_web(void) {
     if (!lv_net_online()) text_center(W / 2, TOP + 150, DIM, 20, "Not connected: turn on Wi-Fi in the Vita's settings");
     else if (wloading) {
       spinner(W / 2, TOP + 150, 22);
-    } else text_center(W / 2, TOP + 150, DIM, 18, werr[0] ? werr : "Nothing found: try other tags or ratings");
+    } else {
+      text_center(W / 2, TOP + 150, DIM, 18, werr[0] ? werr : "Nothing found: try other tags or ratings");
+      // (the site answered with an error: a button to ask again, and once by itself after 5 s)
+      if (werr[0] && strstr(werr, "answered")) {
+        static unsigned err_at; static int auto_done, last_gen = -1;
+        if (last_gen != (int)wgen) { last_gen = (int)wgen; err_at = frame_no; auto_done = 0; }
+        int bw = text_w(16, "Try again") + 64, bx = W / 2 - bw / 2, by = TOP + 176;
+        rrect_round(bx, by, bw, 44, 22, ACC);
+        icon("refresh", bx + 26, by + 22, RGBA(20, 12, 16, 255));
+        text(bx + 44, by + 28, RGBA(20, 12, 16, 255), 16, "Try again");
+        int again = hit(bx, by, bw, 44) || (in.pressed & SCE_CTRL_CROSS);
+        if (!auto_done && frame_no - err_at > 300) { auto_done = 1; again = 1; }
+        if (again) { sfx(SFX_OPEN); web_search(); in.pressed = 0; }
+      }
+    }
   } else if (wloading && last >= nposts) text_center(W / 2, H - BAR - 14, FAINT, 14, "Loading more…");
   else if (wend && werr[0] && last >= nposts) text_center(W / 2, H - BAR - 14, FAINT, 14, werr);
   if (max_scroll > 0) {
@@ -2409,7 +2550,7 @@ static void draw_web(void) {
   int rx = W - 12, hb;
   rx -= online_button(rx) + 8;
   rx -= head_button(rx, "sort", LV_SORT_NAMES[cfg.wsort], SURF2, &hb) + 8;
-  if (!sheet_open && (hb || (in.pressed & SCE_CTRL_TRIANGLE))) {
+  if (!sheet_open && hb) {
     sfx(SFX_TOGGLE);
     do cfg.wsort = (cfg.wsort + 1) % LV_NSORTS; while (cfg.wsort == LV_SORT_HOT && !LV_SITES[cfg.site].hot);
     web_search();
@@ -2454,6 +2595,7 @@ static void draw_web(void) {
   draw_bar();
   if (!sheet_open) draw_dlp_tab();
   if (pane_input) { in = pane_saved; draw_dlp(); }
+  if (qm_open) { in = qm_saved; draw_qm(wscroll); }
   if (sheet == SH_SITES) draw_sites_sheet();
   else if (sheet == SH_FILTER) draw_filter_sheet();
   else if (sheet == SH_SEARCH) draw_search_sheet();
@@ -3129,8 +3271,8 @@ static void draw_webview(void) {
   static float pd0, z0;
   if (in.touching && wdetails_y < 0.5f) {
     if (in.tcount >= 2) {
-      float d = hypotf(in.t2x - in.tx, in.t2y - in.ty);
-      if (pd0 == 0) { pd0 = d; z0 = wzoom; } else wzoom = fminf(6, fmaxf(1, z0 * d / pd0));
+      static float pmx, pmy;
+      view_pinch(wv_por, wv_aw, wv_ah, &wzoom, &wpan_x, &wpan_y, &pd0, &z0, &pmx, &pmy);
     } else {
       pd0 = 0;
       if (view_drag(wv_por, wzoom, wv_mx, wv_my, &wpan_x, &wpan_y, &wswipe)) {}

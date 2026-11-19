@@ -119,3 +119,22 @@ static void view_tap_off(int por, float aw, float ah, float *ox, float *oy) {
   float tx = por ? in.tap_y : in.tap_x, ty = por ? W - in.tap_x : in.tap_y;
   *ox = aw / 2 - tx; *oy = ah / 2 - ty;
 }
+
+// Two fingers in a full view: zoom towards the point between them (the picture under the fingers
+// stays under them) and move with them. d0 0: the pinch just began. pan is the picture's centre
+// moved from the view's, in the view's space; zoom 1 fits.
+static void view_pinch(int por, float aw, float ah, float *zoom, float *pan_x, float *pan_y, float *d0, float *z0, float *pmx, float *pmy) {
+  float d = hypotf(in.t2x - in.tx, in.t2y - in.ty);
+  float sx = (in.tx + in.t2x) / 2.0f, sy = (in.ty + in.t2y) / 2.0f;
+  float vx = por ? sy : sx, vy = por ? W - sx : sy; // (the midpoint in the view's space)
+  float mx = vx - aw / 2, my = vy - ah / 2;
+  if (*d0 <= 0 || d < 1) { *d0 = d > 1 ? d : 1; *z0 = *zoom; *pmx = mx; *pmy = my; return; }
+  float zold = *zoom, znew = fminf(6, fmaxf(1, *z0 * d / *d0));
+  // (what was under the fingers last frame: kept under them now, at the new size)
+  float cx = (*pmx - *pan_x) / zold, cy = (*pmy - *pan_y) / zold;
+  *pan_x = mx - cx * znew;
+  *pan_y = my - cy * znew;
+  *zoom = znew;
+  *pmx = mx; *pmy = my;
+  if (znew <= 1.001f) { *pan_x = 0; *pan_y = 0; }
+}

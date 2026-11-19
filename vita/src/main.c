@@ -3367,9 +3367,8 @@ static void draw_viewer(void) {
   // --- touch: swipe for the next one, pinch to zoom, drag when zoomed, tap for the controls ---
   if (in.touching && details_y < 0.5f) {
     if (in.tcount >= 2) {
-      float d = hypotf(in.t2x - in.tx, in.t2y - in.ty);
-      if (pinch_d0 == 0) { pinch_d0 = d; zoom0 = zoom; }
-      else zoom = fminf(6, fmaxf(1, zoom0 * d / pinch_d0));
+      static float pmx, pmy;
+      view_pinch(lv_por, lv_aw, lv_ah, &zoom, &pan_x, &pan_y, &pinch_d0, &zoom0, &pmx, &pmy);
     } else {
       pinch_d0 = 0;
       if (zoom > 1.01f) { pan_x += view_dx(lv_por, in.drag_dx, in.drag_dy); pan_y += view_dy(lv_por, in.drag_dx, in.drag_dy); }

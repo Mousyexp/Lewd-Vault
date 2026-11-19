@@ -370,6 +370,14 @@ int lv_http_get(LvHttp *h, const char *url, uint8_t **out, size_t *n, size_t max
   *out = NULL;
   *n = 0;
   int st = perform(h, url, &s, err, NULL);
+  // (a server error or "too many": once more after a second, a hiccup being the usual cause)
+  if ((st == 429 || st == 500 || st == 502 || st == 503 || st == 504) && !(cancel && *cancel)) {
+    free(s.b);
+    Sink s2 = {NULL, NULL, 0, 0, max, cancel, progress, 0};
+    s = s2;
+    for (int w = 0; w < 10 && !(cancel && *cancel); w++) sceKernelDelayThread(100000);
+    st = perform(h, url, &s, err, NULL);
+  }
   if (st < 0) { free(s.b); return st; }
   if (!s.b) { s.b = malloc(1); if (!s.b) return -1; s.cap = 1; }
   s.b[s.n] = 0;

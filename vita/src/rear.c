@@ -18,9 +18,28 @@ static float rear_vol_acc;
 // After the input is read: the touchpad's movement kept or turned into what its half does
 static void rear_apply(void) {
   if (!in.back_on) { rear_first_at = 0; return; }
-  if (!rear_first_at) { rear_first_at = frame_no; rear_half = in.back_x0 >= W / 2; rear_vol_acc = 0; }
+  // (calmer: the touchpad's raw movement is small and jittery. Nothing until the finger has gone
+  //  14 px one way; then locked to that way (up-down or across) for the touch; smoothed; a step
+  //  back of under 3 px against the way it's going ignored; and twice the movement for scrolls)
+  static float accx, accy, sdx, sdy;
+  static int lock; // 0 not yet, 1 up and down, 2 across
+  if (!rear_first_at) { rear_first_at = frame_no; rear_half = in.back_x0 >= W / 2; rear_vol_acc = 0; accx = accy = sdx = sdy = 0; lock = 0; }
   int what = rear_of(rear_half);
   if (what != REAR_OFF) rear_seen_at = frame_no;
+  if (!lock) {
+    accx += in.bdx; accy += in.bdy;
+    if (fabsf(accy) > 14 && fabsf(accy) > 1.4f * fabsf(accx)) lock = 1;
+    else if (fabsf(accx) > 14 && fabsf(accx) > 1.4f * fabsf(accy)) lock = 2;
+    in.bdx = in.bdy = 0;
+    if (!lock) return;
+  }
+  float rx = lock == 2 ? in.bdx : 0, ry = lock == 1 ? in.bdy : 0;
+  if (sdy * ry < 0 && fabsf(ry) < 3) ry = 0;
+  if (sdx * rx < 0 && fabsf(rx) < 3) rx = 0;
+  sdy = sdy * 0.55f + ry * 0.45f;
+  sdx = sdx * 0.55f + rx * 0.45f;
+  in.bdy = sdy * 2.0f;
+  in.bdx = sdx;
   switch (what) {
     case REAR_SCROLL: in.bdx = 0; break;
     case REAR_SWIPE: in.bdy = 0; break;

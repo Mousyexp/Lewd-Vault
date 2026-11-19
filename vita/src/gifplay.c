@@ -1,4 +1,5 @@
-// Animated GIFs in the Browser's full view: gifdec (third_party/gifdec.c, public domain) reading the
+// Animated GIFs in the Browser's full view: gifdec (third_party/gifdec.c, public domain; changed to take
+// GIF87a and GIFs without a global colour table) reading the
 // downloaded bytes from memory (its read/lseek/open/close mapped onto them here: a Vita file read per
 // byte would be a system call each), frames decoded on a thread of their own, at the GIF's own pace,
 // looping. Three textures in turn: the thread writes the one the GPU finished with two frames ago, then
@@ -55,7 +56,8 @@ typedef struct {
   vita2d_texture *tex[3];
   uint8_t *rgb;
   volatile int run, front, frames; // (front: the texture to show, -1 none yet)
-  int w, h;
+  int w, h;   // (the GIF's own size)
+  int tw, th_; // (the textures': at most 1024 a side, a big one shrunk)
   pthread_t th;
   int th_on;
 } GifPlay;
@@ -73,10 +75,18 @@ static void *gif_main(void *arg) {
     vita2d_texture *t = g->tex[back];
     uint8_t *d = vita2d_texture_get_datap(t);
     unsigned stride = vita2d_texture_get_stride(t);
-    for (int y = 0; y < g->h; y++) {
-      const uint8_t *s = g->rgb + (size_t)y * g->w * 3;
-      uint8_t *o = d + (size_t)y * stride;
-      for (int x = 0; x < g->w; x++) { o[0] = s[0]; o[1] = s[1]; o[2] = s[2]; o[3] = 255; o += 4; s += 3; }
+    if (g->tw == g->w && g->th_ == g->h) {
+      for (int y = 0; y < g->h; y++) {
+        const uint8_t *s = g->rgb + (size_t)y * g->w * 3;
+        uint8_t *o = d + (size_t)y * stride;
+        for (int x = 0; x < g->w; x++) { o[0] = s[0]; o[1] = s[1]; o[2] = s[2]; o[3] = 255; o += 4; s += 3; }
+      }
+    } else { // (a big one: shrunk, nearest pixel: fast, and the screen shows it smaller anyway)
+      for (int y = 0; y < g->th_; y++) {
+        const uint8_t *row = g->rgb + (size_t)(y * g->h / g->th_) * g->w * 3;
+        uint8_t *o = d + (size_t)y * stride;
+        for (int x = 0; x < g->tw; x++) { const uint8_t *s = row + (size_t)(x * g->w / g->tw) * 3; o[0] = s[0]; o[1] = s[1]; o[2] = s[2]; o[3] = 255; o += 4; }
+      }
     }
     // (its own pace: a delay of 0 or 1 hundredths is shown as browsers do, a tenth of a second)
     int cs = g->gif->gce.delay;
@@ -94,18 +104,26 @@ static void *gif_main(void *arg) {
 static GifPlay *gif_play_open(const uint8_t *bytes, size_t n) {
   if (!bytes || n < 13 || memcmp(bytes, "GIF8", 4)) return NULL;
   int w = bytes[6] | bytes[7] << 8, h = bytes[8] | bytes[9] << 8;
-  if (w < 1 || h < 1 || w > 1600 || h > 1600 || (long)w * h > 1600L * 1000) return NULL;
+  if (w < 1 || h < 1 || w > 4096 || h > 4096) { LOG("gif: %dx%d, too big\n", w, h); return NULL; }
   GifPlay *g = calloc(1, sizeof *g);
   if (!g) return NULL;
   g->bytes = malloc(n);
-  g->rgb = malloc((size_t)w * h * 3);
+  g->rgb = malloc((size_t)w * h * 3 + 16);
   if (!g->bytes || !g->rgb) goto fail;
   memcpy(g->bytes, bytes, n);
   g->mem.b = g->bytes; g->mem.n = n;
   g->gif = gd_open_gif((const char *)&g->mem);
-  if (!g->gif) goto fail;
+  if (!g->gif) { LOG("gif: gifdec couldn't read it\n"); goto fail; }
   g->w = g->gif->width; g->h = g->gif->height;
-  for (int k = 0; k < 3; k++) { g->tex[k] = tex_new(g->w, g->h); if (!g->tex[k]) goto fail; }
+  {
+    int big = g->w > g->h ? g->w : g->h;
+    float sc = big > 1024 ? 1024.0f / big : 1;
+    g->tw = (int)(g->w * sc); g->th_ = (int)(g->h * sc);
+    if (g->tw < 1) g->tw = 1;
+    if (g->th_ < 1) g->th_ = 1;
+  }
+  make_room((size_t)g->tw * g->th_ * 4 * 3 + (4u << 20)); // (three frames' room first)
+  for (int k = 0; k < 3; k++) { g->tex[k] = tex_new(g->tw, g->th_); if (!g->tex[k]) { LOG("gif: no room for its frames\n"); goto fail; } }
   g->front = -1; g->run = 1;
   pthread_attr_t at;
   pthread_attr_init(&at);
