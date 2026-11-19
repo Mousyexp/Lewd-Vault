@@ -53,7 +53,7 @@ static vita2d_texture *dec_get(int k) {
   uint8_t *b = lv_read_all(path, NULL, &n);
   LvPixels px;
   memset(&px, 0, sizeof px);
-  if (!b || lv_decode(b, n, 400, 400, &px) != 0 || !px.rgba) { free(b); dec_failed[k] = 1; return dec_tex[k]; }
+  if (!b || lv_decode(b, n, k == DEC_PEACE ? 1024 : 400, k == DEC_PEACE ? 1024 : 400, &px) != 0 || !px.rgba) { free(b); dec_failed[k] = 1; return dec_tex[k]; }
   free(b);
   dec_tint(&px);
   vita2d_texture *t = upload(&px);
@@ -69,7 +69,11 @@ static int decor_draw(int k, float cx, float bottom, float h, int alpha) {
   if (cfg.nodecor) return 0;
   vita2d_texture *t = dec_get(k);
   if (!t) return 0;
-  float tw = vita2d_texture_get_width(t), th = vita2d_texture_get_height(t), sc = h / th;
+  float tw = vita2d_texture_get_width(t), th = vita2d_texture_get_height(t);
+  int sheet = k == DEC_PEACE; // (an animation: 25 frames in a 5 x 5 sheet, 70 ms each)
+  float fx = 0, fy = 0;
+  if (sheet) { int f = (int)(frame_no * 1000 / 60 / 70) % 25; tw /= 5; th /= 5; fx = (f % 5) * tw; fy = (f / 5) * th; }
+  float sc = h / th;
   int still = alpha < 0; // (a negative alpha: drawn still, no breathing or bobbing)
   if (still) alpha = -alpha;
   float t_s = still ? 0 : frame_no / 60.0f;
@@ -84,7 +88,8 @@ static int decor_draw(int k, float cx, float bottom, float h, int alpha) {
   }
   float w = tw * sc / squash, hh = th * sc * breath * squash;
   float x = cx - w / 2, y = bottom - hh - hop + bob;
-  vita2d_draw_texture_tint_scale(t, x, y, w / tw, hh / th, RGBA(255, 255, 255, alpha));
+  if (sheet) vita2d_draw_texture_tint_part_scale(t, x, y, fx, fy, tw, th, w / tw, hh / th, RGBA(255, 255, 255, alpha));
+  else vita2d_draw_texture_tint_scale(t, x, y, w / tw, hh / th, RGBA(255, 255, 255, alpha));
   if (in.tap && in.tap_x >= x && in.tap_x < x + w && in.tap_y >= y && in.tap_y < bottom) {
     dec_bounce_at[k] = frame_no ? frame_no : 1;
     sfx(SFX_TICK);

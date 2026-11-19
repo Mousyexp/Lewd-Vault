@@ -3939,6 +3939,7 @@ static void rear_window_open(void);
 static int rear_of(int right);
 static const char *const REAR_SHORT[] = {"", "Both", "Scroll", "Swipe", "Volume", "Zoom", "Off"};
 static int set_slide; // (a row's slide as Settings opens)
+static float sb_snap = -1; // (the scroll bar let go: the section start it glides to)
 static void draw_settings(void) {
   if (!conv_loaded) conv_keys_load();
   char vconv[80];
@@ -4008,7 +4009,7 @@ static void draw_settings(void) {
   static const char *const SECT[] = {"Appearance", "Playback", "Privacy", "Sync and sources", "Library", "Comics"};
   static const char *const SECT_ICON[] = {"sliders", "play", "info", "wifi", "photos", "book"};
   enum { NORD = sizeof ORDER / sizeof *ORDER };
-  const int rh = 58, hh = 40, top = 84, room = H - BAR - top + 8;
+  const int rh = 58, hh = 40, top = 112, room = H - BAR - top + 8;
   float ypos[NORD], total = 0;
   int at = 0;
   for (int k = 0; k < NORD; k++) { ypos[k] = total; total += ORDER[k] < 0 ? hh : rh; if (ORDER[k] == set_sel) at = k; }
@@ -4027,7 +4028,7 @@ static void draw_settings(void) {
   if (rw_now < 1) rw_now = rw_want;
   rw_now += (rw_want - rw_now) * ease(0.3f);
   if (fabsf(rw_want - rw_now) < 0.5f) rw_now = rw_want;
-  const int RW = (int)rw_now;
+  const int RW = (int)rw_now - 16; // (room for the scroll bar)
   for (int k = 0; k < NORD; k++) {
     int y = top + (int)ypos[k] - (int)set_scroll;
     if (y + rh < top - 10 || y > H - BAR) continue;
@@ -4055,26 +4056,43 @@ static void draw_settings(void) {
   if (fy >= 0) focus_ring(30, fy, RW, 54);
   vita2d_draw_rectangle(0, 0, W, top - 4, BG);
   // (the title: heavy and rounded, drawn thick by going round it; the count beside it)
-  for (int o = 0; o < 12; o++) { float an = o * 0.5236f; text(30 + (int)roundf(cosf(an) * 1.6f), 56 + (int)roundf(sinf(an) * 1.6f), TEXT, 32, "Settings"); }
-  text(30, 56, TEXT, 32, "Settings");
-  textf(34 + text_w(32, "Settings") + 18, 54, FAINT, 13, "%d items%s", vault.n, vault.untraceable ? "  ·  Untraceable" : "");
+  text(31, 70, TEXT, 34, "Settings"); // (a touch bolder: drawn twice, a pixel apart)
+  text(30, 70, TEXT, 34, "Settings");
+  textf(34 + text_w(34, "Settings") + 18, 68, FAINT, 13, "%d items%s", vault.n, vault.untraceable ? "  ·  Untraceable" : "");
   // (the girl with the peace sign, peeking over the title row's edge at the right)
   vita2d_set_clip_rectangle(0, 0, W, top - 4);
   vita2d_enable_clipping();
-  decor_draw(DEC_PEACE, W - 150, top + 85, 190, 235);
+  decor_draw(DEC_PEACE, W - 110, top - 4, 104, 235); // (all of her, in the row; her animation playing)
   vita2d_disable_clipping();
   // (a scroll bar at the right edge, the sections' starts marked on it)
+  // (dragged by a finger on it, it lets go onto the nearest section's start)
+  static int sb_drag;
   if (total > room) {
-    float bt = top, bh2 = room - 12, x = W - 9;
-    rrect(x, bt, 4, bh2, 2, with_alpha(TEXT, 30));
-    for (int k = 0; k < NORD; k++) if (ORDER[k] < 0 && k > 0) rrect(x - 3, bt + ypos[k] / total * bh2 - 1, 10, 3, 1, with_alpha(ACC, 150));
-    float th2 = fmaxf(24, bh2 * room / total), ty2 = bt + (bh2 - th2) * (set_scroll / (total - room));
-    rrect(x, ty2, 4, th2, 2, with_alpha(TEXT, 170));
+    float bt = top + 4, bh2 = room - 20, x = W - 14;
+    if (in.touching && !sb_drag && in.down_x > W - 34 && in.down_y > top && in.down_y < H - BAR && frame_no - in.down_frame < 2) sb_drag = 1;
+    if (sb_drag && in.touching) set_scroll = fminf(fmaxf((in.ty - bt) / bh2, 0), 1) * (total - room);
+    if (sb_drag && !in.touching) {
+      sb_drag = 0;
+      float best = 0, bd = 1e9f;
+      for (int k = 0; k < NORD; k++) if (ORDER[k] < 0) { float t = fminf(ypos[k], total - room), d = fabsf(t - set_scroll); if (d < bd) { bd = d; best = t; } }
+      sb_snap = best; sfx(SFX_TICK);
+    }
+    rrect(x, bt, 8, bh2, 4, with_alpha(TEXT, sb_drag ? 50 : 28));
+    for (int k = 0; k < NORD; k++) if (ORDER[k] < 0) {
+      float my = bt + fminf(ypos[k], total - room) / (total - room) * bh2;
+      int here = fabsf(fminf(ypos[k], total - room) - set_scroll) < 2;
+      circle(x + 4, my, here ? 6 : 5, with_alpha(BG, 255));
+      circle(x + 4, my, here ? 5 : 3.5f, with_alpha(ACC, here ? 255 : 170));
+    }
+    float th2 = fmaxf(30, bh2 * room / total), ty2 = bt + (bh2 - th2) * (set_scroll / (total - room));
+    rrect(x - (sb_drag ? 2 : 0), ty2, 8 + (sb_drag ? 4 : 0), th2, 4, with_alpha(TEXT, sb_drag ? 230 : 160));
   }
   // touch and the left stick scroll, whatever row they're over; a flick keeps going
   static float set_v;
-  if (in.touching && in.down_y > top) { set_scroll -= in.drag_dy; set_v = 0; if (in.moved) set_follow = 0; }
-  if (in.flicked && in.down_y > top) { set_v = -in.fvy * 1.4f; set_follow = 0; }
+  if (sb_drag || sb_snap >= 0) set_follow = 0;
+  if (sb_snap >= 0) { set_scroll += (sb_snap - set_scroll) * ease(0.25f); if (fabsf(sb_snap - set_scroll) < 0.5f) { set_scroll = sb_snap; sb_snap = -1; } }
+  if (in.touching && in.down_y > top && in.down_x <= W - 34) { set_scroll -= in.drag_dy; set_v = 0; sb_snap = -1; if (in.moved) set_follow = 0; }
+  if (in.flicked && in.down_y > top && in.down_x <= W - 34) { set_v = -in.fvy * 1.4f; set_follow = 0; }
   if (fabsf(in.ly) > 0.05f) { set_scroll += in.ly * 14 * ft; set_follow = 0; }
   set_scroll += set_v * ft;
   set_v *= decay(0.93f);

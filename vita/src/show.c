@@ -482,8 +482,18 @@ static void draw_show_plan(void) {
     rrect(bx + sq, by + 3 + sq, bw - sq * 2, 44 - sq * 2, 22, RGBA(0, 0, 0, 70));
     rrect(bx + sq, by + sq, bw - sq * 2, 44 - sq * 2, 22, pressed ? mix_col(ACC, RGBA(0, 0, 0, 255), 0.15f) : ACC);
     rrect(bx + 4 + sq, by + 3 + sq, bw - 8 - sq * 2, 17 - sq, 9, RGBA(255, 255, 255, pressed ? 14 : 28)); // (a glassy top)
-    float sh = fmodf(frame_no * 3.0f, bw + 400) - 40; // (the shine)
-    if (sh > 4 && sh < bw - 30) rrect(bx + sh, by + 4 + sq, 22, 36 - sq * 2, 10, RGBA(255, 255, 255, 55));
+    // (the shine: a slanted band sweeping the whole button quickly, every two seconds or so)
+    float sh = fmodf(frame_no * 9.0f, bw + 900) - 60;
+    if (sh > -40 && sh < bw + 20) {
+      vita2d_set_clip_rectangle(bx + 10, by, bx + bw - 10, by + 44);
+      vita2d_enable_clipping();
+      for (int r = 0; r < 44; r++) {
+        float off = (44 - r) * 0.6f; // (leaning right)
+        vita2d_draw_rectangle(bx + sh + off, by + r, 26, 1, RGBA(255, 255, 255, 70));
+        vita2d_draw_rectangle(bx + sh + off + 32, by + r, 8, 1, RGBA(255, 255, 255, 45));
+      }
+      vita2d_disable_clipping();
+    }
     text_center(bx + bw / 2, by + 29 + (int)(sq / 2), RGBA(20, 12, 16, 255), 19, go);
   }
   if (plan_sel == nf - 1) focus_ring(cx + 12, by, bw, 44);
