@@ -3995,6 +3995,18 @@ static void draw_settings(void) {
     {"Turn portrait pictures", cfg.autorot ? "On" : "Off", "A tall picture turned to fill the screen, for the Vita held on its side"},
     {"Decorations", cfg.nodecor ? "Off" : "On", "The little anime girls by empty screens and in corners, in the accent's colour (tap one)"},
   };
+  // (which rows have been changed from how the app starts: their value in the accent, a touch bolder;
+  //  the others' in grey, just saying what it is)
+  int changed[ST_N] = {0};
+  changed[ST_SEARCH] = query[0] != 0; changed[ST_VOL] = cfg.volume != 100; changed[ST_SOUNDS] = cfg.sounds != 70;
+  changed[ST_DBL] = cfg.dbltap != 0; changed[ST_GLOW] = cfg.glow != 1; changed[ST_DRIVE] = drive_signed_in();
+  changed[ST_PIN] = pin.on && !decoy_session; changed[ST_DECOY] = pin.decoy_hash[0] && !decoy_session; changed[ST_COVER] = cfg.hide != 0;
+  changed[ST_TLOCK] = (cfg.tlock & 3) != 0; changed[ST_THEME] = cfg.theme != 0; changed[ST_BGS] = cfg.bgstyle != 0;
+  changed[ST_SNDPACK] = cfg.sndpack != 0; changed[ST_CONV] = cfg.conv != 0;
+  changed[ST_COMICS] = cfg.cmode || cfg.corient || cfg.canim || cfg.cdir || cfg.ctap || cfg.cdbl || cfg.cback;
+  changed[ST_VIEW] = cfg.ifit || cfg.iorient || cfg.vfit || cfg.vorient; changed[ST_TEXT] = text_pct != 100;
+  changed[ST_ACCPIC] = cfg.accpic != 0; changed[ST_REAR] = cfg.rear_l || cfg.rear_r; changed[ST_AUTOROT] = cfg.autorot != 0;
+  changed[ST_DECOR] = cfg.nodecor != 0;
   // In sections, each with a header: the rows in the order shown (set_sel stays a row's ST_ id)
   static const signed char ORDER[] = {
     -1, ST_THEME, ST_ACCPIC, ST_BGS, ST_DECOR, ST_TEXT, ST_SNDPACK, ST_SOUNDS, ST_GLOW, ST_DBL,
@@ -4009,7 +4021,7 @@ static void draw_settings(void) {
   static const char *const SECT[] = {"Appearance", "Playback", "Privacy", "Sync and sources", "Library", "Comics"};
   static const char *const SECT_ICON[] = {"sliders", "play", "info", "wifi", "photos", "book"};
   enum { NORD = sizeof ORDER / sizeof *ORDER };
-  const int rh = 58, hh = 40, top = 112, room = H - BAR - top + 8;
+  const int rh = 58, hh = 40, top = 98, room = H - BAR - top + 8;
   float ypos[NORD], total = 0;
   int at = 0;
   for (int k = 0; k < NORD; k++) { ypos[k] = total; total += ORDER[k] < 0 ? hh : rh; if (ORDER[k] == set_sel) at = k; }
@@ -4050,14 +4062,18 @@ static void draw_settings(void) {
     int vw = rows[r].value[0] ? text_w(18, rows[r].value) + 24 : 0;
     text_fit(54 + set_slide, y + 24, TEXT, 18, rows[r].name, RW - 48 - (vw ? 60 : 0));
     text_fit(54 + set_slide, y + 45, FAINT, 14, rows[r].hint, RW - 48 - vw); // (cut short of the value)
-    if (rows[r].value[0]) text(30 + set_slide + RW - 24 - text_w(18, rows[r].value), y + 34, ACC, 18, rows[r].value);
+    if (rows[r].value[0]) {
+      int vx = 30 + set_slide + RW - 24 - text_w(18, rows[r].value);
+      if (changed[r]) { unsigned vc = mix_col(TEXT, ACC, 0.45f); text(vx + 1, y + 34, with_alpha(vc, 110), 18, rows[r].value); text(vx, y + 34, vc, 18, rows[r].value); }
+      else text(vx, y + 34, DIM, 18, rows[r].value);
+    }
     if (hit(30, y, RW, 54) && in.tap_y > top && in.tap_y < H - BAR && in.down_x <= W - 42) { set_sel = r; in.pressed |= SCE_CTRL_CROSS; }
   }
   if (fy >= 0) focus_ring(30, fy, RW, 54);
   vita2d_draw_rectangle(0, 0, W, top - 4, BG);
   { // (the title as a logo, filling its row beside the girl: a soft drop in the accent's shade, the
     //  word, a heart for the i's dot, a stroke under it and the count beneath)
-    const int ts = 46, ty = 62;
+    const int ts = 44, ty = 56;
     unsigned shade = mix_col(with_alpha(BG, 255), ACC, 0.45f);
     text(33, ty + 3, shade, ts, "Settings");
     text(31, ty, TEXT, ts, "Settings");
@@ -4067,12 +4083,12 @@ static void draw_settings(void) {
     rrect(ix - 8, ty - 40, 17, 17, 2, BG); // (the i's own dot hidden)
     heart(ix + 1, ty - 29, 13 * beat, ACC);
     rrect(30, ty + 12, text_w(ts, "Settings") * 0.55f, 5, 2, with_alpha(ACC, 200)); // (a stroke under it)
-    textf(31, ty + 36, FAINT, 13, "%d items%s", vault.n, vault.untraceable ? "  ·  Untraceable" : "");
+    textf(31, ty + 32, FAINT, 13, "%d items%s", vault.n, vault.untraceable ? "  ·  Untraceable" : "");
   }
   // (the girl with the peace sign, all of her in the title row at the right, her animation playing)
   vita2d_set_clip_rectangle(0, 0, W, top - 4);
   vita2d_enable_clipping();
-  decor_draw(DEC_PEACE, W - 100, top - 4, 104, 235);
+  decor_draw(DEC_PEACE, W - 100, top - 4, 92, 235);
   vita2d_disable_clipping();
   // (a scroll bar beside the rows, the sections' starts marked on it. A finger on it drags it, a light
   //  pull onto each section's mark as it passes, the section's name in a bubble beside it; let go, it
