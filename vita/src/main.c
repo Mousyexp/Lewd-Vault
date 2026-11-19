@@ -4028,7 +4028,7 @@ static void draw_settings(void) {
   if (rw_now < 1) rw_now = rw_want;
   rw_now += (rw_want - rw_now) * ease(0.3f);
   if (fabsf(rw_want - rw_now) < 0.5f) rw_now = rw_want;
-  const int RW = (int)rw_now - 16; // (room for the scroll bar)
+  const int RW = (int)rw_now - 24; // (room for the scroll bar)
   for (int k = 0; k < NORD; k++) {
     int y = top + (int)ypos[k] - (int)set_scroll;
     if (y + rh < top - 10 || y > H - BAR) continue;
@@ -4056,8 +4056,17 @@ static void draw_settings(void) {
   if (fy >= 0) focus_ring(30, fy, RW, 54);
   vita2d_draw_rectangle(0, 0, W, top - 4, BG);
   // (the title: heavy and rounded, drawn thick by going round it; the count beside it)
-  text(31, 70, TEXT, 34, "Settings"); // (a touch bolder: drawn twice, a pixel apart)
-  text(30, 70, TEXT, 34, "Settings");
+  { // (the title as a logo: a soft drop in the accent's shade, the word, and a heart for the i's dot)
+    unsigned shade = mix_col(with_alpha(BG, 255), ACC, 0.45f);
+    text(33, 73, shade, 34, "Settings");
+    text(31, 70, TEXT, 34, "Settings");
+    text(30, 70, TEXT, 34, "Settings");
+    float ix = 30 + (text_w(34, "Sett") + text_w(34, "Setti")) / 2.0f;
+    float beat = 1 + 0.08f * fmaxf(0, sinf(frame_no * 0.12f)) * (frame_no % 150 < 26); // (a beat now and then)
+    rrect(ix - 6, 36, 13, 13, 2, BG); // (the i's own dot hidden)
+    heart(ix + 1, 45, 10 * beat, ACC);
+    rrect(30, 80, text_w(34, "Settings") * 0.55f, 4, 2, with_alpha(ACC, 200)); // (a stroke under it)
+  }
   textf(34 + text_w(34, "Settings") + 18, 68, FAINT, 13, "%d items%s", vault.n, vault.untraceable ? "  ·  Untraceable" : "");
   // (the girl with the peace sign, peeking over the title row's edge at the right)
   vita2d_set_clip_rectangle(0, 0, W, top - 4);
@@ -4077,15 +4086,28 @@ static void draw_settings(void) {
       for (int k = 0; k < NORD; k++) if (ORDER[k] < 0) { float t = fminf(ypos[k], total - room), d = fabsf(t - set_scroll); if (d < bd) { bd = d; best = t; } }
       sb_snap = best; sfx(SFX_TICK);
     }
-    rrect(x, bt, 8, bh2, 4, with_alpha(TEXT, sb_drag ? 50 : 28));
+    // (drawn like a glossy old scroll bar: a rounded white-ish track with arrows at its ends, a shiny
+    //  pill of the accent with ridges at its middle)
+    x = W - 18;
+    float tw2 = 14;
+    rrect(x - 1, bt - 15, tw2 + 2, bh2 + 30, 8, RGBA(0, 0, 0, 90));
+    rrect(x, bt - 14, tw2, bh2 + 28, 7, mix_col(with_alpha(SURF2, 255), TEXT, 0.75f));
+    rrect(x + 3, bt - 12, tw2 - 6, bh2 + 24, 4, mix_col(with_alpha(SURF2, 255), TEXT, 0.55f)); // (its groove)
+    rrect(x + 1, bt - 13, tw2 * 0.45f, bh2 + 26, 5, RGBA(255, 255, 255, 50)); // (gloss)
+    { float cx = x + tw2 / 2, cy = bt - 8; for (int r = 0; r < 4; r++) vita2d_draw_rectangle(cx - 0.5f - r, cy + r, 1 + r * 2, 1, with_alpha(BG, 220)); } // (▲)
+    { float cx = x + tw2 / 2, cy = bt + bh2 + 7; for (int r = 0; r < 4; r++) vita2d_draw_rectangle(cx - 3.5f + r, cy - 2 + r, 7 - r * 2, 1, with_alpha(BG, 220)); } // (▼)
     for (int k = 0; k < NORD; k++) if (ORDER[k] < 0) {
       float my = bt + fminf(ypos[k], total - room) / (total - room) * bh2;
       int here = fabsf(fminf(ypos[k], total - room) - set_scroll) < 2;
-      circle(x + 4, my, here ? 6 : 5, with_alpha(BG, 255));
-      circle(x + 4, my, here ? 5 : 3.5f, with_alpha(ACC, here ? 255 : 170));
+      rrect(x + 3, my - 1, tw2 - 6, 2, 1, with_alpha(ACC, here ? 255 : 150));
     }
-    float th2 = fmaxf(30, bh2 * room / total), ty2 = bt + (bh2 - th2) * (set_scroll / (total - room));
-    rrect(x - (sb_drag ? 2 : 0), ty2, 8 + (sb_drag ? 4 : 0), th2, 4, with_alpha(TEXT, sb_drag ? 230 : 160));
+    float th2 = fmaxf(34, bh2 * room / total), ty2 = bt + (bh2 - th2) * (set_scroll / (total - room));
+    float g = sb_drag ? 1 : 0;
+    rrect(x + 1 - g, ty2, tw2 - 2 + g * 2, th2, 6, mix_col(ACC, RGBA(0, 0, 0, 255), 0.25f));            // (its edge)
+    rrect(x + 2 - g, ty2 + 1, tw2 - 4 + g * 2, th2 - 2, 5, ACC);
+    rrect(x + 3 - g, ty2 + 2, (tw2 - 6) * 0.5f, th2 - 4, 3, with_alpha(RGBA(255, 255, 255, 255), 90)); // (the gloss down its left)
+    rrect(x + 3, ty2 + th2 - 7, tw2 - 6, 4, 2, with_alpha(RGBA(255, 255, 255, 255), 40));             // (light under)
+    for (int r = -1; r <= 1; r++) vita2d_draw_rectangle(x + 4, ty2 + th2 / 2 + r * 4, tw2 - 8, 1, with_alpha(mix_col(ACC, RGBA(0, 0, 0, 255), 0.4f), 200)); // (ridges)
   }
   // touch and the left stick scroll, whatever row they're over; a flick keeps going
   static float set_v;
