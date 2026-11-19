@@ -89,20 +89,26 @@ static int sign_wrap_lines(const char *s, int size, int w) {
 }
 static int sign_next_y = 8;
 // show: 0..1, how far in it has slid (it slides in from the right and back out there, fading as it goes)
-static void sign_box(int slot, const char *ic, unsigned col, const char *msg, float show) {
+static void sign_box(int slot, const char *ic, unsigned col, const char *msg, float show, int compact) {
   if (show <= 0) return;
   float e = 1 - (1 - show) * (1 - show) * (1 - show); // (ease out)
   int full = (int)(255 * e), a = (int)(105 * e); // (the card well see-through, its words clear)
   const int w = 140, pad = 10;
-  int lines = sign_wrap_lines(msg, 12, w - pad * 2);
+  int lines = sign_wrap_lines(msg, 12, compact ? w - pad * 2 - 26 : w - pad * 2);
   if (lines > 4) lines = 4;
-  int h = 34 + lines * 16 + 10;
-  if (h < 76) h = 76; // (nearly square, small)
+  int h = compact ? 16 + lines * 16 : 34 + lines * 16 + 10;
+  if (!compact && h < 76) h = 76; // (nearly square, small)
   int x = W - w - 8 + (int)((1 - e) * (w + 16)), y = slot ? sign_next_y : 8;
   sign_next_y = y + h + 6;
   unsigned tint = mix_col(SURF2, col, 0.22f);
   rrect(x, y + 2, w, h, 6, RGBA(0, 0, 0, a * 60 / 255));             // (its shadow)
   rrect(x, y, w, h, 6, with_alpha(tint, a));                            // (the glass)
+  if (compact) { // (the rear touchpad's: no head, its icon beside the words)
+    rrect(x, y + 6, 3, h - 12, 1, with_alpha(col, a));
+    icon(ic, x + pad + 8, y + h / 2, with_alpha(col, full));
+    text_wrap(x + pad + 24, y + 21, with_alpha(TEXT, full), 12, msg, w - pad * 2 - 26, 16);
+    return;
+  }
   rrect(x + 1, y + 1, w - 2, 28, 5, with_alpha(col, a * 70 / 255));     // (its head, in the event's colour)
   rrect(x + 1, y + 1, w - 2, 12, 5, with_alpha(TEXT, a / 10));          // (light along the top)
   rrect(x + 1, y + 29, w - 2, 1, 0, with_alpha(TEXT, a / 5));           // (a hairline under the head)
@@ -126,7 +132,7 @@ static void rear_sign_draw(void) {
   const char *what = REAR_NAME[rear_of(rear_half)];
   char l[80];
   snprintf(l, sizeof l, "Rear touchpad: %s", what);
-  sign_box(0, "touchpad", ACC, l, show);
+  sign_box(0, "touchpad", ACC, l, show, 1);
 }
 
 // ----- the window: the Vita's back, each half chosen -----
@@ -228,5 +234,5 @@ static void ev_sign_draw(void) {
   float show = fminf(in_a, out_a);
   if (show <= 0) return;
   int rear_up = rear_seen_at && frame_no - rear_seen_at < 140;
-  sign_box(rear_up ? 1 : 0, ev_icon ? ev_icon : "info", ev_col, ev_text, show);
+  sign_box(rear_up ? 1 : 0, ev_icon ? ev_icon : "info", ev_col, ev_text, show, 0);
 }

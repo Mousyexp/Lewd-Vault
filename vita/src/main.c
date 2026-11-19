@@ -4028,7 +4028,7 @@ static void draw_settings(void) {
   if (rw_now < 1) rw_now = rw_want;
   rw_now += (rw_want - rw_now) * ease(0.3f);
   if (fabsf(rw_want - rw_now) < 0.5f) rw_now = rw_want;
-  const int RW = (int)rw_now - 24; // (room for the scroll bar)
+  const int RW = (int)rw_now - 12; // (room for the scroll bar)
   for (int k = 0; k < NORD; k++) {
     int y = top + (int)ypos[k] - (int)set_scroll;
     if (y + rh < top - 10 || y > H - BAR) continue;
@@ -4051,70 +4051,84 @@ static void draw_settings(void) {
     text_fit(54 + set_slide, y + 24, TEXT, 18, rows[r].name, RW - 48 - (vw ? 60 : 0));
     text_fit(54 + set_slide, y + 45, FAINT, 14, rows[r].hint, RW - 48 - vw); // (cut short of the value)
     if (rows[r].value[0]) text(30 + set_slide + RW - 24 - text_w(18, rows[r].value), y + 34, ACC, 18, rows[r].value);
-    if (hit(30, y, RW, 54) && in.tap_y > top && in.tap_y < H - BAR) { set_sel = r; in.pressed |= SCE_CTRL_CROSS; }
+    if (hit(30, y, RW, 54) && in.tap_y > top && in.tap_y < H - BAR && in.down_x <= W - 42) { set_sel = r; in.pressed |= SCE_CTRL_CROSS; }
   }
   if (fy >= 0) focus_ring(30, fy, RW, 54);
   vita2d_draw_rectangle(0, 0, W, top - 4, BG);
-  // (the title: heavy and rounded, drawn thick by going round it; the count beside it)
-  { // (the title as a logo: a soft drop in the accent's shade, the word, and a heart for the i's dot)
+  { // (the title as a logo, filling its row beside the girl: a soft drop in the accent's shade, the
+    //  word, a heart for the i's dot, a stroke under it and the count beneath)
+    const int ts = 46, ty = 62;
     unsigned shade = mix_col(with_alpha(BG, 255), ACC, 0.45f);
-    text(33, 73, shade, 34, "Settings");
-    text(31, 70, TEXT, 34, "Settings");
-    text(30, 70, TEXT, 34, "Settings");
-    float ix = 30 + (text_w(34, "Sett") + text_w(34, "Setti")) / 2.0f;
+    text(33, ty + 3, shade, ts, "Settings");
+    text(31, ty, TEXT, ts, "Settings");
+    text(30, ty, TEXT, ts, "Settings");
+    float ix = 30 + (text_w(ts, "Sett") + text_w(ts, "Setti")) / 2.0f;
     float beat = 1 + 0.08f * fmaxf(0, sinf(frame_no * 0.12f)) * (frame_no % 150 < 26); // (a beat now and then)
-    rrect(ix - 6, 36, 13, 13, 2, BG); // (the i's own dot hidden)
-    heart(ix + 1, 45, 10 * beat, ACC);
-    rrect(30, 80, text_w(34, "Settings") * 0.55f, 4, 2, with_alpha(ACC, 200)); // (a stroke under it)
+    rrect(ix - 8, ty - 40, 17, 17, 2, BG); // (the i's own dot hidden)
+    heart(ix + 1, ty - 29, 13 * beat, ACC);
+    rrect(30, ty + 12, text_w(ts, "Settings") * 0.55f, 5, 2, with_alpha(ACC, 200)); // (a stroke under it)
+    textf(31, ty + 36, FAINT, 13, "%d items%s", vault.n, vault.untraceable ? "  ·  Untraceable" : "");
   }
-  textf(34 + text_w(34, "Settings") + 18, 68, FAINT, 13, "%d items%s", vault.n, vault.untraceable ? "  ·  Untraceable" : "");
-  // (the girl with the peace sign, peeking over the title row's edge at the right)
+  // (the girl with the peace sign, all of her in the title row at the right, her animation playing)
   vita2d_set_clip_rectangle(0, 0, W, top - 4);
   vita2d_enable_clipping();
-  decor_draw(DEC_PEACE, W - 110, top - 4, 104, 235); // (all of her, in the row; her animation playing)
+  decor_draw(DEC_PEACE, W - 100, top - 4, 104, 235);
   vita2d_disable_clipping();
-  // (a scroll bar at the right edge, the sections' starts marked on it)
-  // (dragged by a finger on it, it lets go onto the nearest section's start)
-  static int sb_drag;
+  // (a scroll bar beside the rows, the sections' starts marked on it. A finger on it drags it, a light
+  //  pull onto each section's mark as it passes, the section's name in a bubble beside it; let go, it
+  //  settles on the nearest section)
+  static int sb_drag, sb_last_sec = -1;
   if (total > room) {
-    float bt = top + 4, bh2 = room - 20, x = W - 14;
-    if (in.touching && !sb_drag && in.down_x > W - 34 && in.down_y > top && in.down_y < H - BAR && frame_no - in.down_frame < 2) sb_drag = 1;
-    if (sb_drag && in.touching) set_scroll = fminf(fmaxf((in.ty - bt) / bh2, 0), 1) * (total - room);
+    const float tw2 = 25, x = W - 33, bt = top + 14, bh2 = room - 40;
+    float span = total - room;
+    if (in.touching && !sb_drag && in.down_x > W - 42 && in.down_y > top && in.down_y < H - BAR && frame_no - in.down_frame < 2) { sb_drag = 1; sb_last_sec = -1; }
+    int sec_k = -1; // (the section the bar is in)
+    if (sb_drag && in.touching) {
+      float f = fminf(fmaxf((in.ty - bt - 15) / (bh2 - 30), 0), 1), want = f * span;
+      for (int k = 0; k < NORD; k++) if (ORDER[k] < 0) { float t = fminf(ypos[k], span); if (fabsf((t - want) / span * (bh2 - 30)) < 7) want = t; } // (the pull)
+      set_scroll = want;
+    }
     if (sb_drag && !in.touching) {
       sb_drag = 0;
       float best = 0, bd = 1e9f;
-      for (int k = 0; k < NORD; k++) if (ORDER[k] < 0) { float t = fminf(ypos[k], total - room), d = fabsf(t - set_scroll); if (d < bd) { bd = d; best = t; } }
+      for (int k = 0; k < NORD; k++) if (ORDER[k] < 0) { float t = fminf(ypos[k], span), d = fabsf(t - set_scroll); if (d < bd) { bd = d; best = t; } }
       sb_snap = best; sfx(SFX_TICK);
     }
-    // (drawn like a glossy old scroll bar: a rounded white-ish track with arrows at its ends, a shiny
-    //  pill of the accent with ridges at its middle)
-    x = W - 18;
-    float tw2 = 14;
-    rrect(x - 1, bt - 15, tw2 + 2, bh2 + 30, 8, RGBA(0, 0, 0, 90));
-    rrect(x, bt - 14, tw2, bh2 + 28, 7, mix_col(with_alpha(SURF2, 255), TEXT, 0.75f));
-    rrect(x + 3, bt - 12, tw2 - 6, bh2 + 24, 4, mix_col(with_alpha(SURF2, 255), TEXT, 0.55f)); // (its groove)
-    rrect(x + 1, bt - 13, tw2 * 0.45f, bh2 + 26, 5, RGBA(255, 255, 255, 50)); // (gloss)
-    { float cx = x + tw2 / 2, cy = bt - 8; for (int r = 0; r < 4; r++) vita2d_draw_rectangle(cx - 0.5f - r, cy + r, 1 + r * 2, 1, with_alpha(BG, 220)); } // (▲)
-    { float cx = x + tw2 / 2, cy = bt + bh2 + 7; for (int r = 0; r < 4; r++) vita2d_draw_rectangle(cx - 3.5f + r, cy - 2 + r, 7 - r * 2, 1, with_alpha(BG, 220)); } // (▼)
-    for (int k = 0; k < NORD; k++) if (ORDER[k] < 0) {
-      float my = bt + fminf(ypos[k], total - room) / (total - room) * bh2;
-      int here = fabsf(fminf(ypos[k], total - room) - set_scroll) < 2;
-      rrect(x + 3, my - 1, tw2 - 6, 2, 1, with_alpha(ACC, here ? 255 : 150));
+    for (int k = 0; k < NORD; k++) if (ORDER[k] < 0 && fminf(ypos[k], span) <= set_scroll + 1) sec_k = k;
+    if (sb_drag && sec_k != sb_last_sec) { if (sb_last_sec >= 0) sfx(SFX_TICK); sb_last_sec = sec_k; }
+    // the track: a dark rounded tube, lit faintly down its middle (a cylinder: shaded side to side)
+    {
+      unsigned dk = with_alpha(mix_col(with_alpha(BG, 255), RGBA(0, 0, 0, 255), 0.35f), 255);
+      rrect(x - 1, bt - 21, tw2 + 2, bh2 + 42, 13, RGBA(0, 0, 0, 140));
+      rrect(x, bt - 20, tw2, bh2 + 40, 12, mix_col(dk, TEXT, 0.10f));
+      for (int j = 1; j <= 4; j++) rrect(x + 1 + j * 2, bt - 19 + j, tw2 - 2 - j * 4, bh2 + 38 - j * 2, 11 - j, RGBA(255, 255, 255, 7));
+      rrect(x + 1, bt - 19, tw2 - 2, 10, 9, RGBA(0, 0, 0, 60)); // (shade at its top: it's hollow)
+      { float cx = x + tw2 / 2, cy = bt - 13; for (int r = 0; r < 5; r++) vita2d_draw_rectangle(cx - 0.5f - r, cy + r, 1 + r * 2, 1, with_alpha(TEXT, 130)); } // (▲)
+      { float cx = x + tw2 / 2, cy = bt + bh2 + 9; for (int r = 0; r < 5; r++) vita2d_draw_rectangle(cx - 4.5f + r, cy + r, 9 - r * 2, 1, with_alpha(TEXT, 130)); } // (▼)
     }
-    float th2 = fmaxf(34, bh2 * room / total), ty2 = bt + (bh2 - th2) * (set_scroll / (total - room));
-    float g = sb_drag ? 1 : 0;
-    rrect(x + 1 - g, ty2, tw2 - 2 + g * 2, th2, 6, mix_col(ACC, RGBA(0, 0, 0, 255), 0.25f));            // (its edge)
-    rrect(x + 2 - g, ty2 + 1, tw2 - 4 + g * 2, th2 - 2, 5, ACC);
-    rrect(x + 3 - g, ty2 + 2, (tw2 - 6) * 0.5f, th2 - 4, 3, with_alpha(RGBA(255, 255, 255, 255), 90)); // (the gloss down its left)
-    rrect(x + 3, ty2 + th2 - 7, tw2 - 6, 4, 2, with_alpha(RGBA(255, 255, 255, 255), 40));             // (light under)
-    for (int r = -1; r <= 1; r++) vita2d_draw_rectangle(x + 4, ty2 + th2 / 2 + r * 4, tw2 - 8, 1, with_alpha(mix_col(ACC, RGBA(0, 0, 0, 255), 0.4f), 200)); // (ridges)
+    // the handle: short, a cylinder of the accent (darker at its sides, lit down the middle)
+    float th2 = 30, ty2 = bt + (bh2 - th2) * (set_scroll / span);
+    float g = sb_drag ? 2 : 0, hx = x + 3 - g, hw = tw2 - 6 + g * 2;
+    rrect(hx, ty2 + 2, hw, th2, 9, RGBA(0, 0, 0, 100));
+    rrect(hx, ty2, hw, th2, 9, mix_col(ACC, RGBA(0, 0, 0, 255), 0.35f));
+    for (int j = 1; j <= 4; j++) rrect(hx + j * 1.5f, ty2 + 1, hw - j * 3, th2 - 2, 9 - j, with_alpha(mix_col(ACC, RGBA(0, 0, 0, 255), 0.35f - j * 0.09f), 255));
+    rrect(hx + hw * 0.36f, ty2 + 3, hw * 0.16f, th2 - 6, 2, RGBA(255, 255, 255, 70)); // (the light along it)
+    for (int r = -1; r <= 1; r++) vita2d_draw_rectangle(hx + 5, ty2 + th2 / 2 + r * 4, hw - 10, 1, with_alpha(mix_col(ACC, RGBA(0, 0, 0, 255), 0.5f), 200)); // (ridges)
+    // the section's name in a see-through bubble beside it, while dragged
+    if (sb_drag && sec_k >= 0) {
+      const char *nm = SECT[-ORDER[sec_k] - 1];
+      int bw2 = text_w(15, nm) + 28, bx2 = (int)x - bw2 - 10, by2 = (int)(ty2 + th2 / 2 - 17);
+      rrect(bx2, by2, bw2, 34, 12, RGBA(0, 0, 0, 160));
+      for (int r = 0; r < 6; r++) vita2d_draw_rectangle(bx2 + bw2, by2 + 11 + r, 6 - r, 1, RGBA(0, 0, 0, 160)); // (its point)
+      text(bx2 + 14, by2 + 23, TEXT, 15, nm);
+    }
   }
   // touch and the left stick scroll, whatever row they're over; a flick keeps going
   static float set_v;
   if (sb_drag || sb_snap >= 0) set_follow = 0;
   if (sb_snap >= 0) { set_scroll += (sb_snap - set_scroll) * ease(0.25f); if (fabsf(sb_snap - set_scroll) < 0.5f) { set_scroll = sb_snap; sb_snap = -1; } }
-  if (in.touching && in.down_y > top && in.down_x <= W - 34) { set_scroll -= in.drag_dy; set_v = 0; sb_snap = -1; if (in.moved) set_follow = 0; }
-  if (in.flicked && in.down_y > top && in.down_x <= W - 34) { set_v = -in.fvy * 1.4f; set_follow = 0; }
+  if (in.touching && in.down_y > top && in.down_x <= W - 42) { set_scroll -= in.drag_dy; set_v = 0; sb_snap = -1; if (in.moved) set_follow = 0; }
+  if (in.flicked && in.down_y > top && in.down_x <= W - 42) { set_v = -in.fvy * 1.4f; set_follow = 0; }
   if (fabsf(in.ly) > 0.05f) { set_scroll += in.ly * 14 * ft; set_follow = 0; }
   set_scroll += set_v * ft;
   set_v *= decay(0.93f);
