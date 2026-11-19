@@ -2780,7 +2780,7 @@ static void draw_library(void) {
       text_center(W / 2, TOP + 180, FAINT, 16, "Save a chapter from the Comics tab, or give a collection the category Comics");
     } else if (vault.n == 0 && !query[0]) {
       // (a new vault: where things come from)
-      decor_draw(DEC_TEARJU, W - 150, H - BAR + 6, 300, -150); // (still, and fainter: a negative alpha) // (one of the girls, waiting by it)
+      decor_draw(DEC_TEARJU, W - 150, H + 4, 300, -150); // (still, and fainter: a negative alpha) // (one of the girls, waiting by it)
       text_center(W / 2, TOP + 140, TEXT, 22, "Your vault is empty");
       text_center(W / 2, TOP + 172, DIM, 16, "Find pictures and videos in the Browser and save them here,");
       text_center(W / 2, TOP + 196, DIM, 16, "or save comics from the Comics tab.");
@@ -4021,7 +4021,7 @@ static void draw_settings(void) {
   static const char *const SECT[] = {"Appearance", "Playback", "Privacy", "Sync and sources", "Library", "Comics"};
   static const char *const SECT_ICON[] = {"sliders", "play", "info", "wifi", "photos", "book"};
   enum { NORD = sizeof ORDER / sizeof *ORDER };
-  const int rh = 58, hh = 40, top = 98, room = H - BAR - top + 8;
+  const int rh = 58, hh = 40, top = 112, room = H - BAR - top + 8;
   float ypos[NORD], total = 0;
   int at = 0;
   for (int k = 0; k < NORD; k++) { ypos[k] = total; total += ORDER[k] < 0 ? hh : rh; if (ORDER[k] == set_sel) at = k; }
@@ -4073,35 +4073,37 @@ static void draw_settings(void) {
   vita2d_draw_rectangle(0, 0, W, top - 4, BG);
   { // (the title as a logo, filling its row beside the girl: a soft drop in the accent's shade, the
     //  word, a heart for the i's dot, a stroke under it and the count beneath)
-    const int ts = 44, ty = 56;
+    const int ts = 52, ty = 66;
     unsigned shade = mix_col(with_alpha(BG, 255), ACC, 0.45f);
     text(33, ty + 3, shade, ts, "Settings");
     text(31, ty, TEXT, ts, "Settings");
     text(30, ty, TEXT, ts, "Settings");
     float ix = 30 + (text_w(ts, "Sett") + text_w(ts, "Setti")) / 2.0f;
     float beat = 1 + 0.08f * fmaxf(0, sinf(frame_no * 0.12f)) * (frame_no % 150 < 26); // (a beat now and then)
-    rrect(ix - 8, ty - 40, 17, 17, 2, BG); // (the i's own dot hidden)
-    heart(ix + 1, ty - 29, 13 * beat, ACC);
-    rrect(30, ty + 12, text_w(ts, "Settings") * 0.55f, 5, 2, with_alpha(ACC, 200)); // (a stroke under it)
-    textf(31, ty + 32, FAINT, 13, "%d items%s", vault.n, vault.untraceable ? "  ·  Untraceable" : "");
+    rrect(ix - 9, ty - 48, 19, 19, 2, BG); // (the i's own dot hidden)
+    heart(ix + 1, ty - 35, 15 * beat, ACC);
+    rrect(30, ty + 13, text_w(ts, "Settings") * 0.55f, 5, 2, with_alpha(ACC, 200)); // (a stroke under it)
+    textf(31, ty + 36, FAINT, 14, "%d items%s", vault.n, vault.untraceable ? "  ·  Untraceable" : "");
   }
   // (the girl with the peace sign, all of her in the title row at the right, her animation playing)
   vita2d_set_clip_rectangle(0, 0, W, top - 4);
   vita2d_enable_clipping();
-  decor_draw(DEC_PEACE, W - 100, top - 4, 92, 235);
+  decor_draw(DEC_PEACE, W - 104, top - 4, 106, 235);
   vita2d_disable_clipping();
   // (a scroll bar beside the rows, the sections' starts marked on it. A finger on it drags it, a light
   //  pull onto each section's mark as it passes, the section's name in a bubble beside it; let go, it
   //  settles on the nearest section)
   static int sb_drag, sb_last_sec = -1;
   if (total > room) {
-    const float tw2 = 25, x = W - 33, bt = top + 14, bh2 = room - 40;
+    const float tw2 = 25, x = W - 33, bt = top + 20, bh2 = H - 28 - bt; // (as long as it can be: the title row to the screen's foot, beside the tab bar; fixed whether that's tucked or not)
     float span = total - room;
-    if (in.touching && !sb_drag && in.down_x > W - 42 && in.down_y > top && in.down_y < H - BAR && frame_no - in.down_frame < 2) { sb_drag = 1; sb_last_sec = -1; }
+    if (in.touching && !sb_drag && in.down_x > W - 42 && in.down_y > top && frame_no - in.down_frame < 2) { sb_drag = 1; sb_last_sec = -1; }
     int sec_k = -1; // (the section the bar is in)
     if (sb_drag && in.touching) {
       float f = fminf(fmaxf((in.ty - bt - 15) / (bh2 - 30), 0), 1), want = f * span;
-      for (int k = 0; k < NORD; k++) if (ORDER[k] < 0) { float t = fminf(ypos[k], span); if (fabsf((t - want) / span * (bh2 - 30)) < 7) want = t; } // (the pull)
+      { float pull = -1, pd = 7; // (the pull: onto the nearest mark within 7 px, only that one)
+        for (int k = 0; k < NORD; k++) if (ORDER[k] < 0) { float t = fminf(ypos[k], span), d = fabsf((t - want) / span * (bh2 - 30)); if (d < pd) { pd = d; pull = t; } }
+        if (pull >= 0) want = pull; }
       set_scroll = want;
     }
     if (sb_drag && !in.touching) {
@@ -4128,7 +4130,6 @@ static void draw_settings(void) {
     rrect(hx, ty2 + 2, hw, th2, 9, RGBA(0, 0, 0, 100));
     rrect(hx, ty2, hw, th2, 9, mix_col(ACC, RGBA(0, 0, 0, 255), 0.35f));
     for (int j = 1; j <= 4; j++) rrect(hx + j * 1.5f, ty2 + 1, hw - j * 3, th2 - 2, 9 - j, with_alpha(mix_col(ACC, RGBA(0, 0, 0, 255), 0.35f - j * 0.09f), 255));
-    rrect(hx + hw * 0.36f, ty2 + 3, hw * 0.16f, th2 - 6, 2, RGBA(255, 255, 255, 70)); // (the light along it)
     for (int r = -1; r <= 1; r++) vita2d_draw_rectangle(hx + 5, ty2 + th2 / 2 + r * 4, hw - 10, 1, with_alpha(mix_col(ACC, RGBA(0, 0, 0, 255), 0.5f), 200)); // (ridges)
     // the section's name in a see-through bubble beside it, while dragged
     if (sb_drag && sec_k >= 0) {

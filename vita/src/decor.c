@@ -74,8 +74,8 @@ static int decor_draw(int k, float cx, float bottom, float h, int alpha) {
   float fx = 0, fy = 0;
   if (sheet) { int f = (int)(frame_no * 1000 / 60 / 70) % 25; tw /= 5; th /= 5; fx = (f % 5) * tw; fy = (f / 5) * th; }
   float sc = h / th;
-  int still = alpha < 0; // (a negative alpha: drawn still, no breathing or bobbing)
-  if (still) alpha = -alpha;
+  int still = alpha < 0 || k == DEC_PEACE; // (a negative alpha: drawn still, no breathing or bobbing; the animated one moves by itself)
+  if (alpha < 0) alpha = -alpha;
   float t_s = still ? 0 : frame_no / 60.0f;
   float breath = 1 + 0.012f * sinf(t_s * 1.6f + k);       // (a slow breath: taller and back)
   float bob = still ? 0 : sinf(t_s * 1.1f + k * 1.7f) * 2.5f;
