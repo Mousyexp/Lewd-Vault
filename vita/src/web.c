@@ -2511,6 +2511,7 @@ static void draw_web(void) {
     else if (wloading) {
       spinner(W / 2, TOP + 150, 22);
     } else {
+      decor_draw(DEC_CROPTOP, W - 150, H - BAR + 6, 240, 255);
       text_center(W / 2, TOP + 150, DIM, 18, werr[0] ? werr : "Nothing found: try other tags or ratings");
       // (the site answered with an error: a button to ask again, and once by itself after 5 s)
       if (werr[0] && strstr(werr, "answered")) {

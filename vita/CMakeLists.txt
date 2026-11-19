@@ -74,6 +74,13 @@ vita_create_vpk(${LV_VPK_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE ${CMAKE_CURRENT_BINARY_DIR}/template.xml sce_sys/livearea/contents/template.xml
   FILE font.ttf font.ttf
   FILE certs.bin certs.bin
+  FILE decor/bikini.webp decor/bikini.webp
+  FILE decor/corset.webp decor/corset.webp
+  FILE decor/croptop.webp decor/croptop.webp
+  FILE decor/sonico.webp decor/sonico.webp
+  FILE decor/suit.webp decor/suit.webp
+  FILE decor/tearju.webp decor/tearju.webp
+  FILE decor/yoruichi.webp decor/yoruichi.webp
   FILE splash.png splash.png
   FILE sce_sys/pic0.png sce_sys/pic0.png
   FILE sounds/tick.wav sounds/tick.wav

@@ -371,6 +371,20 @@ static void vb_dup_check(int r) {
     if (same * 10 >= m * 6) { row->dup = 1; return; } // (six in ten or more: the same)
   }
 }
+// (a row's repeats taken out: the same video twice, or the same picture (a series' episodes a site
+//  shows with one cover): one card for it, the row as short as it really is)
+static void vb_dedupe(VRow *row) {
+  int kept = 0;
+  for (int i = 0; i < row->n; i++) {
+    int rep = 0;
+    for (int j = 0; j < kept && !rep; j++)
+      rep = vb_same_post(&row->p[i], &row->p[j]) || (row->p[i].preview && row->p[j].preview && !strcmp(row->p[i].preview, row->p[j].preview));
+    if (rep) { LvPost *q = &row->p[i]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); continue; }
+    if (kept != i) row->p[kept] = row->p[i];
+    kept++;
+  }
+  row->n = kept;
+}
 static int vb_row_shown(int r) { return r == VB_ROWS || (r < vb_nrows && !vrows[r].dup && !(vrows[r].state == 2 && !vrows[r].n && r > 0) && !(vrows[r].state == 3 && r > 0 && VROWS[r].tag && VROWS[r].tag[0])); }
 static void vb_take(void) {
   if (!vb_list.ready && !nvb_done) return; // (nothing come: no lock)
@@ -380,12 +394,13 @@ static void vb_take(void) {
     if (vb_list.gen == vb_gen && vb_list.append && r->p && vb_list.p) {
       // (more of a row: added at its end)
       LvPost *np = realloc(r->p, (r->n + vb_list.n) * sizeof *np);
-      if (np) { memcpy(np + r->n, vb_list.p, vb_list.n * sizeof *np); r->p = np; r->n += vb_list.n; free(vb_list.p); }
+      if (np) { memcpy(np + r->n, vb_list.p, vb_list.n * sizeof *np); r->p = np; r->n += vb_list.n; free(vb_list.p); vb_dedupe(r); }
       else lv_posts_free(vb_list.p, vb_list.n);
       vb_dup_check(vb_list.row);
     } else if (vb_list.gen == vb_gen) {
       if (r->p) lv_posts_free(r->p, r->n);
       r->p = vb_list.p; r->n = vb_list.n; r->state = vb_list.p ? 2 : 3;
+      if (r->p) vb_dedupe(r);
       snprintf(r->err, sizeof r->err, "%s", vb_list.err);
       if (vb_list.row == 0 && r->n && !vb_hero_state) { vb_hero_state = 1; pthread_cond_broadcast(&vbcv); }
       vb_dup_check(vb_list.row);

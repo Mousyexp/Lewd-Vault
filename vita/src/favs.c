@@ -420,6 +420,7 @@ static void draw_favs(void) {
     if (hit((int)x, (int)y, cw, ch + 40) && in.tap_y > top && in.tap_y < H - BAR) { fav_sel = i; in.pressed |= SCE_CTRL_CROSS; }
   }
   if (!m) {
+    decor_draw(comic ? DEC_SUIT : DEC_BIKINI, W - 120, H - BAR + 6, 280, 255);
     text_center(W / 2, H / 2 - 20, DIM, 20, comic ? "No favourite comics yet" : "No favourite videos yet");
     text_center(W / 2, H / 2 + 12, FAINT, 15, comic ? "♥ Favorite on a comic keeps its link here, without downloading it" : "♥ Favorite on a long video keeps its link here, without downloading it");
   }

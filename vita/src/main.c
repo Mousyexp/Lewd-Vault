@@ -600,6 +600,7 @@ static struct {
   int wsize;   // the Browser's card size: 1-3 (small, medium, large); 0 not set (medium)
   int rear_l, rear_r; // the rear touchpad's halves: REAR_* (0 not set: their defaults)
   int autorot; // portrait pictures turned to fill the screen held on its side
+  int nodecor; // the little anime girls (decor.c) hidden
 } cfg = {"", 0, 0, 5, 0, 100, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
 static void cfg_load(void) {
   cfg.sndpack = 3; // (Bubbly, from the start)
@@ -649,6 +650,7 @@ static void cfg_load(void) {
     else if (!strcmp(line, "wsize")) cfg.wsize = atoi(eq);
     else if (!strcmp(line, "rear")) sscanf(eq, "%d,%d", &cfg.rear_l, &cfg.rear_r);
     else if (!strcmp(line, "autorot")) cfg.autorot = atoi(eq) != 0;
+    else if (!strcmp(line, "nodecor")) cfg.nodecor = atoi(eq) != 0;
     else if (!strcmp(line, "view")) sscanf(eq, "%d,%d,%d,%d", &cfg.ifit, &cfg.iorient, &cfg.vfit, &cfg.vorient);
     else if (!strcmp(line, "comic")) sscanf(eq, "%d,%d,%d,%d,%d,%d,%d", &cfg.cmode, &cfg.corient, &cfg.canim, &cfg.cdir, &cfg.ctap, &cfg.cdbl, &cfg.cback);
   }
@@ -686,10 +688,10 @@ static void cfg_write(void) {
   cfg_dirty_at = 0;
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\nview=%d,%d,%d,%d\ntscale=%d\naccpic=%d\nsndv=2\nwsize=%d\nrear=%d,%d\nautorot=%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\nview=%d,%d,%d,%d\ntscale=%d\naccpic=%d\nsndv=2\nwsize=%d\nrear=%d,%d\nautorot=%d\nnodecor=%d\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
           cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v, cfg.onboarded,
-          cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback, cfg.ifit, cfg.iorient, cfg.vfit, cfg.vorient, cfg.tscale, cfg.accpic, cfg.wsize, cfg.rear_l, cfg.rear_r, cfg.autorot);
+          cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback, cfg.ifit, cfg.iorient, cfg.vfit, cfg.vorient, cfg.tscale, cfg.accpic, cfg.wsize, cfg.rear_l, cfg.rear_r, cfg.autorot, cfg.nodecor);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -2365,6 +2367,7 @@ static int stats_corner(void) {
 }
 static int cats_x; // (where the categories' list opens)
 static void favs_open(int tab); // (favs.c)
+#include "decor.c"
 #include "lib.c"
 static void vc_tri(float cx, float cy, float s, unsigned c);
 static int text_wrap(int x, int y, unsigned c, int size, const char *s, int w, int lh);
@@ -2730,10 +2733,12 @@ static void draw_library(void) {
       text_center(W / 2, TOP + 180, FAINT, 16, "Save a chapter from the Comics tab, or give a collection the category Comics");
     } else if (vault.n == 0 && !query[0]) {
       // (a new vault: where things come from)
+      decor_draw(DEC_TEARJU, W - 150, H - BAR + 6, 300, 255); // (one of the girls, waiting by it)
       text_center(W / 2, TOP + 140, TEXT, 22, "Your vault is empty");
       text_center(W / 2, TOP + 172, DIM, 16, "Find pictures and videos in the Browser and save them here,");
       text_center(W / 2, TOP + 196, DIM, 16, "or save comics from the Comics tab.");
     } else
+    { decor_draw(query[0] ? DEC_CROPTOP : DEC_SONICO, W - 140, H - BAR + 6, 260, 255); }
     text_center(W / 2, TOP + 150, DIM, 20, query[0] ? "Nothing matches that search" : "Nothing here");
     if (query[0]) text_center(W / 2, TOP + 180, FAINT, 16, "Tap Library below to see everything again");
   }
@@ -3848,7 +3853,7 @@ static void draw_settings(void) {
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_REAR, ST_AUTOROT, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_REAR, ST_AUTOROT, ST_DECOR, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change; past 100% it's made louder than the video itself"},
@@ -3877,10 +3882,11 @@ static void draw_settings(void) {
     {"Find duplicates", "", "The same picture more than once: one kept, the rest to the vault's trash"},
     {"Rear touchpad", vrear, "What each half of the back does: scroll, swipe, volume, zoom or nothing (\u2715 to choose)"},
     {"Turn portrait pictures", cfg.autorot ? "On" : "Off", "A tall picture turned to fill the screen, for the Vita held on its side"},
+    {"Decorations", cfg.nodecor ? "Off" : "On", "The little anime girls by empty screens and in corners, in the accent's colour (tap one)"},
   };
   // In sections, each with a header: the rows in the order shown (set_sel stays a row's ST_ id)
   static const signed char ORDER[] = {
-    -1, ST_THEME, ST_ACCPIC, ST_BGS, ST_TEXT, ST_SNDPACK, ST_SOUNDS, ST_GLOW, ST_DBL,
+    -1, ST_THEME, ST_ACCPIC, ST_BGS, ST_DECOR, ST_TEXT, ST_SNDPACK, ST_SOUNDS, ST_GLOW, ST_DBL,
     -2, ST_VIEW, ST_AUTOROT, ST_VOL, ST_REAR,
     -6, ST_COMICS,
     -3, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK,
@@ -3932,6 +3938,8 @@ static void draw_settings(void) {
     if (hit(30, y, RW, 54) && in.tap_y > top && in.tap_y < H - BAR) { set_sel = r; in.pressed |= SCE_CTRL_CROSS; }
   }
   if (fy >= 0) focus_ring(30, fy, RW, 54);
+  // (one of the girls peeking up from the bottom right corner, beside the tab bar)
+  decor_draw(DEC_SONICO, W - 52, H + 118, 250, 235);
   vita2d_draw_rectangle(0, 0, W, top - 4, BG);
   text(30, 44, TEXT, 26, "Settings");
   textf(30 + text_w(26, "Settings") + 16, 44, FAINT, 13, "%s  ·  %d items%s", vault.root, vault.n, vault.untraceable ? "  ·  Untraceable" : "");
@@ -4031,6 +4039,7 @@ static void draw_settings(void) {
       case ST_DUPES: if (cross) { sfx(SFX_OPEN); screen = S_DUPES; return; } break;
       case ST_REAR: if (cross || d) { rear_window_open(); return; } break;
       case ST_AUTOROT: if (cross || d) { cfg.autorot = !cfg.autorot; sfx(SFX_TOGGLE); cfg_save(); } break;
+      case ST_DECOR: if (cross || d) { cfg.nodecor = !cfg.nodecor; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_ACCPIC: if (cross || d) { cfg.accpic = !cfg.accpic; if (!cfg.accpic) apply_theme(); cfg_save(); sfx(SFX_TOGGLE); } break;
       case ST_CACHE:
         if (cross) {
