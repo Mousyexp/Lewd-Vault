@@ -143,7 +143,9 @@ typedef struct {
   char err[96];
   vita2d_texture *tex[VB_PER];
   signed char ts[VB_PER]; // per card: 0 nothing, 1 asked, 2 here, 3 failed
+  int dup; // (the same videos as a row above: a source that orders them all alike; not shown)
 } VRow;
+#define VB_SHOW 14 // (cards in a row; the next place is its All tile: the whole of it in the Browser)
 static VRow vrows[VB_ROWS];
 static vita2d_texture *vb_hero;
 static int vb_hero_state;
@@ -317,6 +319,26 @@ static void vb_open(int k) {
   screen = S_VIDEOS;
 }
 // (on the drawing thread: lists and pictures in)
+// (a row whose first videos are mostly those of a row above it: the source gives every order the same
+//  list, so the row says nothing new and isn't shown. The first row is always shown.)
+static int vb_same_post(const LvPost *a, const LvPost *b) {
+  const char *x = a->page && a->page[0] ? a->page : a->file, *y = b->page && b->page[0] ? b->page : b->file;
+  return x && y && !strcmp(x, y);
+}
+static void vb_dup_check(int r) {
+  VRow *row = &vrows[r];
+  row->dup = 0;
+  if (r == 0 || row->n < 2) return;
+  int m = row->n < 8 ? row->n : 8;
+  for (int o = 0; o < r; o++) {
+    VRow *up = &vrows[o];
+    if (up->dup || up->state != 2 || !up->n) continue;
+    int same = 0;
+    for (int i = 0; i < m; i++) for (int j = 0; j < up->n && j < 24; j++) if (vb_same_post(&row->p[i], &up->p[j])) { same++; break; }
+    if (same * 10 >= m * 6) { row->dup = 1; return; } // (six in ten or more: the same)
+  }
+}
+static int vb_row_shown(int r) { return r == VB_ROWS || !vrows[r].dup; }
 static void vb_take(void) {
   if (!vb_list.ready && !nvb_done) return; // (nothing come: no lock)
   pthread_mutex_lock(&vbmx);
@@ -327,11 +349,14 @@ static void vb_take(void) {
       LvPost *np = realloc(r->p, (r->n + vb_list.n) * sizeof *np);
       if (np) { memcpy(np + r->n, vb_list.p, vb_list.n * sizeof *np); r->p = np; r->n += vb_list.n; free(vb_list.p); }
       else lv_posts_free(vb_list.p, vb_list.n);
+      vb_dup_check(vb_list.row);
     } else if (vb_list.gen == vb_gen) {
       if (r->p) lv_posts_free(r->p, r->n);
       r->p = vb_list.p; r->n = vb_list.n; r->state = vb_list.p ? 2 : 3;
       snprintf(r->err, sizeof r->err, "%s", vb_list.err);
       if (vb_list.row == 0 && r->n && !vb_hero_state) { vb_hero_state = 1; pthread_cond_broadcast(&vbcv); }
+      vb_dup_check(vb_list.row);
+      for (int q = vb_list.row + 1; q < VB_ROWS; q++) if (vrows[q].state == 2) vb_dup_check(q); // (those below, again)
     } else lv_posts_free(vb_list.p, vb_list.n);
     vb_list.ready = 0;
     pthread_cond_broadcast(&vbcv);
@@ -399,6 +424,15 @@ static void vb_play(int r, int k) {
   wv_show(k);
 }
 
+// The whole of a row (its category) as the Browser's grid, more coming as it scrolls
+static void vb_all(int r) {
+  if (r < 0 || r >= VB_ROWS || !vrows[r].n) return;
+  vb_play(r, 0);
+  if (screen == S_WEBVIEW) { wv_drop(); screen = S_WEB; wsel = 0; wscroll = 0; }
+  char m[80];
+  snprintf(m, sizeof m, "All of \u201c%s\u201d", VROWS[r].title);
+  say(m);
+}
 // (the video browser left: the previews waiting dropped, asked again when it's back)
 static void vb_drop_wants(void) {
   pthread_mutex_lock(&vbmx);
@@ -428,7 +462,9 @@ static void draw_videos(void) {
   const VSource *src = &VSRC[vb_src < 0 ? 0 : vb_src];
   int site = vsource_site(vb_src);
   // where the view is: the chosen row in sight (the banner scrolls away as rows go down)
-  float target = vb_row == 0 ? 0 : HERO_H - 120 + (vb_row - 1) * (VB_CH + 52);
+  int vis = 0; // (the chosen row's place among those shown)
+  for (int r = 0; r < vb_row && r < VB_ROWS; r++) vis += vb_row_shown(r);
+  float target = vb_row == 0 ? 0 : HERO_H - 120 + (vis - 1) * (VB_CH + 52);
   vb_y += (target - vb_y) * ease(0.22f);
   float y0 = -vb_y;
   // ---- the banner: the first trending video, big, fading into the page ----
@@ -460,20 +496,24 @@ static void draw_videos(void) {
   else spinner(60, y0 + 140, 16);
   // ---- the rows ----
   int ry = (int)y0 + HERO_H - 30;
-  for (int r = 0; r < VB_ROWS; r++, ry += VB_CH + 52) {
+  for (int r = 0; r < VB_ROWS; r++) {
     VRow *row = &vrows[r];
+    if (row->dup) continue; // (the same as a row above: not shown)
+    ry += VB_CH + 52;
+    int ry0 = ry - (VB_CH + 52); // (this row's top)
+    #define ry ry0
     if (ry > H || ry + VB_CH + 40 < 0) continue;
     text(30, ry + 20, r == vb_row ? TEXT : DIM, 18, VROWS[r].title);
     if (row->state == 3) { text(30, ry + 60, FAINT, 14, row->err[0] ? row->err : "Nothing here"); continue; }
     if (row->state < 2) { for (int k = 0; k < 5; k++) skeleton(30 + k * (VB_CW + 12), ry + 32, VB_CW, VB_CH, 10); spinner(30 + VB_CW / 2, ry + 32 + VB_CH / 2, 12); continue; }
     if (!row->n) { text(30, ry + 60, FAINT, 14, "No videos here"); continue; }
-    if (vb_col[r] >= row->n) vb_col[r] = row->n - 1; // (a remembered place past a shorter list)
+    if (vb_col[r] > (row->n < VB_SHOW ? row->n : VB_SHOW)) vb_col[r] = row->n < VB_SHOW ? row->n : VB_SHOW; // (a remembered place past a shorter list; its last place is All)
     // (the chosen card kept in sight)
     float want = vb_col[r] * (VB_CW + 12) - (W - 60 - VB_CW) / 2.0f;
     if (want < 0) want = 0;
     if (r == vb_row || vb_x[r] > want + W) vb_x[r] += (want - vb_x[r]) * ease(0.25f);
     if (in.touching && in.down_y > ry && in.down_y < ry + VB_CH + 40) { vb_x[r] -= in.drag_dx; vb_row = r; }
-    for (int k = 0; k < row->n; k++) {
+    for (int k = 0; k < row->n && k < VB_SHOW; k++) {
       float x = 30 + k * (VB_CW + 12) - vb_x[r];
       if (x > W || x + VB_CW < 0) continue;
       vb_ask(r, k);
@@ -497,7 +537,24 @@ static void draw_videos(void) {
       if (is_saved(&row->p[k])) { circle(x + VB_CW - 16, cy + VB_CH - 16, 10, ACC); text_center(x + VB_CW - 16, cy + VB_CH - 11, RGBA(20, 12, 16, 255), 12, "✓"); }
       if (hit((int)x, (int)cy, VB_CW, VB_CH) && in.tap_y < H - BAR) { vb_row = r; vb_col[r] = k; sfx(SFX_SELECT); vb_play(r, k); return; }
     }
+    // the All tile at the end: the whole row as a grid in the Browser
+    {
+      int k = row->n < VB_SHOW ? row->n : VB_SHOW;
+      float x = 30 + k * (VB_CW + 12) - vb_x[r], cy = ry + 32;
+      if (x < W && x + VB_CW > 0) {
+        int on = r == vb_row && vb_col[r] == k && !in.touching;
+        glass(x, cy, VB_CW, VB_CH, 0);
+        circle(x + VB_CW / 2, cy + 38, 20, with_alpha(ACC, on ? 255 : 120));
+        icon("grid", x + VB_CW / 2, cy + 38, on ? RGBA(20, 12, 16, 255) : TEXT);
+        text_center((int)(x + VB_CW / 2), (int)cy + 80, TEXT, 16, "All");
+        text_center((int)(x + VB_CW / 2), (int)cy + 98, FAINT, 11, VROWS[r].title);
+        if (on) focus_ring(x, cy, VB_CW, VB_CH);
+        if (hit((int)x, (int)cy, VB_CW, VB_CH) && in.tap_y < H - BAR) { vb_row = r; vb_col[r] = k; sfx(SFX_OPEN); vb_all(r); return; }
+      }
+    }
+    #undef ry
   }
+  // (ry: where Up next goes, below the last row shown)
   // ---- Up next: the favourite videos, after the rows ----
   if (nup) {
     const int r = VB_ROWS;
@@ -540,15 +597,20 @@ static void draw_videos(void) {
   if (hit(72, 10, sw, 40)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
   text(W - 20 - text_w(13, "✕ play  ·  ○ back  ·  START sources"), 36, FAINT, 13, "✕ play  ·  ○ back  ·  START sources");
   // ---- the buttons ----
-  int last_row = nup ? VB_ROWS : VB_ROWS - 1, cur_n = vb_row == VB_ROWS ? nup : vrows[vb_row].n;
-  if (in.pressed & SCE_CTRL_DOWN) { if (vb_row < last_row) { vb_row++; sfx(SFX_TICK); } }
-  if (in.pressed & SCE_CTRL_UP) { if (vb_row > 0) { vb_row--; sfx(SFX_TICK); } }
-  cur_n = vb_row == VB_ROWS ? nup : vrows[vb_row].n;
+  int last_row = nup ? VB_ROWS : VB_ROWS - 1, cur_n;
+  in.pressed |= stick_dirs(); // (the left stick as the D-pad)
+  if (!vb_row_shown(vb_row)) vb_row = 0;
+  if (in.pressed & SCE_CTRL_DOWN) { int r2 = vb_row + 1; while (r2 <= last_row && !vb_row_shown(r2)) r2++; if (r2 <= last_row) { vb_row = r2; sfx(SFX_TICK); } }
+  if (in.pressed & SCE_CTRL_UP) { int r2 = vb_row - 1; while (r2 > 0 && !vb_row_shown(r2)) r2--; if (r2 >= 0 && r2 != vb_row) { vb_row = r2; sfx(SFX_TICK); } }
   VRow *cur = vb_row < VB_ROWS ? &vrows[vb_row] : NULL;
+  // (a row's places: its cards, up to 14, then All; Up next: its favourites)
+  cur_n = cur ? (cur->state == 2 ? (cur->n < VB_SHOW ? cur->n : VB_SHOW) + 1 : 0) : nup;
   if (in.pressed & SCE_CTRL_RIGHT) { if (vb_col[vb_row] < cur_n - 1) { vb_col[vb_row]++; sfx(SFX_TICK); } }
   if (in.pressed & SCE_CTRL_LEFT) { if (vb_col[vb_row] > 0) { vb_col[vb_row]--; sfx(SFX_TICK); } }
-  vb_x[vb_row] += in.lx * 12 * ft;
-  if ((in.pressed & SCE_CTRL_CROSS) && cur_n) { sfx(SFX_SELECT); if (cur) vb_play(vb_row, vb_col[vb_row]); else upnext_play(vb_col[vb_row]); return; }
+  if ((in.pressed & SCE_CTRL_CROSS) && cur_n) {
+    if (cur && vb_col[vb_row] >= (cur->n < VB_SHOW ? cur->n : VB_SHOW)) { sfx(SFX_OPEN); vb_all(vb_row); return; }
+    sfx(SFX_SELECT); if (cur) vb_play(vb_row, vb_col[vb_row]); else upnext_play(vb_col[vb_row]); return;
+  }
   if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = S_WEB; return; }
   if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
   // the next ones just out of sight, ready

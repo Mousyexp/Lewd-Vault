@@ -38,7 +38,12 @@ a resolution rank (S+ down to C) beside the back button in both full views; **Re
 (Settings): each half of the back scrolls, swipes, sets the volume, zooms or does nothing, and a sign
 at the top left says when it's touched; **Turn portrait pictures** (off at first); the right stick
 flicked across changes tab; the stats page has graphs; the calculator disguise is left with SELECT
-(through the PIN pad when there's a PIN); the PIN pad shows as many dots as the PIN has.
+(through the PIN pad when there's a PIN); the PIN pad shows as many dots as the PIN has. Pinching
+zooms towards the fingers. In the Browser's grid, △ or a finger held on a card lifts it with **Save**
+and **Find similar**; a site's 5xx is asked again by itself (and there's Try again). The left stick
+moves the grids' selection as the D-pad does, and after a scroll the D-pad starts from what's in
+view. The video browser hides rows that repeat a row above (a source that sorts them all alike), and
+each row ends in an **All** tile: the whole category in the Browser.
 
 | | Touch | Buttons |
 |---|---|---|
