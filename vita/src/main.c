@@ -1814,35 +1814,33 @@ static void draw_locked(void) {
 // ----- the loading screen: at start (while the vault opens behind it) and while a vault unlocks -----
 static vita2d_texture *splash_tex;
 static unsigned splash_until = 96; // (frames: at least about a second and a half at start)
-// The loading screen: a round flask, its liquid (the accent) sloshing, a darker wave behind it,
-// bubbles rising through it and out of the neck, and a line with dots that count. The flask's outline
-// is drawn once into a texture from a distance field (thick, round, smooth at any edge); the liquid is
-// drawn as one-pixel columns between the wave and the flask's inside, its top edge softened, so the
-// whole of it fades out with the screen.
+// The loading screen: the app's heart as a glass vessel, its liquid (the accent) sloshing, a darker
+// wave behind it, bubbles rising through it and drifting up inside, and a line with dots that count.
+// The heart's outline is drawn once into a texture from a distance field (thick, round, smooth at any
+// edge); the liquid is drawn as one-pixel columns between the wave and the heart's inside, its top
+// edge softened, so the whole of it fades out with the screen.
 static unsigned mix_col(unsigned a, unsigned b, float t);
-#define FL_W 230
-#define FL_H 290
-#define FL_T 11.0f   // (the outline's thickness)
-#define FL_R 86.0f   // (the body's radius)
-#define FL_CY 196.0f // (the body's centre, in the texture)
-#define FL_NW 24.0f  // (the neck's half width)
-#define FL_TOP 50.0f // (where the neck's walls end)
+#define FL_W 280
+#define FL_H 270
+#define FL_T 12.0f   // (the outline's thickness)
+#define FL_S 200.0f  // (the heart's size: its distance field's unit, in pixels)
+#define FL_TIP 246.0f // (the heart's point, in the texture)
+#define FL_ROUND 10.0f // (how much rounder than the bare shape: its corners and point softened)
 static vita2d_texture *fl_tex;
-static short fl_in_top[FL_W], fl_in_bot[FL_W]; // (each column's inside, in the body: top and bottom; -1 none)
-static float fl_seg(float px, float py, float ax, float ay, float bx, float by) {
-  float vx = bx - ax, vy = by - ay, wx = px - ax, wy = py - ay, t = (wx * vx + wy * vy) / (vx * vx + vy * vy);
-  t = t < 0 ? 0 : t > 1 ? 1 : t;
-  float dx = wx - vx * t, dy = wy - vy * t;
-  return sqrtf(dx * dx + dy * dy);
+static short fl_in_top[FL_W], fl_in_bot[FL_W]; // (each column's inside: top and bottom; -1 none)
+static float fl_top_y; // (the heart's highest inside point: bubbles fade before it)
+// (a heart's distance field, Inigo Quilez's: the point at the origin, the lobes above; < 0 inside)
+static float sd_heart(float x, float y) {
+  x = fabsf(x);
+  if (y + x > 1.0f) { float dx = x - 0.25f, dy = y - 0.75f; return sqrtf(dx * dx + dy * dy) - 0.35355339f; }
+  float d1 = x * x + (y - 1.0f) * (y - 1.0f);
+  float m = 0.5f * fmaxf(x + y, 0.0f), d2 = (x - m) * (x - m) + (y - m) * (y - m);
+  return sqrtf(fminf(d1, d2)) * (x - y > 0 ? 1.0f : -1.0f);
 }
-// (the flask's shape: < 0 inside; the body and the neck joined with a smooth fillet)
-static float fl_shape(float x, float y) {
-  float cx = FL_W / 2.0f;
-  float body = sqrtf((x - cx) * (x - cx) + (y - FL_CY) * (y - FL_CY)) - FL_R;
-  float qx = fabsf(x - cx) - FL_NW, qy = fabsf(y - (FL_TOP + FL_CY) / 2) - (FL_CY - FL_TOP) / 2;
-  float neck = fminf(fmaxf(qx, qy), 0) + sqrtf(fmaxf(qx, 0) * fmaxf(qx, 0) + fmaxf(qy, 0) * fmaxf(qy, 0));
-  float k = 16, h = fminf(fmaxf(0.5f + 0.5f * (neck - body) / k, 0), 1); // (smooth union)
-  return neck * (1 - h) + body * h - k * h * (1 - h);
+// (in the texture's pixels, the heart rounded a little: < 0 inside)
+static float fl_shape(float px, float py) {
+  float u = (px - FL_W / 2.0f) / FL_S, v = (FL_TIP - py) / FL_S;
+  return sd_heart(u, v + FL_ROUND / FL_S * 0.6f) * FL_S - FL_ROUND;
 }
 static void make_flask(void) {
   if (fl_tex) return;
@@ -1850,38 +1848,27 @@ static void make_flask(void) {
   if (!fl_tex) return;
   uint8_t *d = vita2d_texture_get_datap(fl_tex);
   unsigned stride = vita2d_texture_get_stride(fl_tex);
-  float cx = FL_W / 2.0f;
   for (int y = 0; y < FL_H; y++)
     for (int x = 0; x < FL_W; x++) {
-      float px = x + 0.5f, py = y + 0.5f, f = fl_shape(px, py);
-      // the outline: the shape's edge, open above the neck's top, with lips curling outward
-      float o = fabsf(f) - FL_T / 2;
-      o = fmaxf(o, FL_TOP - py);
-      for (int sgn = -1; sgn <= 1; sgn += 2) {
-        float wx = cx + sgn * FL_NW;
-        o = fminf(o, fl_seg(px, py, wx, FL_TOP, wx + sgn * 9, FL_TOP - 9) - FL_T / 2);
-      }
+      float o = fabsf(fl_shape(x + 0.5f, y + 0.5f)) - FL_T / 2; // (the outline: a band along the edge)
       float al = fminf(fmaxf(0.5f - o, 0), 1);
       uint8_t *q = d + y * stride + x * 4;
       q[0] = q[1] = q[2] = 255;
       q[3] = (uint8_t)(al * 255);
     }
   vita2d_texture_set_filters(fl_tex, SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
-  // each column's inside, in the body (under the neck's join): where the liquid can be
+  // each column's inside: where the liquid can be (just under the outline's inner edge)
+  fl_top_y = FL_H;
   for (int x = 0; x < FL_W; x++) {
-    fl_in_top[x] = fl_in_bot[x] = -1;
-    float px = x + 0.5f;
-    if (fabsf(px - cx) > FL_R - FL_T / 2 - 1) continue;
     int t = -1, bo = -1;
-    for (int y = (int)(FL_CY - FL_R / 2); y < FL_H; y++) {
-      int inside = fl_shape(px, y + 0.5f) < -FL_T / 2 + 1.0f;
-      if (inside && t < 0) t = y;
-      if (inside) bo = y + 1;
+    for (int y = 0; y < FL_H; y++) {
+      if (fl_shape(x + 0.5f, y + 0.5f) < -FL_T / 2 + 1.0f) { if (t < 0) t = y; bo = y + 1; }
     }
     fl_in_top[x] = (short)t; fl_in_bot[x] = (short)bo;
+    if (t >= 0 && t < fl_top_y) fl_top_y = t;
   }
 }
-// (a band of liquid: from the wave down to the flask's inside, column by column; the wave's edge
+// (a band of liquid: from the wave down to the heart's inside, column by column; the wave's edge
 //  softened with a part-covered pixel above it)
 static void fl_liquid(float ox, float oy, float level, float amp, float k, float ph, float tilt, unsigned col) {
   float cx = FL_W / 2.0f;
@@ -1900,29 +1887,33 @@ static void draw_splash(const char *line, int alpha) {
   make_flask();
   float t = frame_no / 60.0f;
   vita2d_draw_rectangle(0, 0, W, H, with_alpha(BG, alpha));
-  // the flask comes in (rising, a little spring), then sits
+  // the heart comes in (rising, a little spring), then beats now and then, softly
   float in_t = fminf(1.0f, frame_no / 30.0f);
   float spring = 1.0f - expf(-5.0f * in_t) * cosf(7.0f * in_t);
-  float ox = W / 2.0f - FL_W / 2.0f, oy = 34 + (1 - spring) * 30;
+  float ox = W / 2.0f - FL_W / 2.0f, oy = 40 + (1 - spring) * 30;
   int fa = (int)(alpha * fminf(1, in_t * 1.6f));
   if (fl_tex) {
-    // the liquid: a darker wave behind, the accent in front; both slosh, the flask's tilt between them
-    float tilt = 0.10f * sinf(t * 1.7f), level = FL_CY + 4 + 3 * sinf(t * 1.1f);
-    fl_liquid(ox, oy, level - 6, 6, 0.045f, -t * 2.6f + 1.3f, tilt * 0.7f, with_alpha(mix_col(ACC, BG, 0.45f), fa));
-    fl_liquid(ox, oy, level, 7, 0.038f, t * 3.1f, -tilt, with_alpha(ACC, fa));
-    // bubbles: rising through the liquid (light), and from its top up out of the neck (darker)
+    // the liquid: a darker wave behind, the accent in front; both slosh, tilting against each other
+    float tilt = 0.09f * sinf(t * 1.7f), level = FL_TIP - 112 + 4 * sinf(t * 1.1f);
+    fl_liquid(ox, oy, level - 7, 6, 0.040f, -t * 2.6f + 1.3f, tilt * 0.7f, with_alpha(mix_col(ACC, BG, 0.45f), fa));
+    fl_liquid(ox, oy, level, 7, 0.034f, t * 3.1f, -tilt, with_alpha(ACC, fa));
     float cx = ox + FL_W / 2.0f;
-    for (int k = 0; k < 6; k++) {
-      float sp = 0.35f + 0.09f * k, ph = fmodf(t * sp + k * 0.37f, 1.0f);
-      float bx = cx + sinf(k * 2.1f) * 44 + sinf(t * 2 + k) * 4, by = oy + FL_CY + 70 - ph * 64;
-      circle(bx, by, 3 + (k % 3), with_alpha(mix_col(ACC, TEXT, 0.45f), (int)(fa * 0.55f * sinf(ph * 3.14159f))));
+    // bubbles: rising through the liquid (light) ...
+    for (int k = 0; k < 7; k++) {
+      float sp = 0.32f + 0.08f * k, ph = fmodf(t * sp + k * 0.37f, 1.0f);
+      float bx = cx + sinf(k * 2.1f) * 40 + sinf(t * 2 + k) * 4, by = oy + FL_TIP - 40 - ph * 70;
+      circle(bx, by, 3.5f + (k % 3), with_alpha(mix_col(ACC, TEXT, 0.45f), (int)(fa * 0.55f * sinf(ph * 3.14159f))));
     }
-    for (int k = 0; k < 4; k++) {
-      float sp = 0.42f + 0.07f * k, ph = fmodf(t * sp + k * 0.29f, 1.0f);
-      float bx = cx + sinf(k * 1.7f + ph * 4) * 9, by = oy + level - 10 - ph * (level - FL_TOP + 6);
-      circle(bx, by, 4.5f - (k % 2) * 1.5f - ph * 1.5f, with_alpha(ACC, (int)(fa * (1 - ph))));
+    // ... and from its top, drifting up inside the heart, fading before its top
+    float rise = level - fl_top_y - 26;
+    for (int k = 0; k < 5; k++) {
+      float sp = 0.38f + 0.07f * k, ph = fmodf(t * sp + k * 0.23f, 1.0f);
+      float bx = cx + (k - 2) * 26 + sinf(k * 1.7f + ph * 5) * 7, by = oy + level - 10 - ph * rise;
+      circle(bx, by, 5.0f - (k % 2) * 1.5f - ph * 2, with_alpha(ACC, (int)(fa * (1 - ph) * (1 - ph))));
     }
-    vita2d_draw_texture_tint(fl_tex, ox, oy, with_alpha(TEXT, fa));
+    // the heart, beating gently: its outline drawn a touch bigger on each beat
+    float beat = fmaxf(0, sinf(t * 2.4f)), bs = 1 + 0.015f * beat * beat * beat;
+    vita2d_draw_texture_tint_scale(fl_tex, cx - FL_W * bs / 2, oy + FL_H / 2.0f - FL_H * bs / 2, bs, bs, with_alpha(TEXT, fa));
   } else heart(W / 2.0f, 200, 60, with_alpha(ACC, alpha));
   // the line, its dots counting: no ellipsis of its own
   int ta = (int)(alpha * fminf(1.0f, fmaxf(0.0f, (frame_no - 12) / 20.0f)));
@@ -1931,11 +1922,11 @@ static void draw_splash(const char *line, int alpha) {
   size_t n = strlen(msg);
   if (n >= 3 && !strcmp(msg + n - 3, "…")) msg[n - 3] = 0;
   int w = text_w(20, msg), dots = (int)(t * 2.5f) % 4;
-  float lx = W / 2.0f - (w + 30) / 2.0f;
+  float lx = W / 2.0f - (w + 36) / 2.0f;
   text((int)lx, 382, with_alpha(TEXT, ta), 20, msg);
   for (int k = 0; k < 3; k++) {
     float on = k < dots ? 1 : 0.25f;
-    circle(lx + w + 8 + k * 9, 377, 2.6f, with_alpha(TEXT, (int)(ta * on)));
+    circle(lx + w + 10 + k * 11, 376, 3.6f, with_alpha(TEXT, (int)(ta * on)));
   }
 }
 static void draw_unlocking(int stage) {

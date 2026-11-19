@@ -1,5 +1,7 @@
-// The LiveArea page (sce_sys/livearea/contents/template.xml): its left frame opens the Google Drive
-// vault and its right frame the vault on the card, straight away. Compiled inside main.c (#include "livearea.c").
+// The LiveArea page (sce_sys/livearea/contents/template.xml) is the picture and the gate. Its two
+// frames that opened a vault straight away are gone (a real Vita never passed their links on); what
+// reads a start's param and the LiveArea's app events stays, harmless, for a link that does. Compiled
+// inside main.c (#include "livearea.c").
 //
 // A frame's target is psgm:play?titleid=LWDV00001&param=drive (or local): the system starts the app
 // with that param (sceAppMgrGetAppParam), or, when it's already running, sends it an app event.

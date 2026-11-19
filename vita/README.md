@@ -260,13 +260,9 @@ you leave the screen (`src/wifi.c`).
 ## The LiveArea
 
 The page behind the bubble (`sce_sys/livearea/contents`, drawn by `tools/make-livearea.mjs`; the
-title along the bottom in Great Vibes, SIL OFL, `tools/fonts`): the gate in the middle (the icon)
-starts the app as usual; the frame on its left opens the **Google Drive vault** and the one on its
-right the **vault on the card**, straight away (past the PIN lock, if there is one; `src/livearea.c`).
-The frames' targets carry the build's Title ID (`template.xml` is filled in by CMake), so the test
-kit's start the test kit, which then skips its menu. The Google Drive vault is the one
-"Get it from Drive" made (a vault of its own, its folder ending in "(Drive)") or one that has been
-synced; with none on the card yet, its frame opens Google Drive's screen to get it.
+title along the bottom in Great Vibes, SIL OFL, `tools/fonts`): the picture, and the gate in the
+middle (the icon), which starts the app. (It had two frames that opened a vault straight away; a
+real Vita never passed their links on to the app, so they're gone.)
 
 ## Google Drive
 

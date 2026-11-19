@@ -1,26 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Style a1: the gate in the middle (the icon) starts the app as usual; frame1, on its left, opens
-     the Google Drive vault and frame2, on its right, the vault on the card, straight away (the app
-     reads the param: src/livearea.c). @VITA_TITLEID@ is filled in when it's built (CMakeLists.txt),
-     so the test kit's frames start the test kit. The pictures: tools/make-livearea.mjs. -->
-<livearea style="a1" format-ver="01.00" content-rev="5">
+<!-- Style a1: the picture and the gate in the middle (the icon), which starts the app. The pictures:
+     tools/make-livearea.mjs. -->
+<livearea style="a1" format-ver="01.00" content-rev="6">
   <livearea-background>
     <image>bg.png</image>
   </livearea-background>
   <gate>
     <startup-image>startup.png</startup-image>
   </gate>
-  <!-- (style a1 puts frame1 left of the gate and frame2 right of it) -->
-  <frame id="frame1">
-    <liveitem>
-      <image>drive.png</image>
-      <target>psgm:play?titleid=@VITA_TITLEID@&amp;param=drive</target>
-    </liveitem>
-  </frame>
-  <frame id="frame2">
-    <liveitem>
-      <image>local.png</image>
-      <target>psgm:play?titleid=@VITA_TITLEID@&amp;param=local</target>
-    </liveitem>
-  </frame>
 </livearea>
