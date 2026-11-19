@@ -353,7 +353,7 @@ static void circle(float cx, float cy, float r, unsigned c) {
   float s = r * 2 / DISC;
   vita2d_draw_texture_tint_scale(disc, cx - r, cy - r, s, s, c);
 }
-// The squircle's corner: a superellipse (|x|^5 + |y|^5 = 1) quarter, the continuous curve of iOS's
+// The squircle's corner: a superellipse (|x|^3.5 + |y|^3.5 = 1) quarter, the continuous curve of iOS's
 // buttons, where a circle's quarter meets the straight edge with a corner you can see.
 static vita2d_texture *sqdisc;
 static void make_sqdisc(void) {
@@ -369,7 +369,7 @@ static void make_sqdisc(void) {
       for (int sy = 0; sy < 4; sy++)
         for (int sx = 0; sx < 4; sx++) {
           float dx = fabsf(x + (sx + 0.5f) / 4 - R) / R, dy = fabsf(y + (sy + 0.5f) / 4 - R) / R;
-          in += powf(dx, 5) + powf(dy, 5) <= 1;
+          in += powf(dx, 3.5f) + powf(dy, 3.5f) <= 1; // (3.5: rounder than iOS's 5, still not a circle's 2)
         }
       uint8_t *p = d + y * stride + x * 4;
       p[0] = p[1] = p[2] = 255;
@@ -382,7 +382,8 @@ static void rrect_round(float x, float y, float w, float h, float r, unsigned c)
 // A rounded rectangle, its corners squircles. A pill (a chip, a button rounded right round) is made a
 // squircle-cornered box: it reads as the box you can press, its corners no longer cut away.
 static void rrect(float x, float y, float w, float h, float r, unsigned c) {
-  if (r * 2 >= h - 0.5f && w > h * 1.25f && h >= 16) r = h * 0.34f;
+  if (r * 2 >= h - 0.5f && w > h * 1.25f && h >= 16) r = h * 0.42f;
+  else r *= 1.25f; // (rounder corners all round)
   if (!sqdisc) { rrect_round(x, y, w, h, r, c); return; }
   DRAW_GUARD(x, y, w, h, r);
   if (r * 2 > h) r = h / 2;
@@ -2057,7 +2058,7 @@ static void pill_progress(float x, float y, float w, float h, float f, int a) {
 }
 static void glass(float x, float y, float w, float h, int round) {
   void (*rr)(float, float, float, float, float, unsigned) = round ? rrect_round : rrect;
-  float r = round ? h / 2 : h * 0.34f;
+  float r = round ? h / 2 : h * 0.42f;
   rr(x, y + 1.5f, w, h, r, RGBA(0, 0, 0, 36));                                     // (its shadow)
   rr(x, y, w, h, r, with_alpha(TEXT, 30));                                         // (its rim: faint, even, all round)
   rr(x + 1, y + 1, w - 2, h - 2, r - 1, with_alpha(mix_col(SURF2, ACC, 0.32f), 235)); // (the glass, a little of the accent in it)
@@ -2271,7 +2272,15 @@ static int chip(int x, int y, const char *label, int on) {
 static int head_button(int right, const char *ic, const char *label, unsigned bg, int *hit_out) {
   int w = text_w(16, label) + (ic ? 50 : 32);
   int x = right - w, y = HDR_Y;
-  rrect(x, y + 8, w, 40, 20, bg);
+  int pressed = in.touching && !in.moved && in.down_x >= x && in.down_x < x + w && in.down_y >= y + 4 && in.down_y < y + 52;
+  if (bg == SURF2) {
+    // (a plain one: glass; pressed: sunk a little, darker)
+    if (pressed) rrect_round(x + 1, y + 9, w - 2, 38, 19, mix_col(SURF2, RGBA(0, 0, 0, 255), 0.25f));
+    else glass(x, y + 8, w, 40, 1);
+  } else {
+    rrect(x, y + 8, w, 40, 20, pressed ? mix_col(bg, RGBA(0, 0, 0, 255), 0.25f) : bg);
+    rrect_round(x + 3, y + 9, w - 6, 16, 8, with_alpha(TEXT, 14)); // (a sheen on a tinted one)
+  }
   if (ic) icon(ic, x + 22, y + 28, TEXT);
   text(x + (ic ? 38 : 16), y + 34, TEXT, 16, label);
   *hit_out = hit(x, y + 4, w, 48);
@@ -3829,6 +3838,7 @@ static void draw_rear_window(void);
 static void rear_window_open(void);
 static int rear_of(int right);
 static const char *const REAR_SHORT[] = {"", "Both", "Scroll", "Swipe", "Volume", "Zoom", "Off"};
+static int set_slide; // (a row's slide as Settings opens)
 static void draw_settings(void) {
   if (!conv_loaded) conv_keys_load();
   char vconv[80];
@@ -3929,12 +3939,17 @@ static void draw_settings(void) {
       continue;
     }
     int r = ORDER[k];
-    rrect(30, y, RW, 54, 14, r == set_sel ? SURF2 : SURF);
+    // (opening Settings: the rows slide in from the right, one after another)
+    { static unsigned seen_at, opened; if (frame_no - seen_at > 2) opened = frame_no; seen_at = frame_no;
+      float u = fminf(1, fmaxf(0, (frame_no - opened - k * 1.2f) / 14.0f)); u = 1 - (1 - u) * (1 - u) * (1 - u);
+      set_slide = (int)((1 - u) * 60); }
+    if (r == set_sel) glass(30 + set_slide, y, RW, 54, 0);
+    else rrect(30 + set_slide, y, RW, 54, 14, SURF);
     if (r == set_sel) fy = y;
     int vw = rows[r].value[0] ? text_w(18, rows[r].value) + 24 : 0;
-    text_fit(54, y + 24, TEXT, 18, rows[r].name, RW - 48 - (vw ? 60 : 0));
-    text_fit(54, y + 45, FAINT, 14, rows[r].hint, RW - 48 - vw); // (cut short of the value)
-    if (rows[r].value[0]) text(30 + RW - 24 - text_w(18, rows[r].value), y + 34, ACC, 18, rows[r].value);
+    text_fit(54 + set_slide, y + 24, TEXT, 18, rows[r].name, RW - 48 - (vw ? 60 : 0));
+    text_fit(54 + set_slide, y + 45, FAINT, 14, rows[r].hint, RW - 48 - vw); // (cut short of the value)
+    if (rows[r].value[0]) text(30 + set_slide + RW - 24 - text_w(18, rows[r].value), y + 34, ACC, 18, rows[r].value);
     if (hit(30, y, RW, 54) && in.tap_y > top && in.tap_y < H - BAR) { set_sel = r; in.pressed |= SCE_CTRL_CROSS; }
   }
   if (fy >= 0) focus_ring(30, fy, RW, 54);
@@ -4860,12 +4875,23 @@ int main(void) {
       if (screen != S_LOCKED || frame_no < splash_until) draw_splash(screen == S_LOCKED ? "Untraceable vault" : "Opening the vault\u2026", a);
     }
     if (frame_no < message_until && screen != S_COVER && screen != S_CALC) {
-      int w = text_w(16, message) + 40;
+      int w = text_w(16, message) + 44;
       int a = message_until - frame_no < 20 ? (message_until - frame_no) * 12 : 240;
-      rrect(W / 2 - w / 2, H - BAR - 56, w, 38, 19, RGBA(0, 0, 0, a * 3 / 4));
-      text_center(W / 2, H - BAR - 31, with_alpha(TEXT, a), 16, message);
+      // (it rises in over a few frames, a glass pill, and fades as it goes)
+      float in_t = fminf(1, (frame_no - (message_until - 150)) / 12.0f);
+      in_t = 1 - (1 - in_t) * (1 - in_t);
+      int ty = H - BAR - 58 + (int)((1 - in_t) * 18);
+      a = (int)(a * in_t);
+      rrect_round(W / 2 - w / 2, ty + 3, w, 40, 20, RGBA(0, 0, 0, a / 3));
+      rrect_round(W / 2 - w / 2, ty, w, 40, 20, with_alpha(mix_col(SURF2, RGBA(0, 0, 0, 255), 0.35f), a * 235 / 255));
+      rrect_round(W / 2 - w / 2 + 1, ty, w - 2, 40, 20, with_alpha(TEXT, a / 9));
+      rrect_round(W / 2 - w / 2 + 2, ty + 1, w - 4, 38, 19, with_alpha(mix_col(SURF2, ACC, 0.2f), a * 235 / 255));
+      rrect_round(W / 2 - w / 2 + 8, ty + 2, w - 16, 15, 7.5f, with_alpha(TEXT, a / 16));
+      text_center(W / 2, ty + 26, with_alpha(TEXT, a), 16, message);
     }
+    ev_watch();
     rear_sign_draw();
+    ev_sign_draw();
     PT("the screen");
     if (screen != S_CALC && screen != S_COVER) draw_touch_lock();
 #ifdef LV_DEBUG

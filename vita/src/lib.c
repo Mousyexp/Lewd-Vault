@@ -697,8 +697,7 @@ static void draw_side_tab(void) {
   if (side_t > 0.01f) return;
   // (a tab at the edge that says what it opens: the tag icon, "Tags", the arrow)
   int tx = W - 40, ty = H / 2 - 64, tw = 48, th = 128;
-  rrect(tx, ty, tw, th, 16, with_alpha(SURF2, 235));
-  rrect(tx + 1, ty + 1, tw - 2, th / 2, 15, with_alpha(TEXT, 10));
+  glass(tx, ty, tw, th, 0);
   icon("tag", tx + 20, ty + 34, ACC);
   text_center(tx + 20, ty + 66, TEXT, 12, "Tags");
   icon("chev_l", tx + 20, ty + 96, DIM);

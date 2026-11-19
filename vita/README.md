@@ -43,7 +43,15 @@ zooms towards the fingers. In the Browser's grid, △ or a finger held on a card
 and **Find similar**; a site's 5xx is asked again by itself (and there's Try again). The left stick
 moves the grids' selection as the D-pad does, and after a scroll the D-pad starts from what's in
 view. The video browser hides rows that repeat a row above (a source that sorts them all alike), and
-each row ends in an **All** tile: the whole category in the Browser.
+each row ends in an **All** tile: the whole category in the Browser. The long-form sources' rows
+are genres (New, Uncensored, MILF, Elf, Maid, Big breasts, Harem, Romance: each a search on the site;
+one with nothing, or the same as another, isn't shown; a row's repeats are one card). **Your own
+source** (the finder's Videos side, △): a site, the tags to ask it for and a name. The little anime
+girls of the PC and the phones (`decor/`, from `art/decor` by `tools/make-decor.py`) wait by empty
+screens and peek from Settings' corner, in the accent's colour; tap one and she hops (Settings ›
+Decorations). The sign at the top left also says when a save starts, ends or fails, a slideshow
+starts or ends, and Google Drive syncs. Corners are rounder; the header buttons, messages, Settings'
+chosen row and the edge tabs are glass, and Settings' rows slide in.
 
 | | Touch | Buttons |
 |---|---|---|

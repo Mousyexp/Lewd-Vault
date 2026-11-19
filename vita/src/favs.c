@@ -364,7 +364,7 @@ static void favs_drive_take(void) {
     fav_drop_textures();
     char m[120];
     int ad = drive_favs_added, rm = drive_favs_removed;
-    if (ad || rm) { snprintf(m, sizeof m, "Favourites from Drive: %d new, %d taken out", ad, rm); say(m); }
+    if (ad || rm) { snprintf(m, sizeof m, "Favourites from Drive: %d new, %d taken out", ad, rm); ev_notice("heart", ACC, "%s", m); }
     else if (favs_sync_loud) say("Favourites: the same as in Drive");
   }
   favs_sync_loud = 0;

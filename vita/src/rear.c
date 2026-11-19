@@ -154,3 +154,49 @@ static void draw_rear_window(void) {
   if ((in.pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_TRIANGLE)) || (in.tap && (in.tap_x < px || in.tap_x > px + pw || in.tap_y < py || in.tap_y > py + ph))) { rw_open = 0; sfx(SFX_CLOSE); }
   in.pressed = 0; in.tap = 0; in.touching = 0;
 }
+
+// ---------- the same sign for the app's events ----------
+// A save starting, done or failed; a slideshow starting or ending; Google Drive syncing and done;
+// Favourites from Drive. Under the rear touchpad's sign when both show; the newest replaces the one
+// before. Two and a half seconds at least, fading in and out.
+static char ev_text[96];
+static const char *ev_icon;
+static unsigned ev_at;
+static unsigned ev_col;
+static void ev_notice(const char *ic, unsigned col, const char *fmt, ...) {
+  va_list a;
+  va_start(a, fmt);
+  vsnprintf(ev_text, sizeof ev_text, fmt, a);
+  va_end(a);
+  ev_icon = ic; ev_col = col; ev_at = frame_no ? frame_no : 1;
+}
+// (each frame: what changed, said)
+static void ev_watch(void) {
+  static int was_slide = -1, was_drive = -1;
+  if (was_slide >= 0 && slideshow != was_slide) ev_notice("play", ACC, slideshow ? "Slideshow started" : "Slideshow ended");
+  was_slide = slideshow;
+  int ds = drive.state;
+  if (was_drive >= 0 && ds != was_drive && !drive.signing) {
+    if (ds == DRV_SYNCING) ev_notice("refresh", ACC, "Google Drive: syncing\u2026");
+    else if (ds == DRV_DONE) ev_notice("refresh", ACC, "Google Drive: in step");
+    else if (ds == DRV_FAILED) ev_notice("xmark", ACC2, "Google Drive: the sync didn't finish");
+  }
+  was_drive = ds;
+}
+static void ev_sign_draw(void) {
+  if (!ev_at || screen == S_CALC || screen == S_COVER || screen == S_PIN) return;
+  unsigned since = frame_no - ev_at;
+  const unsigned hold = 150; // (two and a half seconds)
+  if (since > hold + 20) { ev_at = 0; return; }
+  float in_a = fminf(1, (since + 1) / 10.0f), out_a = since < hold ? 1 : fmaxf(0, 1 - (since - hold) / 20.0f);
+  float slide = (1 - fminf(1, since / 12.0f));
+  int a = (int)(225 * fminf(in_a, out_a));
+  if (a <= 0) return;
+  int rear_up = rear_seen_at && frame_no - rear_seen_at < 140;
+  int w = text_w(14, ev_text) + 58, x = 10 - (int)(slide * slide * 30), y = rear_up ? 106 : 64;
+  rrect_round(x, y, w, 36, 18, RGBA(0, 0, 0, a * 120 / 255));
+  rrect_round(x + 1, y + 1, w - 2, 34, 17, with_alpha(mix_col(SURF2, ev_col, 0.22f), a * 175 / 255));
+  rrect_round(x + 3, y + 2, w - 6, 14, 7, with_alpha(TEXT, a / 14));
+  icon(ev_icon ? ev_icon : "info", x + 22, y + 18, with_alpha(ev_col, a));
+  text(x + 40, y + 23, with_alpha(TEXT, a), 14, ev_text);
+}

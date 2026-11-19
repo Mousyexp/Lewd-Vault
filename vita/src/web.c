@@ -888,6 +888,7 @@ static DlItem dls[DL_MAX];
 static int ndl;
 static int dlp_open, dlp_seen; // (open; the downloads looked at: the tab's dot for new ones)
 static float dlp_t, dlp_scroll;
+static void ev_notice(const char *ic, unsigned col, const char *fmt, ...);
 static void dl_begin(int post) {
   if (post < 0 || post >= nposts) return;
   memmove(dls + 1, dls, (DL_MAX - 1) * sizeof *dls);
@@ -900,6 +901,7 @@ static void dl_begin(int post) {
   d->name[strcspn(d->name, "?#")] = 0;
   snprintf(d->site, sizeof d->site, "%s", LV_SITES[pp->site1 > 0 && pp->site1 <= LV_NSITES ? pp->site1 - 1 : cfg.site].name);
   d->post = post; d->gen = wgen; d->t0 = frame_no;
+  ev_notice("save", ACC, "Download started: %.40s", d->name);
 }
 static void dl_end(int ok, const char *why) {
   if (!ndl || dls[0].state) return;
@@ -907,6 +909,8 @@ static void dl_end(int ok, const char *why) {
   dls[0].t1 = frame_no;
   if (dls[0].total <= 0) dls[0].total = dls[0].have;
   if (why) snprintf(dls[0].why, sizeof dls[0].why, "%s", why);
+  if (ok) ev_notice("save", ACC, "Saved: %.40s", dls[0].name);
+  else ev_notice("xmark", ACC2, "Download failed: %.40s", dls[0].name);
 }
 // (each frame: the one going, its bytes and speed)
 static void dl_tick(void) {
@@ -933,8 +937,7 @@ static int dl_going(void) { return ndl && !dls[0].state; }
 static void draw_dlp_tab(void) {
   if (dlp_t > 0.01f) return;
   int tx = W - 40, ty = H / 2 - 64, tw = 48, th = 128;
-  rrect(tx, ty, tw, th, 16, with_alpha(SURF2, 235));
-  rrect(tx + 1, ty + 1, tw - 2, th / 2, 15, with_alpha(TEXT, 10));
+  glass(tx, ty, tw, th, 0);
   icon("save", tx + 20, ty + 34, dl_going() ? ACC : TEXT);
   text_center(tx + 20, ty + 66, TEXT, 11, "Saves");
   icon("chev_l", tx + 20, ty + 96, DIM);
@@ -1619,13 +1622,15 @@ static int own_sites(int *out) {
   return n;
 }
 static int vsrc_add_own(const char *site, const char *tags, const char *title);
-static void own_window_open(void) { own_open = 1; own_sel = 0; own_tags[0] = 0; own_title[0] = 0; sfx(SFX_OPEN); }
+static unsigned own_at; // (when it opened: it rises in)
+static void own_window_open(void) { own_open = 1; own_at = frame_no; own_sel = 0; own_tags[0] = 0; own_title[0] = 0; sfx(SFX_OPEN); }
 static void draw_own_window(void) {
   int sites[64], ns = own_sites(sites);
   if (own_site_i >= ns) own_site_i = 0;
   const LvSite *st = ns ? &LV_SITES[sites[own_site_i]] : NULL;
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 170));
-  const int ww = 600, wh = 330, wx = (W - ww) / 2, wy = (H - wh) / 2;
+  float rise = 1 - fminf(1, (frame_no - own_at) / 12.0f);
+  const int ww = 600, wh = 330, wx = (W - ww) / 2, wy = (H - wh) / 2 + (int)(rise * rise * 40); // (it rises in)
   rrect(wx, wy + 4, ww, wh, 24, RGBA(0, 0, 0, 90));
   rrect(wx, wy, ww, wh, 24, SURF);
   rrect(wx + 2, wy + 2, ww - 4, 60, 22, with_alpha(TEXT, 8));
