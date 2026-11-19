@@ -657,18 +657,16 @@ static void draw_videos(void) {
   }
   // ---- the top: back, the source (its tab of the site switcher) ----
   grad(0, 0, W, 70, RGBA(8, 6, 10, 255), 210, 0, 0);
-  rrect(16, 10, 44, 40, 20, with_alpha(TEXT, 40));
-  icon("back", 38, 30, TEXT);
-  if (hit(16, 10, 44, 40)) { sfx(SFX_BACK); screen = S_WEB; return; }
+  // (no back button: this is the Browser while a video source is chosen; the source chip switches)
   vita2d_texture *si = site_icon_named(32 + vb_src, src->icon);
   char sl[64];
   snprintf(sl, sizeof sl, "%s  ▾", src->name);
   int sw = text_w(17, sl) + 64;
-  rrect(72, 10, sw, 40, 20, with_alpha(TEXT, 40));
-  if (si) vita2d_draw_texture_scale(si, 80, 14, 32 / 112.0f, 32 / 112.0f);
-  text(120, 37, TEXT, 17, sl);
-  if (hit(72, 10, sw, 40)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
-  text(W - 20 - text_w(13, "✕ play  ·  ○ back  ·  START sources"), 36, FAINT, 13, "✕ play  ·  ○ back  ·  START sources");
+  rrect(16, 10, sw, 40, 20, with_alpha(TEXT, 40));
+  if (si) vita2d_draw_texture_scale(si, 24, 14, 32 / 112.0f, 32 / 112.0f);
+  text(64, 37, TEXT, 17, sl);
+  if (hit(16, 10, sw, 40)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
+  text(W - 20 - text_w(13, "✕ play  ·  ○ Library  ·  START sources"), 36, FAINT, 13, "✕ play  ·  ○ Library  ·  START sources");
   // ---- the buttons ----
   int last_row = nup ? VB_ROWS : VB_ROWS - 1, cur_n;
   in.pressed |= stick_dirs(); // (the left stick as the D-pad)
@@ -684,7 +682,7 @@ static void draw_videos(void) {
     if (cur && vb_col[vb_row] >= (cur->n < VB_SHOW ? cur->n : VB_SHOW)) { sfx(SFX_OPEN); vb_all(vb_row); return; }
     sfx(SFX_SELECT); if (cur) vb_play(vb_row, vb_col[vb_row]); else upnext_play(vb_col[vb_row]); return;
   }
-  if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = S_WEB; return; }
+  if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = S_LIBRARY; return; } // (nothing behind it: the Library)
   if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
   // the next ones just out of sight, ready
   if (cur) for (int k = vb_col[vb_row]; k < vb_col[vb_row] + 6 && k < cur->n; k++) vb_ask(vb_row, k);

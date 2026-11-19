@@ -1260,6 +1260,7 @@ static void web_take_results(void) {
         pthread_mutex_unlock(&vmx);
         if (ok) library_grew(before);
         saved_add(d->nw.source);
+        if (ok && d->added.uid[0] && !cfg.notags) otag_begin(d->added.uid); // (your own tags for it)
         char m[160];
         snprintf(m, sizeof m, "Saved to %s (%zu KB)%s", d->cat, d->an / 1024, ok ? "" : ": it shows when the vault is opened again");
         sfx(SFX_SAVED);

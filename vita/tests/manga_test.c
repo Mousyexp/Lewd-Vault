@@ -99,6 +99,27 @@ int main(void) {
     CHECK(got == 2, "manhwa18 pages: %d", got);
     lv_strings_free(u, got);
   }
+  // JustManga: its list page, its search (JSON), a book's chapters, a chapter's pages
+  {
+    size_t n; char *t; LvBook bk[64]; LvChapter cs[600]; char **u = NULL;
+    t = slurp("tests/manga/justmanga_list.html", &n);
+    int got = t ? lv_ms_parse_list(MS_JUSTMANGA, t, bk, 64) : 0;
+    CHECK(got >= 10 && !strncmp(bk[0].id, "/manga/", 7) && strchr(bk[0].id + 7, '/'), "justmanga list: %d %s", got, got ? bk[0].id : "");
+    free(t);
+    t = slurp("tests/manga/justmanga_search.json", &n);
+    got = t ? lv_ms_parse_list(MS_JUSTMANGA, t, bk, 64) : 0;
+    CHECK(got >= 3 && !strcmp(bk[0].id, "/manga/30002/berserk") && bk[0].title[0] && !strncmp(bk[0].cover, "https://", 8), "justmanga search: %d %s", got, got ? bk[0].id : "");
+    free(t);
+    t = slurp("tests/manga/justmanga_book.html", &n);
+    got = t ? lv_ms_parse_chapters(MS_JUSTMANGA, t, "/manga/30002/berserk", cs, 600) : 0;
+    CHECK(got >= 20 && !strncmp(cs[0].id, "/read/30002/berserk/chapter/", 28), "justmanga chapters: %d %s", got, got > 0 ? cs[0].id : "");
+    free(t);
+    t = slurp("tests/manga/justmanga_chapter.html", &n);
+    got = t ? lv_ms_parse_pages(MS_JUSTMANGA, t, &u) : 0;
+    CHECK(got >= 10 && strstr(u[0], "/storage/"), "justmanga pages: %d", got);
+    if (got > 0) lv_strings_free(u, got);
+    free(t);
+  }
   // a webtoon's strip with its size: bands about a page's shape; a plain page stays one
   {
     char **u = NULL;

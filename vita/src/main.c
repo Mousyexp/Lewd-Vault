@@ -604,6 +604,7 @@ static struct {
   int rear_l, rear_r; // the rear touchpad's halves: REAR_* (0 not set: their defaults)
   int autorot; // portrait pictures turned to fill the screen held on its side
   int nodecor; // the little anime girls (decor.c) hidden
+  int notags;  // a save doesn't ask for your own tags
 } cfg = {"", 0, 0, 5, 0, 100, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
 static void cfg_load(void) {
   cfg.sndpack = 3; // (Bubbly, from the start)
@@ -654,6 +655,7 @@ static void cfg_load(void) {
     else if (!strcmp(line, "rear")) sscanf(eq, "%d,%d", &cfg.rear_l, &cfg.rear_r);
     else if (!strcmp(line, "autorot")) cfg.autorot = atoi(eq) != 0;
     else if (!strcmp(line, "nodecor")) cfg.nodecor = atoi(eq) != 0;
+    else if (!strcmp(line, "notags")) cfg.notags = atoi(eq) != 0;
     else if (!strcmp(line, "view")) sscanf(eq, "%d,%d,%d,%d", &cfg.ifit, &cfg.iorient, &cfg.vfit, &cfg.vorient);
     else if (!strcmp(line, "comic")) sscanf(eq, "%d,%d,%d,%d,%d,%d,%d", &cfg.cmode, &cfg.corient, &cfg.canim, &cfg.cdir, &cfg.ctap, &cfg.cdbl, &cfg.cback);
   }
@@ -691,10 +693,10 @@ static void cfg_write(void) {
   cfg_dirty_at = 0;
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\nview=%d,%d,%d,%d\ntscale=%d\naccpic=%d\nsndv=2\nwsize=%d\nrear=%d,%d\nautorot=%d\nnodecor=%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\nview=%d,%d,%d,%d\ntscale=%d\naccpic=%d\nsndv=2\nwsize=%d\nrear=%d,%d\nautorot=%d\nnodecor=%d\nnotags=%d\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
           cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v, cfg.onboarded,
-          cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback, cfg.ifit, cfg.iorient, cfg.vfit, cfg.vorient, cfg.tscale, cfg.accpic, cfg.wsize, cfg.rear_l, cfg.rear_r, cfg.autorot, cfg.nodecor);
+          cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback, cfg.ifit, cfg.iorient, cfg.vfit, cfg.vorient, cfg.tscale, cfg.accpic, cfg.wsize, cfg.rear_l, cfg.rear_r, cfg.autorot, cfg.nodecor, cfg.notags);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -2333,12 +2335,42 @@ static int online_now(void) {
   if (net_state_cached < 0 || frame_no - net_state_at > 90) { net_state_cached = lv_net_online(); net_state_at = frame_no; }
   return net_state_cached;
 }
+// The connection's speed, measured when a Wi-Fi button is tapped: about 2 MB from Cloudflare's speed
+// test (a thread), timed; the answer as a notice. Only while online, one at a time.
+static void ev_notice(const char *ic, unsigned col, const char *fmt, ...);
+static void otag_begin(const char *uid);
+static volatile int speed_state; // 0 idle, 1 measuring, 2 done, 3 failed
+static volatile float speed_mbit;
+static void *speed_main(void *arg) {
+  (void)arg;
+  LvHttp *h = lv_http_new();
+  uint8_t *b = NULL; size_t n = 0; const char *err = NULL;
+  uint64_t t0 = sceKernelGetProcessTimeWide();
+  int st = h ? lv_http_get(h, "https://speed.cloudflare.com/__down?bytes=2000000", &b, &n, 3u << 20, NULL, NULL, &err) : -1;
+  uint64_t dt = sceKernelGetProcessTimeWide() - t0;
+  if (h) lv_http_free(h);
+  free(b);
+  if (st == 200 && n > 100000 && dt > 0) { speed_mbit = n * 8.0f / (dt / 1e6f) / 1e6f; speed_state = 2; } else speed_state = 3;
+  return NULL;
+}
+static void speed_tap(int on) {
+  sfx(SFX_TICK); net_state_cached = -1;
+  if (!on) { say("Offline: turn on Wi-Fi in the Vita's settings (the Library still works)"); return; }
+  if (speed_state == 1) { say("Still measuring\u2026"); return; }
+  pthread_t t; pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, 128 * 1024);
+  speed_state = 1;
+  if (pthread_create(&t, &at, speed_main, NULL) == 0) { pthread_detach(t); say("Online \u00b7 measuring the speed\u2026"); } else { speed_state = 0; say("Online"); }
+}
+static void speed_poll(void) { // (each frame: the answer, once)
+  if (speed_state == 2) { speed_state = 0; ev_notice("wifi", RGBA(90, 214, 120, 255), "Connection: %.1f Mbit/s (%.1f MB/s)", speed_mbit, speed_mbit / 8); }
+  else if (speed_state == 3) { speed_state = 0; ev_notice("wifi", ACC2, "The speed couldn't be measured"); }
+}
 static int online_button(int right) {
   int on = online_now(), x = right - 44, y = HDR_Y;
   rrect(x, y + 8, 44, 40, 20, SURF2);
   icon("wifi", x + 22, y + 26, on ? RGBA(90, 214, 120, 255) : RGBA(240, 84, 84, 255));
   circle(x + 22, y + 39, 3, on ? RGBA(90, 214, 120, 255) : RGBA(240, 84, 84, 255));
-  if (hit(x, y + 4, 44, 48)) { sfx(SFX_TICK); say(on ? "Online" : "Offline: turn on Wi-Fi in the Vita's settings (the Library still works)"); net_state_cached = -1; }
+  if (hit(x, y + 4, 44, 48)) speed_tap(on);
   return 44;
 }
 
@@ -2387,7 +2419,8 @@ static int online_inset(int right) {
   rrect_round(x + 7, y + d - 3, d - 14, 1.5f, 0.75f, with_alpha(TEXT, 30));          // (the lip lit below)
   circle(x + d / 2, y + d / 2, 13, with_alpha(c, 34));                                 // (its colour glowing in it)
   wifi_mark(x + d / 2.0f, y + d / 2.0f, c);
-  if (hit(x - 4, y - 6, d + 8, d + 12)) { sfx(SFX_TICK); say(on ? "Online" : "Offline: turn on Wi-Fi in the Vita's settings (the Library still works)"); net_state_cached = -1; }
+  if (hit(x - 4, y - 6, d + 8, d + 12)) speed_tap(on);
+  if (speed_state == 1) { float an = frame_no * 0.15f; circle(x + d / 2 + cosf(an) * 15, y + d / 2 + sinf(an) * 15, 2, c); } // (measuring: a dot going round)
   return d;
 }
 // The Library's corner: a quarter circle in the screen's top right, Your stats behind it (its bars),
@@ -4002,7 +4035,7 @@ static void draw_settings(void) {
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_REAR, ST_AUTOROT, ST_DECOR, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_REAR, ST_AUTOROT, ST_DECOR, ST_OTAGS, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change; past 100% it's made louder than the video itself"},
@@ -4032,6 +4065,7 @@ static void draw_settings(void) {
     {"Rear touchpad", vrear, "What each half of the back does: scroll, swipe, volume, zoom or nothing (\u2715 to choose)"},
     {"Turn portrait pictures", cfg.autorot ? "On" : "Off", "A tall picture turned to fill the screen, for the Vita held on its side"},
     {"Decorations", cfg.nodecor ? "Off" : "On", "The little anime girls by empty screens and in corners, in the accent's colour (tap one)"},
+    {"Your tags when saving", cfg.notags ? "Off" : "On", "After a save: pick tags you've given before or type new ones (yours come first)"},
   };
   // (which rows have been changed from how the app starts: their value in the accent, a touch bolder;
   //  the others' in grey, just saying what it is)
@@ -4044,7 +4078,7 @@ static void draw_settings(void) {
   changed[ST_COMICS] = cfg.cmode || cfg.corient || cfg.canim || cfg.cdir || cfg.ctap || cfg.cdbl || cfg.cback;
   changed[ST_VIEW] = cfg.ifit || cfg.iorient || cfg.vfit || cfg.vorient; changed[ST_TEXT] = text_pct != 100;
   changed[ST_ACCPIC] = cfg.accpic != 0; changed[ST_REAR] = cfg.rear_l || cfg.rear_r; changed[ST_AUTOROT] = cfg.autorot != 0;
-  changed[ST_DECOR] = cfg.nodecor != 0;
+  changed[ST_DECOR] = cfg.nodecor != 0; changed[ST_OTAGS] = cfg.notags != 0;
   // In sections, each with a header: the rows in the order shown (set_sel stays a row's ST_ id)
   static const signed char ORDER[] = {
     -1, ST_THEME, ST_ACCPIC, ST_BGS, ST_DECOR, ST_TEXT, ST_SNDPACK, ST_SOUNDS, ST_GLOW, ST_DBL,
@@ -4052,7 +4086,7 @@ static void draw_settings(void) {
     -6, ST_COMICS,
     -3, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK,
     -4, ST_DRIVE, ST_WIFI, ST_CONV,
-    -5, ST_SEARCH, ST_STATS, ST_CLEAN, ST_DUPES, ST_HEALTH, ST_VAULT, ST_CACHE,
+    -5, ST_SEARCH, ST_OTAGS, ST_STATS, ST_CLEAN, ST_DUPES, ST_HEALTH, ST_VAULT, ST_CACHE,
   };
   static int set_init;
   if (!set_init) { set_init = 1; set_sel = ST_THEME; } // (the first row shown)
@@ -4279,6 +4313,7 @@ static void draw_settings(void) {
       case ST_REAR: if (cross || d) { rear_window_open(); return; } break;
       case ST_AUTOROT: if (cross || d) { cfg.autorot = !cfg.autorot; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_DECOR: if (cross || d) { cfg.nodecor = !cfg.nodecor; sfx(SFX_TOGGLE); cfg_save(); } break;
+      case ST_OTAGS: if (cross || d) { cfg.notags = !cfg.notags; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_ACCPIC: if (cross || d) { cfg.accpic = !cfg.accpic; if (!cfg.accpic) apply_theme(); cfg_save(); sfx(SFX_TOGGLE); } break;
       case ST_CACHE:
         if (cross) {
@@ -4514,6 +4549,105 @@ static void library_grew(int before) {
 #include "gifplay.c"
 #include "web.c"
 #include "rear.c"
+// ----- your own tags, asked for after a save -----
+// The tags you've given before (newest first, DATA/own_tags.txt) as chips to pick, + New to type one,
+// Done puts the picked ones at the front of the item's tags (yours before the site's: they're what
+// shows and is searched first), Skip leaves it.
+static char otag_uid[16], otag_list[40][48], otag_pick[40];
+static int otag_open, otag_n, otag_sel;
+static unsigned otag_at;
+static void otag_load(void) {
+  otag_n = 0;
+  FILE *f = fopen(DATA "/own_tags.txt", "r");
+  char l[64];
+  while (f && otag_n < 40 && fgets(l, sizeof l, f)) { l[strcspn(l, "\r\n")] = 0; if (l[0]) snprintf(otag_list[otag_n++], 48, "%s", l); }
+  if (f) fclose(f);
+}
+static void otag_save(void) {
+  FILE *f = fopen(DATA "/own_tags.txt", "w");
+  if (!f) return;
+  for (int k = 0; k < otag_n; k++) fprintf(f, "%s\n", otag_list[k]);
+  fclose(f);
+}
+static void otag_add(const char *t) { // (a new one: picked, at the front)
+  char c[48]; size_t j = 0;
+  for (const char *p = t; *p && j < sizeof c - 1; p++) c[j++] = *p == ' ' ? '_' : (char)tolower((unsigned char)*p);
+  c[j] = 0;
+  if (!c[0]) return;
+  for (int k = 0; k < otag_n; k++) if (!strcmp(otag_list[k], c)) { otag_pick[k] = 1; return; }
+  if (otag_n == 40) otag_n--;
+  memmove(otag_list[1], otag_list[0], sizeof otag_list[0] * otag_n); memmove(otag_pick + 1, otag_pick, otag_n);
+  snprintf(otag_list[0], 48, "%s", c); otag_pick[0] = 1; otag_n++;
+}
+static void otag_begin(const char *uid) {
+  snprintf(otag_uid, sizeof otag_uid, "%s", uid);
+  otag_load(); memset(otag_pick, 0, sizeof otag_pick);
+  otag_open = 1; otag_sel = 0; otag_at = frame_no;
+}
+static void otag_done(int apply) {
+  otag_open = 0;
+  if (!apply) { sfx(SFX_CLOSE); return; }
+  int idx = -1;
+  for (int i = 0; i < vault.n; i++) if (vault.items[i].uid && !strcmp(vault.items[i].uid, otag_uid)) { idx = i; break; }
+  char t[4096] = "";
+  size_t n = 0;
+  for (int k = 0; k < otag_n; k++) if (otag_pick[k]) n += snprintf(t + n, sizeof t - n, "%s%s", n ? " " : "", otag_list[k]);
+  if (!n) { sfx(SFX_CLOSE); return; }
+  // (the picked ones to the front of the list kept, so the next time they come first)
+  char keep[40][48]; int nk = 0;
+  for (int k = 0; k < otag_n; k++) if (otag_pick[k]) snprintf(keep[nk++], 48, "%s", otag_list[k]);
+  for (int k = 0; k < otag_n; k++) if (!otag_pick[k]) snprintf(keep[nk++], 48, "%s", otag_list[k]);
+  memcpy(otag_list, keep, sizeof keep); otag_save();
+  if (idx >= 0) {
+    const char *old = vault.items[idx].tags ? vault.items[idx].tags : "";
+    if (old[0] && n < sizeof t - 2) snprintf(t + n, sizeof t - n, " %s", old);
+    if (lv_item_set(&vault, idx, "tags", t) == 0) edited();
+  }
+  sfx(SFX_DONE); say("Your tags added");
+}
+static void draw_otag(void) {
+  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 150));
+  float rise = 1 - fminf(1, (frame_no - otag_at) / 12.0f);
+  const int ww = 640, wh = 300, wx = (W - ww) / 2, wy = (H - wh) / 2 + (int)(rise * rise * 40);
+  rrect(wx, wy + 4, ww, wh, 24, RGBA(0, 0, 0, 90));
+  rrect(wx, wy, ww, wh, 24, SURF);
+  rrect(wx + 2, wy + 2, ww - 4, 56, 22, with_alpha(TEXT, 8));
+  icon("tag", wx + 30, wy + 30, ACC);
+  text(wx + 52, wy + 38, TEXT, 20, "Your tags for it");
+  text(wx + ww - 24 - text_w(12, "yours come before the site's"), wy + 36, FAINT, 12, "yours come before the site's");
+  // the chips: + New, then the ones given before (places: 0 New, 1.. the tags, then Skip, Done)
+  int cx = wx + 20, cy = wy + 72, nplaces = otag_n + 3;
+  for (int k = -1; k < otag_n; k++) {
+    const char *lab = k < 0 ? "+ New" : otag_list[k];
+    int cw = text_w(15, lab) + 28;
+    if (cx + cw > wx + ww - 20) { cx = wx + 20; cy += 42; }
+    if (cy > wy + wh - 100) break;
+    int place = k + 1, on = place == otag_sel, picked = k >= 0 && otag_pick[k];
+    rrect(cx, cy, cw, 34, 17, picked ? ACC : k < 0 ? with_alpha(ACC, 50) : SURF2);
+    text(cx + 14, cy + 23, picked ? RGBA(20, 12, 16, 255) : TEXT, 15, lab);
+    if (on) focus_ring(cx, cy, cw, 34);
+    if (hit(cx, cy, cw, 34)) { otag_sel = place; in.pressed |= SCE_CTRL_CROSS; }
+    cx += cw + 8;
+  }
+  if (!otag_n) text(wx + 130, wy + 95, FAINT, 14, "None yet: + New to give it your first");
+  const char *bl[2] = {"Skip", "Done"};
+  for (int b = 0; b < 2; b++) {
+    int bx = wx + ww - 20 - (2 - b) * 130 + 10, by = wy + wh - 60, place = otag_n + 1 + b;
+    rrect(bx, by, 120, 42, 21, b ? ACC : SURF2);
+    text_center(bx + 60, by + 28, b ? RGBA(20, 12, 16, 255) : TEXT, 17, bl[b]);
+    if (place == otag_sel) focus_ring(bx, by, 120, 42);
+    if (hit(bx, by, 120, 42)) { otag_sel = place; in.pressed |= SCE_CTRL_CROSS; }
+  }
+  if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_DOWN)) { otag_sel = (otag_sel + 1) % nplaces; sfx(SFX_TICK); }
+  if (in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_UP)) { otag_sel = (otag_sel + nplaces - 1) % nplaces; sfx(SFX_TICK); }
+  if (in.pressed & SCE_CTRL_CROSS) {
+    if (otag_sel == 0) { if (!ime_open) ime_start(22, "A tag of your own", "", 0); }
+    else if (otag_sel <= otag_n) { otag_pick[otag_sel - 1] ^= 1; sfx(SFX_TOGGLE); }
+    else otag_done(otag_sel == otag_n + 2);
+  }
+  if (in.pressed & SCE_CTRL_CIRCLE) otag_done(0);
+  if (in.pressed & SCE_CTRL_START) otag_done(1);
+}
 #include "wifi.c"
 #include "vbrowse.c"
 #include "manga_ui.c"
@@ -4983,6 +5117,7 @@ int main(void) {
       if (r == 1 && ime_for == 7 && got[0]) { snprintf(drive_new_id, sizeof drive_new_id, "%s", got); drive_ask_secret = 1; }
       if (r == 1 && ime_for == 14 && got[0]) add_site_start(got);
       if (r == 1 && ime_for == 20) snprintf(own_tags, sizeof own_tags, "%s", got);   // (your own source's tags)
+      if (r == 1 && ime_for == 22 && got[0]) otag_add(got); // (a tag of your own, for a save)
       if (r == 1 && ime_for == 21) snprintf(own_title, sizeof own_title, "%s", got); // (and its name)
       if (r == 1 && ime_for == 15) { snprintf(mg.query, sizeof mg.query, "%s", got); mg_search(); }
       if (r == 1 && ime_for == 17 && got[0]) { snprintf(conv_keys[conv_sel], sizeof conv_keys[conv_sel], "%s", got); conv_keys_save(); sfx(SFX_DONE); say("Key saved"); }
@@ -5062,6 +5197,7 @@ int main(void) {
     //  the frame drawn from it is done. A frame uses ~100 KB of the ~1.3 MB a third has.)
     if (frame_no % 3) vita2d_pool_malloc((frame_no % 3) * (POOL_SIZE / 3));
     vita2d_clear_screen();
+    Input otag_keep = in; if (otag_open) { memset(&in, 0, sizeof in); in.now = otag_keep.now; } // (the window over a save: the screen under it gets no input)
     switch (screen) {
       case S_PICK: if (!cfg.onboarded) draw_onboarding(); else draw_pick(); break;
       case S_LOCKED: draw_locked(); break;
@@ -5092,6 +5228,7 @@ int main(void) {
       case S_WEBVIEW: draw_webview(); break;
       case S_COVER: draw_cover_screen(); if (in.tap) { screen = cover_return; } break;
     }
+    if (otag_open) { in = otag_keep; draw_otag(); } // (your tags for a save: over everything, its input its own)
     // the loading screen at start, fading into whatever is behind it once the vault is open
     if (frame_no < splash_until + 24) {
       if (frame_no >= splash_until && (screen == S_UNLOCKING || load_state == 1)) splash_until = frame_no + 1; // (still opening)
@@ -5115,6 +5252,7 @@ int main(void) {
     }
     ev_watch();
     sheet_cover_draw();
+    speed_poll();
     rear_sign_draw();
     ev_sign_draw();
     PT("the screen");

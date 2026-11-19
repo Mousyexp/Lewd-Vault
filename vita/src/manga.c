@@ -311,7 +311,8 @@ const LvMSrc LV_MSRC[MS_N] = {
   {"Multporn", "multporn", "Short hentai and western comics", MF_SERIES, MK_SHORT, "https://multporn.net", "/updated_comics?page=%d", "/search?search_api_views_fulltext=%s&page=%d", "/comics/", "/hentai_manga/", "/juicebox_medium/", 1, 0, 1},
   {"FreeAdultComix", "freeadultcomix", "Short adult comics", MF_SERIES, MK_SHORT, "https://freeadultcomix.com", "/page/%d/", "/page/%d/?s=%s", "*", NULL, "/wp-content/uploads/", 1},
   {"HentaiRox", "hentairox", "Hentai manga and doujinshi", MF_GALLERY, MK_HMANGA, "https://hentairox.com", "/?page=%d", "/search/?q=%s&page=%d", "/gallery/"},
-  {"Pururin", "pururin", "Doujinshi, English and Japanese", MF_GALLERY, MK_HMANGA, "https://pururin.me", "/?page=%d", "/search?q=%s&page=%d", "/gallery/+"},
+  // (Pururin's place: it went down, 2026-11. JustManga: manga of all kinds, its search a JSON API)
+  {"JustManga", "justmanga", "Manga of all kinds (MangaDex's stand-in)", MF_SERIES, MK_MANGA, "https://justmanga.cc", "/explore?page=%d", "https://core.justmanga.cc/api/search?q=%s&page=%d", "/manga/+", NULL, "/storage/", 0, 0, 0},
   {"HentaiManga", "hentaimanga", "Hentai manga, in chapters", MF_SERIES, MK_HMANGA, "https://hentaimanga.me", NULL, "/manga/?q=%s", "/manga/", NULL, "/assets/images/chapters/"},
   {"Manga18fx", "manga18fx", "Adult webtoons, some raw (Korean)", MF_SERIES, MK_HWEBTOON, "https://manga18fx.com", "/page/%d", "/search?q=%s&page=%d", "/manga/", NULL, "/chapters/|/uploads/"},
   {"ManhwaDen", "manhwaden", "Adult manhwa", MF_SERIES, MK_HWEBTOON, "https://www.manhwaden.com", "/page/%d/", "/page/%d/?s=%s&post_type=wp-manga", "/manga/", NULL, "-Chapter-|/WP-manga/data/|/manga_", 0, 1},
@@ -501,6 +502,24 @@ static int weak_title(const char *t) {
 }
 int lv_ms_parse_list(int src, const char *html, LvBook *out, int cap) {
   int got = 0;
+  if (src == MS_JUSTMANGA && !strncmp(html, "{\"results\"", 10)) { // (JustManga's search: JSON)
+    for (const char *p = strstr(html, "{\"id\":\""); p && got < cap; p = strstr(p + 7, "{\"id\":\"")) {
+      const char *nx = strstr(p + 7, "{\"id\":\"");
+      char id[24] = "", slug[120] = "", title[200] = "", cover[400] = "";
+      const char *f;
+      sscanf(p + 7, "%23[^\"]", id);
+      if ((f = strstr(p, "\"slug\":\"")) && (!nx || f < nx)) sscanf(f + 8, "%119[^\"]", slug);
+      if ((f = strstr(p, "\"title\":\"")) && (!nx || f < nx)) sscanf(f + 9, "%199[^\"]", title);
+      if ((f = strstr(p, "\"cover\":\"")) && (!nx || f < nx)) sscanf(f + 9, "%399[^\"]", cover);
+      if (!id[0] || !slug[0]) continue;
+      LvBook *b = &out[got++];
+      memset(b, 0, sizeof *b);
+      snprintf(b->id, sizeof b->id, "/manga/%s/%s", id, slug);
+      snprintf(b->title, sizeof b->title, "%s", title);
+      snprintf(b->cover, sizeof b->cover, "%s", cover);
+    }
+    return got;
+  }
   for (const char *p = strstr(html, "<a "); p && got < cap; p = strstr(p + 3, "<a ")) {
     char href[400], path[200];
     if (attr(p, "href", href, sizeof href) != 0) continue;
@@ -652,6 +671,17 @@ int lv_ms_parse_chapters(int src, const char *html, const char *book, LvChapter 
     char href[400];
     if (attr(p, "href", href, sizeof href) != 0) continue;
     const char *sp = site_path(src, href);
+    // (JustManga: a book /manga/<id>/<slug>, its chapters /read/<id>/<slug>/chapter/<n>)
+    if (src == MS_JUSTMANGA && sp && book && !strncmp(book, "/manga/", 7) && !strncmp(sp, "/read/", 6) && !strncmp(sp + 6, book + 7, strlen(book + 7)) && strstr(sp, "/chapter/")) {
+      int dup = 0;
+      for (int k = 0; k < got && !dup; k++) dup = !strcmp(out[k].id, sp);
+      if (dup) continue;
+      memset(&out[got], 0, sizeof out[got]);
+      snprintf(out[got].id, sizeof out[got].id, "%s", sp);
+      chapter_label(sp, out[got].label, sizeof out[got].label);
+      got++;
+      continue;
+    }
     if (!sp || strncmp(sp, s->item, strlen(s->item))) continue;
     // (this book's own: other titles' chapters are linked round the page too)
     if (book && book[0]) { size_t bl = strlen(book); while (bl && book[bl - 1] == '/') bl--; if (strncmp(sp, book, bl) || sp[bl] != '/') continue; }
@@ -691,6 +721,27 @@ int lv_ms_parse_pages(int src, const char *html, char ***urls) {
   int cap = 64, n = 0;
   char **u = urls_new(cap);
   if (!u) return -1;
+  if (src == MS_JUSTMANGA) { // (its pages are listed in the page's data, not as <img>s: every /storage/ picture, in order)
+    for (const char *p = strstr(html, "/storage/"); p; p = strstr(p + 9, "/storage/")) {
+      const char *b = p;
+      while (b > html && b[-1] != '"' && b[-1] != '\'' && b[-1] != ' ' && b[-1] != '(' && b - p > -300) b--;
+      const char *e = p;
+      while (*e && *e != '"' && *e != '\'' && *e != ' ' && *e != ')' && *e != '\\' && e - p < 500) e++;
+      if (strncmp(b, "http", 4) || !(strstr(b, ".jpg") || strstr(b, ".webp") || strstr(b, ".png") || strstr(b, ".jpeg")) || (size_t)(e - b) >= 700) continue;
+      char full[700];
+      snprintf(full, sizeof full, "%.*s", (int)(e - b), b);
+      if (!strstr(full, ".jpg") && !strstr(full, ".webp") && !strstr(full, ".png") && !strstr(full, ".jpeg")) continue;
+      int dup = 0;
+      for (int k = 0; k < n && !dup; k++) dup = !strcmp(u[k], full);
+      if (dup) continue;
+      if (n == cap) { char **g = realloc(u, sizeof *u * cap * 2); if (!g) break; u = g; cap *= 2; }
+      u[n] = strdup(full);
+      if (!u[n]) break;
+      n++;
+    }
+    *urls = u;
+    return n;
+  }
   for (const char *p = strstr(html, "<img"); p; p = strstr(p + 4, "<img")) {
     char a[600];
     if (img_src(p, a, sizeof a) != 0 || !path_in(a, s->img)) continue;

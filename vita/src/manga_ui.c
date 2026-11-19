@@ -1135,15 +1135,13 @@ static void draw_manga(void) {
 
   // the top: back, the source (its tab of the sites window), the search, the order
   vita2d_draw_rectangle(0, 0, W, TOP, with_alpha(BG, 250));
-  rrect(16, 8, 44, 36, 18, SURF2);
-  icon("back", 38, 26, TEXT);
-  if (hit(16, 8, 44, 36)) { sfx(SFX_BACK); screen = manga_back; return; }
+  // (no back button: this is the Browser while a comics source is chosen; the source chip switches)
   char sl[64];
   snprintf(sl, sizeof sl, "%s  ▾", LV_MSRC[mg.src].name);
   int sw = text_w(17, sl) + 36;
-  rrect(70, 8, sw, 36, 18, ACC);
-  text(88, 32, RGBA(20, 12, 16, 255), 17, sl);
-  if (hit(70, 8, sw, 36) || (in.pressed & SCE_CTRL_START)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 2; sheet_sel = mg.src; sites_scroll = 0; return; }
+  rrect(16, 8, sw, 36, 18, ACC);
+  text(34, 32, RGBA(20, 12, 16, 255), 17, sl);
+  if (hit(16, 8, sw, 36) || (in.pressed & SCE_CTRL_START)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 2; sheet_sel = mg.src; sites_scroll = 0; return; }
   int rx = W - 16, hb;
   if (mg.src == MS_MANGADEX) {
     rx -= head_button(rx, "sort", MD_ORDER[mg.order], SURF2, &hb) + 10;
@@ -1155,7 +1153,7 @@ static void draw_manga(void) {
   if (hit(16, 50, W - 32, 36) && !ime_open) ime_start(15, "Search", mg.query, 0);
   if ((in.pressed & SCE_CTRL_CROSS) && mg.sel < 0) { prog_open(-1 - mg.sel); return; }
   if ((in.pressed & SCE_CTRL_CROSS) && mg.nbooks) { sfx(SFX_SELECT); mg_open_book(mg.sel); return; }
-  if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = manga_back; return; }
+  if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = S_LIBRARY; return; } // (nothing behind it: the Library)
   draw_bar();
 }
 

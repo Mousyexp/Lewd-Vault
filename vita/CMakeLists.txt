@@ -222,6 +222,7 @@ vita_create_vpk(${LV_VPK_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sites/multporn.png sites/multporn.png
   FILE sites/freeadultcomix.png sites/freeadultcomix.png
   FILE sites/hentairox.png sites/hentairox.png
+  FILE sites/justmanga.png sites/justmanga.png
   FILE sites/pururin.png sites/pururin.png
   FILE sites/hentaimanga.png sites/hentaimanga.png
   FILE sites/manga18fx.png sites/manga18fx.png

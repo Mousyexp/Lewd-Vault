@@ -7,7 +7,7 @@
 
 enum { MS_MANGADEX, MS_EHENTAI, MS_HENTAIFOX, MS_ASMHENTAI, MS_HENTAIERA, MS_NHXXX, MS_HENTAIZAP, MS_HENTAIENVY, MS_3HENTAI,
        MS_HENTAIHAND, MS_MANHWA18, MS_HWEBTOON, MS_MDISTRICT, MS_MULTPORN, MS_FAC,
-       MS_HENTAIROX, MS_PURURIN, MS_HENTAIMANGA, MS_MANGA18FX, MS_MANHWADEN, MS_N };
+       MS_HENTAIROX, MS_JUSTMANGA, MS_HENTAIMANGA, MS_MANGA18FX, MS_MANHWADEN, MS_N };
 // How a source is read: its own code (MangaDex, E-Hentai), or one of three kinds of site
 enum { MF_MANGADEX, MF_EHENTAI, MF_GALLERY, MF_HHAND, MF_SERIES };
 // What it has, shown on its tile: manga (all kinds, 18+ included), hentai manga, hentai webtoons, short comics
