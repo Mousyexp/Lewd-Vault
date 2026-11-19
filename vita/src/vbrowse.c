@@ -128,15 +128,47 @@ static int vsource_site(int k) {
   return memo[k] = r;
 }
 
-#define VB_ROWS 5
+#define VB_ROWS 8 // (at most: the source's own, five orders or a New row and its genres)
 #define VB_PER 24
 #define VB_CW 190
 #define VB_CH 107
 #define HERO_H 270
-static const struct { const char *title; int sort, span; } VROWS[VB_ROWS] = {
-  {"Trending now", LV_SORT_TOP, LV_SPAN_WEEK}, {"New", LV_SORT_LATEST, 0}, {"Top this month", LV_SORT_TOP, LV_SPAN_MONTH},
-  {"Top of all time", LV_SORT_TOP, LV_SPAN_ALL}, {"Something random", LV_SORT_RANDOM, 0},
+// A row: its title, the order asked for and, for a genre, the words searched for with the source's
+typedef struct { const char *title; int sort, span; const char *tag; } VRowDef;
+static const VRowDef VROWS_ORDERS[] = {
+  {"Trending now", LV_SORT_TOP, LV_SPAN_WEEK, ""}, {"New", LV_SORT_LATEST, 0, ""}, {"Top this month", LV_SORT_TOP, LV_SPAN_MONTH, ""},
+  {"Top of all time", LV_SORT_TOP, LV_SPAN_ALL, ""}, {"Something random", LV_SORT_RANDOM, 0, ""},
 };
+// (the long-form sources, whose orders mostly come back the same: their newest, then genres, each a
+//  search on the site itself. A genre the site has nothing for, or that repeats a row, isn't shown.)
+static const VRowDef VROWS_GENRES[] = {
+  {"New", LV_SORT_LATEST, 0, ""}, {"Uncensored", LV_SORT_LATEST, 0, "uncensored"}, {"MILF", LV_SORT_LATEST, 0, "milf"},
+  {"Elf", LV_SORT_LATEST, 0, "elf"}, {"Maid", LV_SORT_LATEST, 0, "maid"}, {"Big breasts", LV_SORT_LATEST, 0, "big_breasts"},
+  {"Harem", LV_SORT_LATEST, 0, "harem"}, {"Romance", LV_SORT_LATEST, 0, "romance"},
+};
+static VRowDef VROWS[VB_ROWS];
+static int vb_nrows = 5;
+static int vsource_site(int k);
+// (the rows for a source: genres for the long-form ones (episode sites, XVideos, Rule34Video's
+//  hentai), the five orders for the rest)
+static void vrows_for(int src) {
+  int site = src >= 0 ? vsource_site(src) : -1, kind = site >= 0 ? LV_SITES[site].kind : -1;
+  const char *tags = src >= 0 ? VSRC[src].tags : "";
+  int genres = kind == BK_HWORLD || kind == BK_HCLOUD || kind == BK_HCITY || kind == BK_XV ||
+               (kind == BK_KVS && tags && !strcmp(tags, "hentai"));
+  const VRowDef *from = genres ? VROWS_GENRES : VROWS_ORDERS;
+  vb_nrows = genres ? (int)(sizeof VROWS_GENRES / sizeof *VROWS_GENRES) : (int)(sizeof VROWS_ORDERS / sizeof *VROWS_ORDERS);
+  if (vb_nrows > VB_ROWS) vb_nrows = VB_ROWS;
+  for (int r = 0; r < VB_ROWS; r++) VROWS[r] = r < vb_nrows ? from[r] : (VRowDef){"", 0, 0, ""};
+}
+// (the words a row asks for: the source's and the row's genre; Rule34Video's tag page takes one tag,
+//  the genre's in place of the source's)
+static void vrow_tags(int src, int r, char *out, size_t cap) {
+  const char *st = src >= 0 ? VSRC[src].tags : "", *gt = VROWS[r].tag ? VROWS[r].tag : "";
+  int site = src >= 0 ? vsource_site(src) : -1;
+  if (gt[0] && site >= 0 && LV_SITES[site].kind == BK_KVS) snprintf(out, cap, "%s", gt);
+  else snprintf(out, cap, "%s%s%s", st ? st : "", st && st[0] && gt[0] ? " " : "", gt);
+}
 typedef struct {
   LvPost *p;
   int n, state; // 0 to ask, 1 asked, 2 here, 3 failed
@@ -195,9 +227,9 @@ static void *vb_main(void *arg) {
       if (nvb_want) { job = vb_want[nvb_want - 1].row; card = vb_want[nvb_want - 1].card; nvb_want--; break; }
       // (the other rows' lists only while the video browser is on screen: not fetched and checked
       //  in the background while something else is looked at, or a video from it streams)
-      for (int d = 0; d < VB_ROWS && src >= 0 && !vb_list.ready && screen == S_VIDEOS; d++) {
-        int r = (vb_row < VB_ROWS ? vb_row : 0) + d;
-        if (r >= VB_ROWS) r -= VB_ROWS;
+      for (int d = 0; d < vb_nrows && src >= 0 && !vb_list.ready && screen == S_VIDEOS; d++) {
+        int r = (vb_row < vb_nrows ? vb_row : 0) + d;
+        if (r >= vb_nrows) r -= vb_nrows;
         if (vrows[r].state == 0) { job = r; vrows[r].state = 1; break; }
       }
       if (job >= 0) break;
@@ -208,7 +240,7 @@ static void *vb_main(void *arg) {
     if (card >= -1 && job >= 0 && vrows[job].p && (card < 0 ? 0 : card) < vrows[job].n) snprintf(url, sizeof url, "%s", vrows[job].p[card < 0 ? 0 : card].preview);
     int site = src >= 0 ? vsource_site(src) : -1;
     char key[200] = "", tags[200] = "";
-    if (site >= 0) { snprintf(key, sizeof key, "%s", wkeys[site]); snprintf(tags, sizeof tags, "%s", VSRC[src].tags); }
+    if (site >= 0) { snprintf(key, sizeof key, "%s", wkeys[site]); vrow_tags(src, job >= 0 ? job : 0, tags, sizeof tags); }
     int ratings = cfg.ratings;
     pthread_mutex_unlock(&vbmx);
     if (!worker_run) break;
@@ -305,6 +337,7 @@ static void vb_open(int k) {
   if (vb_src >= 0 && vb_src < VSRC_MAX) { vb_mem[vb_src].set = 1; vb_mem[vb_src].row = vb_row; memcpy(vb_mem[vb_src].col, vb_col, sizeof vb_col); }
   vb_clear();
   vb_src = k;
+  vrows_for(k);
   vb_cur = k;
   if (k >= 0 && k < VSRC_MAX && vb_mem[k].set) { vb_row = vb_mem[k].row; memcpy(vb_col, vb_mem[k].col, sizeof vb_col); }
   pthread_cond_broadcast(&vbcv);
@@ -338,7 +371,7 @@ static void vb_dup_check(int r) {
     if (same * 10 >= m * 6) { row->dup = 1; return; } // (six in ten or more: the same)
   }
 }
-static int vb_row_shown(int r) { return r == VB_ROWS || !vrows[r].dup; }
+static int vb_row_shown(int r) { return r == VB_ROWS || (r < vb_nrows && !vrows[r].dup && !(vrows[r].state == 2 && !vrows[r].n && r > 0) && !(vrows[r].state == 3 && r > 0 && VROWS[r].tag && VROWS[r].tag[0])); }
 static void vb_take(void) {
   if (!vb_list.ready && !nvb_done) return; // (nothing come: no lock)
   pthread_mutex_lock(&vbmx);
@@ -403,7 +436,7 @@ static void vb_play(int r, int k) {
   grid_build(&wgrid, nposts, post_aspect);
   // (more of the same come as the grid scrolls, like any search)
   cfg.site = site;
-  snprintf(cfg.wquery, sizeof cfg.wquery, "%s", VSRC[vb_src].tags);
+  vrow_tags(vb_src, r, cfg.wquery, sizeof cfg.wquery);
   cfg.wsort = VROWS[r].sort;
   cfg.wspan = VROWS[r].span;
   job_q.site = site; job_q.ratings = cfg.ratings; job_q.sort = cfg.wsort; job_q.span = cfg.wspan;
@@ -449,6 +482,7 @@ static void vb_ask(int r, int k) {
 }
 
 static void draw_videos(void) {
+  if (!VROWS[0].title) vrows_for(vb_src); // (the rows not made yet: this source's)
   vb_take();
   upnext_take();
   { // (back on screen after being away: the worker carries on with what it paused)
@@ -498,7 +532,7 @@ static void draw_videos(void) {
   int ry = (int)y0 + HERO_H - 30;
   for (int r = 0; r < VB_ROWS; r++) {
     VRow *row = &vrows[r];
-    if (row->dup) continue; // (the same as a row above: not shown)
+    if (!vb_row_shown(r)) continue; // (the same as a row above, a genre with nothing, or one this source hasn't)
     ry += VB_CH + 52;
     int ry0 = ry - (VB_CH + 52); // (this row's top)
     #define ry ry0
