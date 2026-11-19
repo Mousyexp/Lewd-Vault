@@ -3211,6 +3211,7 @@ static void draw_viewer(void) {
   if (t && is_frame && (lv_video_width(vid) < 1 || lv_video_height(vid) < 1)) t = th_now, is_frame = 0; // (no size yet)
   if (t && (vita2d_texture_get_width(t) < 1 || vita2d_texture_get_height(t) < 1)) t = NULL;
   // (how it's shown: Viewing's size and orientation, for a video or a picture)
+  view_tall = it->height > it->width * 1.15f;
   int isv = is_video(it), por = view_portrait(isv);
   lv_por = por; lv_mx = lv_my = 0; lv_mag = 1;
   lv_aw = por ? avail_h : W; lv_ah = por ? W : avail_h;
@@ -3698,6 +3699,11 @@ static void draw_wheel(void) {
   }
 }
 
+static int rw_open;
+static void draw_rear_window(void);
+static void rear_window_open(void);
+static int rear_of(int right);
+static const char *const REAR_SHORT[] = {"", "Both", "Scroll", "Swipe", "Volume", "Zoom", "Off"};
 static void draw_settings(void) {
   if (!conv_loaded) conv_keys_load();
   char vconv[80];
@@ -3706,11 +3712,14 @@ static void draw_settings(void) {
   char vtheme[48];
   snprintf(vtheme, sizeof vtheme, "%s", cfg.theme == NTHEMES + 1 ? "Custom (\u2715 colour)" : cfg.theme > 0 ? THEMES[cfg.theme - 1].name : "The vault's own");
   if (cfg.theme > 0) vtheme[0] = (char)toupper((unsigned char)vtheme[0]);
+  if (rw_open) { draw_rear_window(); return; } // (Rear touchpad: its window)
   if (wheel_open) { draw_wheel(); return; }
   if (ro_open) { draw_reading_options(); return; } // (Reading comics: the reader's own panel)
   if (vo_open) { draw_view_options(); return; } // (Viewing: the full views' own panel)
   char vtext[16];
   snprintf(vtext, sizeof vtext, "%d%%", text_pct);
+  char vrear[64];
+  snprintf(vrear, sizeof vrear, "L: %s \u00b7 R: %s", REAR_SHORT[rear_of(0)], REAR_SHORT[rear_of(1)]);
   char vview[48];
   snprintf(vview, sizeof vview, "%s · %s", VF_SHORT[cfg.ifit], VF_SHORT[cfg.vfit]);
   char v3[64];
@@ -3719,7 +3728,7 @@ static void draw_settings(void) {
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_REAR, ST_AUTOROT, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change; past 100% it's made louder than the video itself"},
@@ -3746,11 +3755,13 @@ static void draw_settings(void) {
     {"Text size", vtext, "\u2190\u2192: smaller or bigger, everywhere"},
     {"Accent from the picture", cfg.accpic ? "On" : "Off", "The accent colour takes the picture's own, as you look through them"},
     {"Find duplicates", "", "The same picture more than once: one kept, the rest to the vault's trash"},
+    {"Rear touchpad", vrear, "What each half of the back does: scroll, swipe, volume, zoom or nothing (\u2715 to choose)"},
+    {"Turn portrait pictures", cfg.autorot ? "On" : "Off", "A tall picture turned to fill the screen, for the Vita held on its side"},
   };
   // In sections, each with a header: the rows in the order shown (set_sel stays a row's ST_ id)
   static const signed char ORDER[] = {
     -1, ST_THEME, ST_ACCPIC, ST_BGS, ST_TEXT, ST_SNDPACK, ST_SOUNDS, ST_GLOW, ST_DBL,
-    -2, ST_VIEW, ST_VOL,
+    -2, ST_VIEW, ST_AUTOROT, ST_VOL, ST_REAR,
     -6, ST_COMICS,
     -3, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK,
     -4, ST_DRIVE, ST_WIFI, ST_CONV,
@@ -3881,6 +3892,8 @@ static void draw_settings(void) {
         break;
       }
       case ST_DUPES: if (cross) { sfx(SFX_OPEN); screen = S_DUPES; return; } break;
+      case ST_REAR: if (cross || d) { rear_window_open(); return; } break;
+      case ST_AUTOROT: if (cross || d) { cfg.autorot = !cfg.autorot; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_ACCPIC: if (cross || d) { cfg.accpic = !cfg.accpic; if (!cfg.accpic) apply_theme(); cfg_save(); sfx(SFX_TOGGLE); } break;
       case ST_CACHE:
         if (cross) {
@@ -4115,6 +4128,7 @@ static void library_grew(int before) {
 
 #include "gifplay.c"
 #include "web.c"
+#include "rear.c"
 #include "wifi.c"
 #include "vbrowse.c"
 #include "manga_ui.c"
@@ -4463,6 +4477,7 @@ int main(void) {
 #endif
     PT0();
     read_input();
+    rear_apply(); // (the rear touchpad: what each half does)
     PT("read_input");
     if (frame_no < splash_until) { in.pressed = 0; in.tap = 0; in.touching = 0; } // (nothing happens under the loading screen)
     // (under the loading screen, a size a frame: the letters the screens use most drawn into the font's
@@ -4702,6 +4717,7 @@ int main(void) {
       rrect(W / 2 - w / 2, H - BAR - 56, w, 38, 19, RGBA(0, 0, 0, a * 3 / 4));
       text_center(W / 2, H - BAR - 31, with_alpha(TEXT, a), 16, message);
     }
+    rear_sign_draw();
     PT("the screen");
     if (screen != S_CALC && screen != S_COVER) draw_touch_lock();
 #ifdef LV_DEBUG

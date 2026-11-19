@@ -19,7 +19,9 @@ static const char *vo_text(int k) { int v = *vo_val(k); return k == VO_IORIENT |
 
 // (what the full view shows now: a video's frame or a picture)
 static int view_mode(int video) { return video ? cfg.vfit : cfg.ifit; }
-static int view_portrait(int video) { return video ? cfg.vorient == 1 : cfg.iorient == 1; }
+static int view_tall; // (the picture shown is taller than wide: the full views set it before asking)
+// (Settings › Turn portrait pictures: a tall picture turned to fill the screen held on its side)
+static int view_portrait(int video) { return video ? cfg.vorient == 1 : cfg.iorient == 1 || (cfg.autorot && view_tall); }
 
 // The scale for a texture tw x th whose own pixels are ow x oh (0: not known), into a space aw x ah
 // (the view's own: across and down as it's held). Returns how much bigger than "fit" that is.
