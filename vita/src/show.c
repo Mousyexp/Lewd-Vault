@@ -506,8 +506,9 @@ static void draw_show_plan(void) {
       circle(bcx, bcy + 1.5f, r, RGBA(0, 0, 0, 70));
       circle(bcx, bcy, r, pressed ? with_alpha(ACC, 200) : mix_col(SURF2, ACC, on ? 0.30f : 0.10f));
       circle(bcx, bcy - r * 0.35f, r * 0.62f, with_alpha(TEXT, pressed ? 30 : 14)); // (light from above)
-      const char *g = numeric ? (b ? "+" : "−") : (b ? "›" : "‹");
-      text_center((int)bcx, (int)bcy + 8, pressed ? RGBA(20, 12, 16, 255) : (on ? TEXT : DIM), 22, g);
+      unsigned gc = pressed ? RGBA(20, 12, 16, 255) : (on ? TEXT : DIM);
+      if (numeric) text_center((int)bcx, (int)bcy + 8, gc, 22, b ? "+" : "−");
+      else icon(b ? "chev_r" : "chev_l", bcx, bcy, gc);
       if (in.tap && hypotf(in.tap_x - bcx, in.tap_y - bcy) < r + 10) { tapped = k; tap_d = b ? 1 : -1; in.tap = 0; }
     }
     if (on) focus_ring(x, y, tw, th);

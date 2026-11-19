@@ -3203,6 +3203,7 @@ static void draw_webview(void) {
     if (a > 240 || a < 0) a = 240;
     grad(0, 0, W, 64, RGBA(0, 0, 0, 255), 64 * a / 400, 0, 0);
     fv_back_draw(a);
+    res_badge(p->width, p->height, a); // (its resolution's rank)
     char pos[80];
     snprintf(pos, sizeof pos, "%s  ·  %d of %d%s", LV_SITES[cfg.site].name, wv + 1, nposts, wend ? "" : "+");
     text_center(W / 2, 36, with_alpha(TEXT, a), 16, pos);

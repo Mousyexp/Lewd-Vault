@@ -1835,6 +1835,7 @@ static unsigned splash_until = 96; // (frames: at least about a second and a hal
 // edge); the liquid is drawn as one-pixel columns between the wave and the heart's inside, its top
 // edge softened, so the whole of it fades out with the screen.
 static unsigned mix_col(unsigned a, unsigned b, float t);
+static void pill_progress(float x, float y, float w, float h, float f, int a);
 #define FL_W 280
 #define FL_H 270
 #define FL_T 12.0f   // (the outline's thickness)
@@ -1905,7 +1906,8 @@ static void draw_splash(const char *line, int alpha) {
   // the heart comes in (rising, a little spring), then beats now and then, softly
   float in_t = fminf(1.0f, frame_no / 30.0f);
   float spring = 1.0f - expf(-5.0f * in_t) * cosf(7.0f * in_t);
-  float ox = W / 2.0f - FL_W / 2.0f, oy = 40 + (1 - spring) * 30;
+  // (the heart, the pill and the line together, centred down the screen)
+  float ox = W / 2.0f - FL_W / 2.0f, oy = 74 + (1 - spring) * 30;
   int fa = (int)(alpha * fminf(1, in_t * 1.6f));
   if (fl_tex) {
     // the liquid: a darker wave behind, the accent in front; both slosh, tilting against each other
@@ -1930,18 +1932,26 @@ static void draw_splash(const char *line, int alpha) {
     float beat = fmaxf(0, sinf(t * 2.4f)), bs = 1 + 0.015f * beat * beat * beat;
     vita2d_draw_texture_tint_scale(fl_tex, cx - FL_W * bs / 2, oy + FL_H / 2.0f - FL_H * bs / 2, bs, bs, with_alpha(TEXT, fa));
   } else heart(W / 2.0f, 200, 60, with_alpha(ACC, alpha));
-  // the line, its dots counting: no ellipsis of its own
+  // a big striped pill under the heart, filling as the vault opens (it eases towards full while it
+  //  works, and goes all the way once it's open), and the line under it, larger
   int ta = (int)(alpha * fminf(1.0f, fmaxf(0.0f, (frame_no - 12) / 20.0f)));
+  {
+    static float shown_f;
+    float target = alpha < 255 ? 1.0f : 0.92f * (1 - expf(-t / 1.4f));
+    shown_f += (target - shown_f) * (alpha < 255 ? 0.25f : 0.08f);
+    float pw = 380, ph = 26, px = W / 2.0f - pw / 2, py = oy + FL_H + 18;
+    pill_progress(px, py, pw, ph, shown_f, ta);
+  }
   char msg[96];
   snprintf(msg, sizeof msg, "%s", line);
   size_t n = strlen(msg);
-  if (n >= 3 && !strcmp(msg + n - 3, "…")) msg[n - 3] = 0;
-  int w = text_w(20, msg), dots = (int)(t * 2.5f) % 4;
-  float lx = W / 2.0f - (w + 36) / 2.0f;
-  text((int)lx, 382, with_alpha(TEXT, ta), 20, msg);
+  if (n >= 3 && !strcmp(msg + n - 3, "\u2026")) msg[n - 3] = 0;
+  int w = text_w(24, msg), dots = (int)(t * 2.5f) % 4;
+  float lx = W / 2.0f - (w + 40) / 2.0f, ly = oy + FL_H + 88;
+  text((int)lx, (int)ly, with_alpha(TEXT, ta), 24, msg);
   for (int k = 0; k < 3; k++) {
     float on = k < dots ? 1 : 0.25f;
-    circle(lx + w + 10 + k * 11, 376, 3.6f, with_alpha(TEXT, (int)(ta * on)));
+    circle(lx + w + 12 + k * 13, ly - 7, 4.0f, with_alpha(TEXT, (int)(ta * on)));
   }
 }
 static void draw_unlocking(int stage) {
@@ -2981,6 +2991,36 @@ static void fv_back_draw(int a) {
   icon("back", 37, 34, with_alpha(TEXT, a));
 }
 static int fv_back_hit(void) { return in.tap && in.tap_x < 96 && in.tap_y < 82; }
+// A picture's (or video's) resolution as a rank, by its pixels against the usual sizes:
+//   S+ 4K and up (8.3 MP)  ·  S 1440p and up, gold  ·  A+ about 1080p or a little over  ·  A a little
+//   under 1080p, green  ·  B+ about 720p, blue  ·  B  ·  C+  ·  C small, pink
+static const char *res_rank(int w, int h, unsigned *col) {
+  long long px = (long long)w * h;
+  if (px >= 8000000) { *col = RGBA(255, 214, 102, 255); return "S+"; }
+  if (px >= 3600000) { *col = RGBA(232, 185, 49, 255); return "S"; }
+  if (px >= 1900000) { *col = RGBA(110, 214, 140, 255); return "A+"; }
+  if (px >= 1300000) { *col = RGBA(76, 195, 107, 255); return "A"; }
+  if (px >= 850000) { *col = RGBA(90, 160, 240, 255); return "B+"; }
+  if (px >= 480000) { *col = RGBA(74, 128, 214, 255); return "B"; }
+  if (px >= 220000) { *col = RGBA(240, 120, 165, 255); return "C+"; }
+  *col = RGBA(232, 93, 138, 255); return "C";
+}
+// (the rank in a squircle beside the back button: its colour, a glassy top; S+ with a shine running
+//  across it)
+static void res_badge(int w, int h, int a) {
+  if (w <= 0 || h <= 0) return;
+  unsigned c;
+  const char *r = res_rank(w, h, &c);
+  float x = 74, y = 16, bw = 46, bh = 34;
+  rrect(x - 1, y + 2, bw + 2, bh, 12, with_alpha(RGBA(0, 0, 0, 255), a * 80 / 255));
+  rrect(x, y, bw, bh, 12, with_alpha(c, a));
+  rrect(x + 2, y + 2, bw - 4, bh * 0.42f, 9, with_alpha(RGBA(255, 255, 255, 255), a * 55 / 255));
+  if (r[0] == 'S' && r[1] == '+') { // (a shine sweeping across)
+    float sx = fmodf(frame_no * 1.6f, bw + 60) - 30;
+    if (sx > -10 && sx < bw - 4) rrect(x + fmaxf(2, sx), y + 2, fminf(10, bw - 2 - fmaxf(2, sx)), bh - 4, 4, with_alpha(RGBA(255, 255, 255, 255), a * 90 / 255));
+  }
+  text_center((int)(x + bw / 2), (int)(y + 24), with_alpha(RGBA(24, 16, 20, 255), a), 18, r);
+}
 static void fmt_time(uint64_t ms, char *o, size_t n);
 // "Similar to this": the two tags of these that say most what it is: specific ones (a character, a
 // series: long, with underscores or brackets) before generic ones, never the generic ones of a list,
@@ -3466,6 +3506,7 @@ static void draw_viewer(void) {
     grad(0, 0, W, 64, RGBA(0, 0, 0, 255), 64 * a / 400, 0, 0);
     // back
     fv_back_draw(a);
+    res_badge(it->width, it->height, a); // (its resolution's rank)
     char pos[48];
     snprintf(pos, sizeof pos, "%d of %d", vk + 1, nshown);
     text_center(W / 2, 36, with_alpha(TEXT, a), 17, pos);

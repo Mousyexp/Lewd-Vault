@@ -31,6 +31,15 @@ Untraceable vault's cached thumbnails are encrypted with its key, like everythin
 
 ## Using it
 
+Lately added, in brief: GIFs play in the Browser; video sound up to 150% (Settings › Video volume);
+pinch the Browser's cards bigger or smaller, as the Library's; a Save pill always at the foot of a
+picture in the Browser, and a **Saves** pane at its right edge (what's coming, how big, how fast);
+a resolution rank (S+ down to C) beside the back button in both full views; **Rear touchpad**
+(Settings): each half of the back scrolls, swipes, sets the volume, zooms or does nothing, and a sign
+at the top left says when it's touched; **Turn portrait pictures** (off at first); the right stick
+flicked across changes tab; the stats page has graphs; the calculator disguise is left with SELECT
+(through the PIN pad when there's a PIN); the PIN pad shows as many dots as the PIN has.
+
 | | Touch | Buttons |
 |---|---|---|
 | Library | tap a mode (All, Pictures, Videos, Comics) or a category chip; tap a card; drag to scroll; hold a card for its quick actions; drag the right edge to fly through the months | D-pad/stick; ✕ open (hold: quick actions); L/R the mode; △ sort; □ filters; START slideshow; ○ next tab (in a book: back to the shelf) |
@@ -207,7 +216,12 @@ row is *appended* to `index.csv` (the file isn't rewritten), and in an Untraceab
 encrypted. GIFs and videos are saved as they are. Saved posts carry a ✓ in the grid and aren't saved
 twice. The items are ordinary vault items (the PC opens them too), just Vita-sized.
 
-HTTPS is checked against Mozilla's list of authorities (`cacert.pem`, from certifi). The app has its
+HTTPS is checked against Mozilla's roots (`cacert.pem`, from curl.se) and, for sites that don't send
+their whole chain, Mozilla's intermediates (`intermediates.pem`, from CCADB, as Firefox ships them):
+both made by `tools/make-certs.py` into `certs.bin`, each certificate's bytes and its subject's hash.
+A real Vita gives a process only so many locks, and OpenSSL takes one per certificate it holds, so
+the list is never loaded whole: each connection's store asks for an issuer by name and gets just that
+one, made then (`src/net.c`). The test kit's Diagnostics say how it went. The app has its
 own `inet_pton` (`src/net.c`): the Vita C library's answers -1 for a host name, which libcurl takes
 for "an IP address" and then sends no server name (SNI) in its TLS hello, which most sites refuse.
 
@@ -437,7 +451,7 @@ the compiler inlines across them); textures are only freed after the frame that 
   and only when something needs it. libcurl and OpenSSL (seconds on a cold start) start on the first
   worker thread that fetches, never on the drawing thread. No SceSsl/SceHttp module is loaded. Each request first
   checks `sceNetCtlInetGetState`: with no Wi-Fi it fails at once ("Offline"). TLS is libcurl with
-  OpenSSL and the bundled Mozilla CA list (`cacert.pem`), with verification always on. A certificate
+  OpenSSL and the bundled Mozilla certificates (`certs.bin`), with verification always on. A certificate
   that looks expired or not yet valid gets a message to set the Vita's date and time. Connect times
   out at 15 s and a stalled transfer after 20 s. A connection that breaks before anything arrives is
   tried once more on a new connection (never the same socket). Downloads go to `.part` files, which
@@ -536,6 +550,8 @@ system's own dumps in `ux0:data`, the last 200 lines of its log), and sent if th
 | `tools/make-livearea.py`, `tools/make-livearea.mjs` | The bubble, cover art and splash; the LiveArea page (Chromium via Playwright) |
 | `tools/make-site-icons.mjs` | The sites window's icons (`sites/`) |
 | `font.ttf` | DejaVu Sans (see `FONT-LICENSE.txt`); the Vita's own font is used for Japanese |
-| `cacert.pem` | Mozilla's certificate authorities (certifi, MPL-2.0) |
+| `cacert.pem`, `intermediates.pem`, `certs.bin` | Mozilla's roots and intermediates (MPL-2.0); `certs.bin` made from them by `tools/make-certs.py` |
+| `src/gifplay.c`, `src/third_party/gifdec.c` | Animated GIFs in the Browser (gifdec: public domain) |
+| `src/rear.c` | The rear touchpad: each half's job, its sign, its window |
 
 The Title ID `LWDV00001` is where the Vita keeps the app and its data: don't change it.
