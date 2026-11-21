@@ -392,7 +392,7 @@ static void draw_show_plan(void) {
     grad(cx + 12, cy + 12 + mh - 60, cw - 24, 60, SURF, 0, 255, 0);
     // the play mark over it
     circle(cx + cw / 2, cy + 12 + mh / 2, 30, RGBA(0, 0, 0, 140));
-    vc_tri(cx + cw / 2 + 4, cy + 12 + mh / 2, 15, TEXT);
+    vc_tri(cx + cw / 2 - 2, cy + 12 + mh / 2, 15, TEXT); // (its triangle centred in the disc)
   }
   // the kinds, as a segmented control
   int ky = cy + 162, segw = cw - 24, sw4 = segw / 4;

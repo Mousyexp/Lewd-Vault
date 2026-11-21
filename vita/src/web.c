@@ -2058,14 +2058,20 @@ static void draw_sites_sheet(void) {
   if (seen_tab != sites_tab) { dir = seen_tab < 0 ? 0 : sites_tab > seen_tab ? 1 : -1; seen_tab = sites_tab; tab_at = frame_no; }
   float tu = fminf(1, (frame_no - tab_at) / 14.0f);
   int tab_slide = (int)((1 - (1 - (1 - tu) * (1 - tu) * (1 - tu))) * 90 * dir);
-  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 170));
+  // (opening: the dim comes in and the window rises into place, a little springy)
+  static unsigned sh_last, sh_open;
+  if (frame_no - sh_last > 2) sh_open = frame_no;
+  sh_last = frame_no;
+  float ou = fminf(1, (frame_no - sh_open) / 16.0f), spring = 1 - expf(-5 * ou) * cosf(6 * ou);
+  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, (int)(170 * fminf(1, ou * 2))));
   const int cols = 6, tw = 142, th = 136, gap = 10;
   int vis[LV_MAX_SITES], nvis = sites_visible(vis);
   int n = (sites_tab == 2 ? nmsources() : sites_tab ? nvsources() : nvis) + 1; // (+ the add tile)
-  int rows = (n + cols - 1) / cols, vis_rows = rows < 3 ? rows : 3;
-  int pages = (rows + 2) / 3; // (pages of three rows: eighteen tiles a page)
+  int rows = (n + cols - 1) / cols, vis_rows = rows < 2 ? rows : 2;
+  int pages = (rows + 1) / 2; // (pages of two rows: twelve tiles a page, every tab alike)
   int ww = cols * tw + (cols - 1) * gap + 36, wh = vis_rows * th + (vis_rows - 1) * gap + 100;
-  int wx = (W - ww) / 2, wy = 18;
+  int wx = (W - ww) / 2, wy = 18 + (int)((1 - spring) * 60);
+  rrect(wx, wy + 4, ww, wh, 26, RGBA(0, 0, 0, 90));
   rrect(wx, wy, ww, wh, 26, SURF);
   // the tabs: a segmented control
   static const char *tabs[] = {"Pictures", "Videos", "Comics"};
@@ -2118,7 +2124,11 @@ static void draw_sites_sheet(void) {
   }
   // (the chosen tile's page shown)
   int srow = sheet_sel / cols;
-  sites_scroll = (float)(srow / 3 * 3);
+  sites_scroll = (float)(srow / 2 * 2);
+  // (a new page: its tiles slide in from the side it was turned to)
+  { static int seen_page = -1; static unsigned page_at; static int pdir; int pg = srow / 2;
+    if (seen_page != pg) { pdir = seen_page < 0 ? 0 : pg > seen_page ? 1 : -1; seen_page = pg; page_at = frame_no; }
+    float pu = fminf(1, (frame_no - page_at) / 14.0f); tab_slide += (int)((1 - pu) * (1 - pu) * (1 - pu) * 220 * pdir); }
   int top = wy + 68;
   for (int k = 0; k < n; k++) {
     int r = k / cols - (int)sites_scroll;
@@ -2167,14 +2177,14 @@ static void draw_sites_sheet(void) {
   if (pages > 1) {
     // the pages: a dot each, arrows either side; a swipe sideways across the tiles turns the page
     // (in the window's top row, at the left, where "L / R" is otherwise)
-    int page = (int)sites_scroll / 3, dy = wy + 34, lx = wx + 14, dw = pages * 18;
+    int page = (int)sites_scroll / 2, dy = wy + 34, lx = wx + 14, dw = pages * 18;
     rrect(wx + 8, wy + 12, dw + 100, 44, 22, SURF);
     int turn = 0;
     rrect(lx, dy - 18, 36, 36, 18, page > 0 ? SURF2 : with_alpha(SURF2, 80));
     icon("chev_l", lx + 18, dy, page > 0 ? TEXT : FAINT);
     for (int p = 0; p < pages; p++) {
       circle(lx + 46 + p * 18 + 9, dy, p == page ? 6 : 4, p == page ? ACC : with_alpha(TEXT, 70));
-      if (hit(lx + 46 + p * 18, dy - 16, 18, 32)) { sheet_sel = p * 18 < n ? p * 18 : sheet_sel; in.tap = 0; sfx(SFX_TICK); }
+      if (hit(lx + 46 + p * 18, dy - 16, 18, 32)) { sheet_sel = p * 12 < n ? p * 12 : sheet_sel; in.tap = 0; sfx(SFX_TICK); }
     }
     int rx = lx + 46 + dw + 6;
     rrect(rx, dy - 18, 36, 36, 18, page < pages - 1 ? SURF2 : with_alpha(SURF2, 80));
@@ -2183,7 +2193,7 @@ static void draw_sites_sheet(void) {
     if (hit(rx, dy - 20, 36, 40)) { turn = 1; in.tap = 0; }
     if (in.flicked && in.down_y > top && fabsf(in.fvx) > 12 && fabsf(in.fvx) > 2 * fabsf(in.fvy)) turn = in.fvx < 0 ? 1 : -1;
     if (turn && page + turn >= 0 && page + turn < pages) {
-      int np = page + turn, k = np * 18 + sheet_sel % 18;
+      int np = page + turn, k = np * 12 + sheet_sel % 12;
       sheet_sel = k < n ? k : n - 1;
       sfx(SFX_TICK);
     }
@@ -2767,7 +2777,16 @@ static void draw_web(void) {
   snprintf(site, sizeof site, "%s", LV_SITES[cfg.site].name);
   int ws = text_w(17, site) + 84;
   if (ws > 250) ws = 250;
-  rrect(10, hy + 8, ws, 40, 20, ACC);
+  { // (pressed to open the sources: it dips and a ring of its colour spreads from it)
+    static unsigned chip_at; static int was_open;
+    if (sheet == SH_SITES && !was_open) chip_at = frame_no ? frame_no : 1;
+    was_open = sheet == SH_SITES;
+    float cu = chip_at ? (frame_no - chip_at) / 18.0f : 1;
+    if (cu < 1) { float g = cu * 16; rrect(10 - g, hy + 8 - g, ws + 2 * g, 40 + 2 * g, 20 + g, with_alpha(ACC, (int)(150 * (1 - cu)))); }
+    else chip_at = 0;
+    float dip = cu < 1 ? sinf(cu * 3.14159f) * 3 : 0;
+    rrect(10 + dip, hy + 8 + dip, ws - 2 * dip, 40 - 2 * dip, 20, ACC);
+  }
   vita2d_texture *sic = site_icon_named(cfg.site, LV_SITES[cfg.site].icon);
   if (sic) vita2d_draw_texture_scale(sic, 16, hy + 12, 32 / 112.0f, 32 / 112.0f);
   text_fit(sic ? 54 : 26, hy + 34, RGBA(20, 12, 16, 255), 17, site, ws - (sic ? 74 : 50));
@@ -2782,11 +2801,15 @@ static void draw_web(void) {
   int rx = W - 12, hb;
   rx -= online_button(rx) + 8;
   rx -= head_button(rx, "sort", LV_SORT_NAMES[cfg.wsort], SURF2, &hb) + 8;
+  // (the order: each tap the next; the search only once the taps stop for half a second, so going
+  //  through them quickly doesn't start one search after another that never finish)
+  static unsigned sort_tap_at;
   if (!sheet_open && hb) {
     sfx(SFX_TOGGLE);
     do cfg.wsort = (cfg.wsort + 1) % LV_NSORTS; while (cfg.wsort == LV_SORT_HOT && !LV_SITES[cfg.site].hot);
-    web_search();
+    sort_tap_at = frame_no ? frame_no : 1;
   }
+  if (sort_tap_at && frame_no - sort_tap_at > 30) { sort_tap_at = 0; web_search(); }
   rx -= head_button(rx, "sliders", filt, nr == 4 ? SURF2 : with_alpha(ACC, 110), &hb) + 8;
   if (!sheet_open && (hb || (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); sheet = SH_FILTER; sheet_sel = 0; in.pressed &= ~SCE_CTRL_SQUARE; }
   int kx = 10 + ws + 8;
@@ -2828,7 +2851,10 @@ static void draw_web(void) {
     if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_SHOW; plan_sel = 0; }
     if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = site_tile_of(cfg.site); sites_tab = 0; sites_scroll = 0; }
   }
-  draw_bar();
+  { // (the sources window open: a tap anywhere is the window's first (outside it closes it), never the bar's)
+    int keep_tap = in.tap; if (sheet == SH_SITES) in.tap = 0;
+    draw_bar();
+    in.tap = keep_tap; }
   if (!sheet_open) draw_dlp_tab();
   if (pane_input) { in = pane_saved; draw_dlp(); }
   if (qm_open) { in = qm_saved; draw_qm(wscroll); }

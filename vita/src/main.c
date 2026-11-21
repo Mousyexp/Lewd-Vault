@@ -740,6 +740,22 @@ static int64_t dir_bytes(const char *dir, int depth) {
   closedir(d);
   return t;
 }
+// (a folder's files and folders under it gone; the folder itself kept when keep_top)
+static void rm_tree(const char *dir, int depth) {
+  DIR *d = opendir(dir);
+  if (!d) return;
+  struct dirent *e;
+  char p[600];
+  while ((e = readdir(d))) {
+    if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+    snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+    struct stat st;
+    if (stat(p, &st) != 0) continue;
+    if (S_ISDIR(st.st_mode)) { if (depth < 8) { rm_tree(p, depth + 1); sceIoRmdir(p); } }
+    else remove(p);
+  }
+  closedir(d);
+}
 static void *store_main(void *arg) {
   (void)arg;
   int n = vault.n;
@@ -1233,6 +1249,16 @@ static vita2d_texture *screen_upload(int set, const LvPixels *px) {
   return v;
 }
 static int big_item = -1, big_gen, big_failed;
+// (the full view's pictures kept either side of the one shown: the one just left, and the next one,
+//  decoded ahead; going to either is instant, nothing loaded again)
+static vita2d_texture *bigc_tex[2]; static int bigc_item[2] = {-1, -1}; static int big_pref_item = -1, big_prefetching;
+static void bigc_put(int item, vita2d_texture *t) {
+  if (!t || item < 0) { release_tex(t); return; }
+  int s = bigc_item[0] == item ? 0 : bigc_item[1] == item ? 1 : (bigc_item[0] == -1 ? 0 : 1);
+  if (s == 1 && bigc_item[1] != item && bigc_item[0] != -1) { release_tex(bigc_tex[0]); bigc_tex[0] = bigc_tex[1]; bigc_item[0] = bigc_item[1]; }
+  if (bigc_tex[s] && bigc_tex[s] != t) release_tex(bigc_tex[s]);
+  bigc_tex[s] = t; bigc_item[s] = item;
+}
 // (a slideshow that fades: the picture before stays a moment, fading out under the new one)
 static vita2d_texture *fade_tex;
 static unsigned fade_at;
@@ -1271,8 +1297,12 @@ static void take_results(void) {
     }
     if (d->vgen != vgen || d->item >= vault.n) { free(d->px.rgba); continue; }
     if (d->big) {
-      if (d->gen == big_gen) {
+      if (d->gen == big_gen && d->item == big_pref_item) { // (the next one, fetched ahead: kept, not shown)
+        big_pref_item = -1;
+        if (d->px.rgba) bigc_put(d->item, screen_upload(0, &d->px));
+      } else if (d->gen == big_gen) {
         if (xfade_wanted && big_tex && big_item != d->item) { release_tex(fade_tex); fade_tex = big_tex; fade_at = frame_no; }
+        else if (big_tex && big_item >= 0 && big_item != d->item) bigc_put(big_item, big_tex); // (the one before: kept)
         else release_tex(big_tex);
         big_tex = d->px.rgba ? screen_upload(0, &d->px) : NULL;
         big_item = d->item;
@@ -1325,7 +1355,15 @@ static void ask_thumbs(const int *items, int n) {
 static int big_hi, big_hi_item = -1;
 static int is_tall(const LvItem *it) { return it->width > 0 && it->height > it->width * 2.2f && strcmp(it->kind, "video"); }
 static void ask_big(int item) {
-  pthread_mutex_lock(&mx);
+  // (kept already: swapped in at once, the one shown kept in its place)
+  if (!big_hi && big_pref_item != item) for (int c = 0; c < 2; c++) if (bigc_item[c] == item && bigc_tex[c]) {
+    vita2d_texture *t = bigc_tex[c]; bigc_tex[c] = NULL; bigc_item[c] = -1;
+    if (big_tex && big_item >= 0) bigc_put(big_item, big_tex); else release_tex(big_tex);
+    big_tex = t; big_item = item; big_failed = 0;
+    pthread_mutex_lock(&mx); big_gen++; pthread_mutex_unlock(&mx);
+    return;
+  }
+  if (!big_prefetching) big_pref_item = -1; // (asked for to be shown: not one fetched ahead)
   big_gen++;
   big_ask.item = item;
   big_ask.gen = big_gen;
@@ -1342,6 +1380,8 @@ static void ask_big(int item) {
 }
 static void drop_textures(void) {
   vita2d_wait_rendering_done();
+  for (int c = 0; c < 2; c++) { if (bigc_tex[c]) release_tex(bigc_tex[c]); bigc_tex[c] = NULL; bigc_item[c] = -1; }
+  big_pref_item = -1;
   for (int k = 0; k < SLOTS; k++) { slots[k].tex = NULL; slots[k].item = -1; slots[k].used = 0; } // (the cells stay: the atlases are for good)
   if (big_tex && !is_view(big_tex)) vita2d_free_texture(big_tex);
   big_tex = NULL;
@@ -1926,7 +1966,7 @@ static unsigned mix_col(unsigned a, unsigned b, float t);
 static void pill_progress(float x, float y, float w, float h, float f, int a);
 #define FL_W 280
 #define FL_H 270
-#define FL_T 8.0f    // (the outline's thickness: thin)
+#define FL_T 5.0f    // (the outline's thickness: thin)
 #define FL_S 200.0f  // (the heart's size: its distance field's unit, in pixels)
 #define FL_TIP 246.0f // (the heart's point, in the texture)
 #define FL_ROUND 10.0f // (how much rounder than the bare shape: its corners and point softened)
@@ -1987,12 +2027,14 @@ static void fl_liquid(float ox, float oy, float level, float amp, float k, float
     if (top > fl_in_top[x]) vita2d_draw_rectangle(ox + x, oy + ft, 1, 1, with_alpha(col, (int)(a * cover)));
   }
 }
+static unsigned splash_restore_acc, splash_restore_text;
 static void draw_splash(const char *line, int alpha) {
   make_flask();
   float t = frame_no / 60.0f;
   // (the launch picture's and the LiveArea poster's colours: a deep plum fading to near-black, the
   //  liquid their rose, so moving from one to the other isn't a jump)
   const unsigned SP_TOP = RGBA(64, 26, 50, 255), SP_BOT = RGBA(22, 12, 22, 255), SP_ROSE = RGBA(208, 104, 125, 255), SP_DEEP = RGBA(125, 48, 84, 255);
+  unsigned keep_acc = ACC, keep_text = TEXT; ACC = SP_ROSE; TEXT = RGBA(255, 226, 234, 255); // (everything on it in those colours, the bar too)
   vita2d_draw_rectangle(0, 0, W, H, with_alpha(SP_BOT, alpha));
   grad(0, 0, W, H, SP_TOP, alpha, 0, 0);
   // the heart comes in (rising, a little spring), then beats now and then, softly
@@ -2034,6 +2076,7 @@ static void draw_splash(const char *line, int alpha) {
     float pw = 380, ph = 26, px = W / 2.0f - pw / 2, py = oy + FL_H + 18;
     pill_progress(px, py, pw, ph, shown_f, ta);
   }
+  splash_restore_acc = keep_acc; splash_restore_text = keep_text;
   char msg[96];
   snprintf(msg, sizeof msg, "%s", line);
   size_t n = strlen(msg);
@@ -2045,6 +2088,7 @@ static void draw_splash(const char *line, int alpha) {
     float on = k < dots ? 1 : 0.25f;
     circle(lx + w + 12 + k * 13, ly - 7, 4.0f, with_alpha(TEXT, (int)(ta * on)));
   }
+  ACC = splash_restore_acc; TEXT = splash_restore_text; // (the app's own colours back)
 }
 static void draw_unlocking(int stage) {
   draw_splash(stage ? "Opening the vault\u2026" : "Checking the password\u2026", 255);
@@ -3376,7 +3420,7 @@ static void vctl_draw(const LvVideo *v, int a, float have) {
   // (a soft dark shadow under each, so they read on a light picture too)
   unsigned sh = RGBA(0, 0, 0, 110 * a / 240);
   for (int k = -1; k <= 1; k++) { circle(W / 2 + k * 140, VC_BTN_Y + 2, k ? 30 : 40, RGBA(0, 0, 0, 55 * a / 240)); circle(W / 2 + k * 140, VC_BTN_Y + 2, k ? 22 : 30, RGBA(0, 0, 0, 45 * a / 240)); }
-  if (lv_video_paused(v)) { vc_tri(W / 2 + 8, VC_BTN_Y + 2, 26, sh); vc_tri(W / 2 + 6, VC_BTN_Y, 26, ink); }
+  if (lv_video_paused(v)) { vc_tri(W / 2 - 2, VC_BTN_Y + 2, 26, sh); vc_tri(W / 2 - 4, VC_BTN_Y, 26, ink); } // (centred: the triangle's middle on the button's)
   else { rrect(W / 2 - 15, VC_BTN_Y - 20, 11, 44, 3, sh); rrect(W / 2 + 6, VC_BTN_Y - 20, 11, 44, 3, sh); rrect(W / 2 - 16, VC_BTN_Y - 22, 11, 44, 3, ink); rrect(W / 2 + 5, VC_BTN_Y - 22, 11, 44, 3, ink); }
   vc_skip_icon(W / 2 - 139, VC_BTN_Y + 2, -1, sh); vc_skip_icon(W / 2 + 141, VC_BTN_Y + 2, 1, sh);
   vc_skip_icon(W / 2 - 140, VC_BTN_Y, -1, ink);
@@ -3711,6 +3755,14 @@ static void draw_viewer(void) {
   if (vid && vid_clip && is_video(it)) text_center(W / 2, 30, with_alpha(TEXT, 200), 15, "Preview clip: the Vita can't play this video's own file");
 
   // (zoomed in past 1.25x: the picture again at up to 1920 px, once; back to the screen's size with the next)
+  // (the one shown is here: the next picture decoded ahead, kept for when it's swiped to)
+  if (big_item == shown[vk] && big_pref_item < 0 && !vid && zoom < 1.01f && !slideshow && vk + 1 < nshown && frame_no % 10 == 0) {
+    int nx = shown[vk + 1];
+    const LvItem *ni = &vault.items[nx];
+    if (bigc_item[0] != nx && bigc_item[1] != nx && !is_video(ni) && !is_gif(ni) && !is_tall(ni) && ni->path && heap_room(8u << 20)) {
+      big_pref_item = nx; big_prefetching = 1; ask_big(nx); big_prefetching = 0;
+    }
+  }
   if (zoom * lv_mag > 1.25f && big_item == shown[vk] && big_hi_item != shown[vk] && !vid) { make_room(16u << 20); big_hi = 1; big_hi_item = shown[vk]; ask_big(shown[vk]); big_hi = 0; }
   if (vo_open) { draw_view_options(); return; } // (Viewing: its panel over the picture)
   // --- touch: swipe for the next one, pinch to zoom, drag when zoomed, tap for the controls ---
@@ -3755,7 +3807,7 @@ static void draw_viewer(void) {
     else if (frame_no < chrome_until && in.tap_x > W - 70 && in.tap_y < 60) { details = 1; }
     else if (frame_no < chrome_until && view_btn_hit(is_video(it), W - 140)) { view_options_open(is_video(it)); return; }
     else if (frame_no < chrome_until && hypotf(in.tap_x - (W - 112), in.tap_y - 36) < 34) { char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); beat_at = frame_no ? frame_no : 1; sfx(SFX_DONE); }
-    else if (frame_no < chrome_until && in.tap_y > H - 90 && !(vid && !vid_clip) && !slideshow && nshown > 1) {} // (the filmstrip's)
+    else if (frame_no < chrome_until && !slideshow && nshown > 1 && in.tap_y > H - 90 - (vid && !vid_clip ? 118 : 0) && in.tap_y < H - (vid && !vid_clip ? 118 : 0)) {} // (the filmstrip's)
     else chrome_until = frame_no < chrome_until ? frame_no : frame_no + 240;
   }
 
@@ -3901,7 +3953,11 @@ static void draw_viewer(void) {
 
   if (vid && !vid_clip) vctl_flash_draw();
   // --- the filmstrip: the ones either side, to jump to (with the controls; not over a video's bar) ---
-  if (chrome && !(vid && !vid_clip) && details_y < 0.05f && nshown > 1 && !slideshow) {
+  // (a video: the strip rides higher, over its title and bar, sliding up and back down as it goes)
+  static float fs_lift;
+  fs_lift += ((vid && !vid_clip ? 1.0f : 0.0f) - fs_lift) * ease(0.18f);
+  if (chrome && details_y < 0.05f && nshown > 1 && !slideshow) {
+    const float lift = fs_lift * 118;
     int a = frame_no + 30 > chrome_until ? (int)((chrome_until - frame_no) * 8) : 240;
     if (a > 240 || a < 0) a = 240;
     grad(0, H - 90, W, 90, RGBA(0, 0, 0, 255), 0, 90 * a / 300, 0);
@@ -3921,7 +3977,7 @@ static void draw_viewer(void) {
     }
     // the highlight: in the middle, a rounded ring of the accent (a glow behind it), springing
     {
-      float hs = 66 * (1 + pop), hx = W / 2.0f - hs / 2, hy = H - 14 - 66 / 2.0f - hs / 2;
+      float hs = 66 * (1 + pop), hx = W / 2.0f - hs / 2, hy = H - 14 - 66 / 2.0f - hs / 2 - lift;
       rrect(hx - 7, hy - 7, hs + 14, hs + 14, 16, with_alpha(ACC, a * 50 / 255));
       rrect(hx - 3, hy - 3, hs + 6, hs + 6, 13, with_alpha(ACC, a));
     }
@@ -3933,7 +3989,7 @@ static void draw_viewer(void) {
       float cx = W / 2.0f + off * 70, sz = 66 - 8 * dist;
       if (cx < -40 || cx > W + 40) continue;
       if (k == vk) sz *= 1 + pop;
-      float x = cx - sz / 2, y = H - 14 - 66 / 2.0f - sz / 2 - (1 - dist) * 2;
+      float x = cx - sz / 2, y = H - 14 - 66 / 2.0f - sz / 2 - (1 - dist) * 2 - lift;
       vita2d_texture *ft = thumb_of(shown[k]);
       int ta = (int)(a * (1 - 0.3f * dist) * (1 - fminf(1, fabsf(off) / 8) * 0.6f));
       if (ft) draw_cover_round(ft, x, y, sz, sz, 9, RGBA(255, 255, 255, ta));
@@ -4219,7 +4275,7 @@ static void draw_settings(void) {
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_REAR, ST_AUTOROT, ST_DECOR, ST_OTAGS, ST_STORAGE, ST_SAVEQ, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_REAR, ST_AUTOROT, ST_DECOR, ST_OTAGS, ST_STORAGE, ST_SAVEQ, ST_DELPICS, ST_DELVIDS, ST_DELCOMICS, ST_DELALL, ST_RESET, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change; past 100% it's made louder than the video itself"},
@@ -4251,6 +4307,11 @@ static void draw_settings(void) {
     {"Decorations", cfg.nodecor ? "Off" : "On", "The little anime girls by empty screens and in corners, in the accent's colour (tap one)"},
     {"Your tags when saving", cfg.notags ? "Off" : "On", "After a save: pick tags you've given before or type new ones (yours come first)"},
     {"Save quality", cfg.wfull ? "Original" : "Vita-sized", "Saves kept as the original file, or made Vita-sized (smaller, quicker)"},
+    {"Delete all pictures", "", "Every picture in this vault to its _trash (✕ twice)"},
+    {"Delete all videos", "", "Every video in this vault to its _trash (✕ twice)"},
+    {"Delete all comics", "", "Every comic page in this vault to its _trash (✕ twice)"},
+    {"Delete everything in the vault", "", "All of it to the vault's _trash (✕ twice)"},
+    {"Reset the app", "", "Its settings, PIN, keys, favourites and caches gone: as if never opened (the vault stays) (✕ twice)"},
     {"Storage used", vstore, "What the app takes on the card \u00b7 \u2715 the Library, largest files first"},
   };
   // (which rows have been changed from how the app starts: their value in the accent, a touch bolder;
@@ -4273,11 +4334,12 @@ static void draw_settings(void) {
     -3, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK,
     -4, ST_DRIVE, ST_WIFI, ST_CONV,
     -5, ST_SEARCH, ST_OTAGS, ST_SAVEQ, ST_STORAGE, ST_STATS, ST_CLEAN, ST_DUPES, ST_HEALTH, ST_VAULT, ST_CACHE,
+    -7, ST_DELPICS, ST_DELVIDS, ST_DELCOMICS, ST_DELALL, ST_RESET,
   };
   static int set_init;
   if (!set_init) { set_init = 1; set_sel = ST_THEME; } // (the first row shown)
-  static const char *const SECT[] = {"Appearance", "Playback", "Privacy", "Sync and sources", "Library", "Comics"};
-  static const char *const SECT_ICON[] = {"sliders", "play", "info", "wifi", "photos", "book"};
+  static const char *const SECT[] = {"Appearance", "Playback", "Privacy", "Sync and sources", "Library", "Comics", "App data"};
+  static const char *const SECT_ICON[] = {"sliders", "play", "info", "wifi", "photos", "book", "xmark"};
   enum { NORD = sizeof ORDER / sizeof *ORDER };
   const int rh = 58, hh = 40, top = 112, room = H - BAR - top + 8;
   float ypos[NORD], total = 0;
@@ -4327,8 +4389,10 @@ static void draw_settings(void) {
       int vw0 = text_w(18, rows[r].value), vcx = 30 + set_slide + RW - 24 - vw0 / 2;
       if (tog_at[r] && frame_no - tog_at[r] < 24) {
         float u = (frame_no - tog_at[r]) / 24.0f;
-        rrect(vcx - vw0 / 2 - 12 - u * 10, y + 14 - u * 4, vw0 + 24 + u * 20, 32 + u * 8, 16, with_alpha(ACC, (int)(110 * (1 - u))));
-        for (int k = 0; k < 8; k++) { float an = k * 0.785f + u; circle(vcx + cosf(an) * (vw0 / 2 + 10 + u * 26), y + 30 + sinf(an) * (14 + u * 14), 2.5f * (1 - u), with_alpha(ACC, (int)(255 * (1 - u)))); }
+        // (a soft glow blooming behind the new value and fading, a few sparks drifting up out of it)
+        float bloom = sinf(fminf(1, u * 1.6f) * 3.14159f) * (1 - u * 0.4f);
+        for (int g = 5; g >= 1; g--) circle(vcx, y + 28, (vw0 / 2 + 8) * (0.6f + g * 0.22f) + u * 10, with_alpha(ACC, (int)(26 * bloom)));
+        for (int k = 0; k < 6; k++) { float sx = vcx + (k - 2.5f) * (vw0 / 5.0f + 4), sy = y + 30 - u * (18 + k % 3 * 7); circle(sx, sy, 2.2f * (1 - u), with_alpha(mix_col(ACC, TEXT, 0.5f), (int)(230 * (1 - u)))); }
       } else tog_at[r] = 0;
       int vx = 30 + set_slide + RW - 24 - text_w(18, rows[r].value);
       if (changed[r]) { unsigned vc = mix_col(TEXT, ACC, 0.45f); text(vx + 1, y + 34, with_alpha(vc, 110), 18, rows[r].value); text(vx, y + 34, vc, 18, rows[r].value); }
@@ -4509,6 +4573,29 @@ static void draw_settings(void) {
       case ST_AUTOROT: if (cross || d) { cfg.autorot = !cfg.autorot; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_DECOR: if (cross || d) { cfg.nodecor = !cfg.nodecor; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_OTAGS: if (cross || d) { cfg.notags = !cfg.notags; sfx(SFX_TOGGLE); cfg_save(); } break;
+      case ST_DELPICS: case ST_DELVIDS: case ST_DELCOMICS: case ST_DELALL:
+        if (cross && delete_confirmed()) {
+          saver_flush();
+          int n = 0;
+          pthread_mutex_lock(&vmx);
+          for (int i = vault.n - 1; i >= 0; i--) {
+            const LvItem *it = &vault.items[i];
+            int comic = is_comic(i), video = is_video(it) || is_gif(it);
+            int go = set_sel == ST_DELALL || (set_sel == ST_DELCOMICS && comic) || (set_sel == ST_DELVIDS && video && !comic) || (set_sel == ST_DELPICS && !video && !comic);
+            if (go && lv_vault_delete(&vault, i, 0) == 0) n++;
+          }
+          int r = n ? lv_vault_save_index(&vault) : 0;
+          pthread_mutex_unlock(&vmx);
+          char m[80]; snprintf(m, sizeof m, r == 0 ? "%d moved to the vault's _trash" : "The index couldn't be written", n);
+          say(m); sfx(r == 0 ? SFX_DELETE : SFX_ERROR);
+          if (n) library_shrank();
+        } break;
+      case ST_RESET:
+        if (cross && delete_confirmed()) { // (the app's own folder emptied, then closed: it starts as new)
+          rm_tree(DATA, 0);
+          sfx(SFX_DELETE);
+          sceKernelExitProcess(0);
+        } break;
       case ST_SAVEQ: if (cross || d) { cfg.wfull = !cfg.wfull; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_STORAGE: if (cross) { // (the Library, its largest files first; measured again for it)
         sfx(SFX_OPEN); store_state = 0; store_measure(); cfg.sort = 10; cfg_save(); refilter(); screen = S_LIBRARY; say("Largest files first");
@@ -4785,7 +4872,7 @@ static void lib_locate(const char *page) {
 // The tags you've given before (newest first, DATA/own_tags.txt) as chips to pick, + New to type one,
 // Done puts the picked ones at the front of the item's tags (yours before the site's: they're what
 // shows and is searched first), Skip leaves it.
-static char otag_uid[16], otag_list[40][48], otag_pick[40];
+static char otag_uid[16], otag_list[40][48], otag_pick[40], otag_title[120]; // (a video's: its own title, typed)
 static int otag_open, otag_n, otag_sel;
 static unsigned otag_at;
 static void otag_load(void) {
@@ -4813,7 +4900,7 @@ static void otag_add(const char *t) { // (a new one: picked, at the front)
 }
 static void otag_begin(const char *uid) {
   snprintf(otag_uid, sizeof otag_uid, "%s", uid);
-  otag_load(); memset(otag_pick, 0, sizeof otag_pick);
+  otag_load(); memset(otag_pick, 0, sizeof otag_pick); otag_title[0] = 0;
   otag_open = 1; otag_sel = 0; otag_at = frame_no;
 }
 static void otag_done(int apply) {
@@ -4824,7 +4911,14 @@ static void otag_done(int apply) {
   char t[4096] = "";
   size_t n = 0;
   for (int k = 0; k < otag_n; k++) if (otag_pick[k]) n += snprintf(t + n, sizeof t - n, "%s%s", n ? " " : "", otag_list[k]);
-  if (!n) { sfx(SFX_CLOSE); return; }
+  // (a video: the title typed is its name; none typed: its top tag, else its number is left as it is)
+  if (idx >= 0 && is_video(&vault.items[idx])) {
+    char nm[120] = "";
+    if (otag_title[0]) snprintf(nm, sizeof nm, "%s", otag_title);
+    else { const char *tg = n ? t : (vault.items[idx].tags ? vault.items[idx].tags : ""); sscanf(tg, "%119s", nm); for (char *c = nm; *c; c++) if (*c == '_') *c = ' '; }
+    if (nm[0]) { nm[0] = (char)toupper((unsigned char)nm[0]); if (lv_item_set(&vault, idx, "name", nm) == 0) edited(); }
+  }
+  if (!n) { sfx(otag_title[0] ? SFX_DONE : SFX_CLOSE); return; }
   // (the picked ones to the front of the list kept, so the next time they come first)
   char keep[40][48]; int nk = 0;
   for (int k = 0; k < otag_n; k++) if (otag_pick[k]) snprintf(keep[nk++], 48, "%s", otag_list[k]);
@@ -4840,7 +4934,7 @@ static void otag_done(int apply) {
 static void draw_otag(void) {
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 150));
   float rise = 1 - fminf(1, (frame_no - otag_at) / 12.0f);
-  const int ww = 640, wh = 300, wx = (W - ww) / 2, wy = (H - wh) / 2 + (int)(rise * rise * 40);
+  const int ww = 640, wh = 340, wx = (W - ww) / 2, wy = (H - wh) / 2 + (int)(rise * rise * 40);
   rrect(wx, wy + 4, ww, wh, 24, RGBA(0, 0, 0, 90));
   rrect(wx, wy, ww, wh, 24, SURF);
   rrect(wx + 2, wy + 2, ww - 4, 56, 22, with_alpha(TEXT, 8));
@@ -4862,6 +4956,17 @@ static void draw_otag(void) {
     cx += cw + 8;
   }
   if (!otag_n) text(wx + 130, wy + 95, FAINT, 14, "None yet: + New to give it your first");
+  { // (a video: its title, typed; none: its top tag)
+    int idx = -1;
+    for (int i = vault.n - 1; i >= 0 && idx < 0 && i >= vault.n - 50; i--) if (vault.items[i].uid && !strcmp(vault.items[i].uid, otag_uid)) idx = i;
+    if (idx >= 0 && is_video(&vault.items[idx])) {
+      int tx2 = wx + 20, ty2 = wy + wh - 112, tw2 = ww - 40;
+      glass(tx2, ty2, tw2, 40, 0);
+      icon("film", tx2 + 20, ty2 + 20, ACC);
+      text_fit(tx2 + 40, ty2 + 26, otag_title[0] ? TEXT : FAINT, 15, otag_title[0] ? otag_title : "Its title: tap to type (left empty: its top tag)", tw2 - 56);
+      if (hit(tx2, ty2, tw2, 40) && !ime_open) { ime_start(23, "The video's title", otag_title, 0); in.tap = 0; }
+    }
+  }
   const char *bl[2] = {"Skip", "Done"};
   for (int b = 0; b < 2; b++) {
     int bx = wx + ww - 20 - (2 - b) * 130 + 10, by = wy + wh - 60, place = otag_n + 1 + b;
@@ -5352,6 +5457,7 @@ int main(void) {
       if (r == 1 && ime_for == 14 && got[0]) add_site_start(got);
       if (r == 1 && ime_for == 20) snprintf(own_tags, sizeof own_tags, "%s", got);   // (your own source's tags)
       if (r == 1 && ime_for == 22 && got[0]) otag_add(got); // (a tag of your own, for a save)
+      if (r == 1 && ime_for == 23) snprintf(otag_title, sizeof otag_title, "%s", got); // (and a video's title)
       if (r == 1 && ime_for == 21) snprintf(own_title, sizeof own_title, "%s", got); // (and its name)
       if (r == 1 && ime_for == 15) { snprintf(mg.query, sizeof mg.query, "%s", got); mg_search(); }
       if (r == 1 && ime_for == 17 && got[0]) { snprintf(conv_keys[conv_sel], sizeof conv_keys[conv_sel], "%s", got); conv_keys_save(); sfx(SFX_DONE); say("Key saved"); }
@@ -5466,7 +5572,9 @@ int main(void) {
     if (otag_open) { in = otag_keep; draw_otag(); } // (your tags for a save: over everything, its input its own)
     // the loading screen at start, fading into whatever is behind it once the vault is open
     if (frame_no < splash_until + 24) {
-      if (frame_no >= splash_until && (screen == S_UNLOCKING || load_state == 1)) splash_until = frame_no + 1; // (still opening)
+      static int splash_over; // (once the PIN pad has shown, the loading screen doesn't come back after it)
+      if (screen == S_PIN) { splash_over = 1; splash_until = 0; }
+      if (!splash_over && frame_no >= splash_until && (screen == S_UNLOCKING || load_state == 1)) splash_until = frame_no + 1; // (still opening)
       int a = frame_no < splash_until ? 255 : (int)(255 * (splash_until + 24 - frame_no) / 24.0f);
       if (screen != S_LOCKED || frame_no < splash_until) draw_splash(screen == S_LOCKED ? "Untraceable vault" : "Opening the vault\u2026", a);
     }
