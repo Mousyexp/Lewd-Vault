@@ -323,7 +323,14 @@ static void *mg_main(void *arg) {
         if (d.n < 0) snprintf(d.err, sizeof d.err, "%s", err && err[0] ? err : "The pages couldn't be read");
         break;
       case MJ_PAGE: {
-        int got_img = mg_fetch_page(h, j.src, j.url, &mg_gen, j.gen, &b, &n, &err);
+        // (the last eight pages' files kept in memory: turning back, or forward again, needs no download)
+        static struct { char url[300]; uint8_t *b; size_t n; } pc[8]; static int pc_next;
+        int got_img = 0;
+        for (int c = 0; c < 8 && !got_img; c++) if (pc[c].b && !strncmp(pc[c].url, j.url, sizeof pc[c].url - 1)) { b = malloc(pc[c].n); if (b) { memcpy(b, pc[c].b, pc[c].n); n = pc[c].n; got_img = 1; } }
+        if (!got_img) {
+          got_img = mg_fetch_page(h, j.src, j.url, &mg_gen, j.gen, &b, &n, &err);
+          if (got_img && n < (3u << 20) && heap_room(n * 4)) { int c = pc_next; pc_next = (pc_next + 1) % 8; free(pc[c].b); pc[c].b = malloc(n); if (pc[c].b) { memcpy(pc[c].b, b, n); pc[c].n = n; snprintf(pc[c].url, sizeof pc[c].url, "%s", j.url); } }
+        }
         if (got_img) {
           int hi = j.b; // (zoomed in: twice the screen)
           int iw = 0, ih = 0;
@@ -620,17 +627,22 @@ static void mg_drop_textures(void) {
   release_tex(mg.big_cover);
   mg.big_cover = NULL;
 }
+static int mg_english; // (the Filter: English only, the word added to what's searched)
 static void mg_list_more(void) {
   if (mg.loading || !mg.more) return;
   char url[1600];
+  char keep[128]; snprintf(keep, sizeof keep, "%s", mg.query);
+  if (mg_english && mg.src != MS_MANGADEX && !strstr(mg.query, "english")) snprintf(mg.query, sizeof mg.query, "%s%s%s", keep, keep[0] ? " " : "", mg.src == MS_EHENTAI ? "language:english" : "english");
   if (mg.src == MS_MANGADEX) lv_md_list_url(mg.query, 1 /* (always 18+) */, mg.order, mg.nbooks, url, sizeof url);
   else if (mg.src == MS_EHENTAI) lv_eh_list_url(mg.query, mg.total, url, sizeof url); // (E-Hentai: total counts the pages read)
   else lv_ms_list_url(mg.src, mg.query, mg.total + 1, url, sizeof url); // (the others too: pages from 1)
+  snprintf(mg.query, sizeof mg.query, "%s", keep);
   mg.loading = 1;
   mg_push(MJ_LIST, 0, 0, url);
 }
 static int mg_book_back = S_MANGA;   // (where ○ on a book goes: the list, or the Favourites)
 static int mg_offline_pending;       // (opened to be made available offline: its pages saved once here)
+static int msave_from_book;          // (that save: shown as its own screen over the reader, closed when done)
 static int fav_toggle_comic(const LvBook *b, int src);
 static int fav_find(int kind, const char *page);
 // (the list let go, nothing asked for: a book from elsewhere is about to be put in it)
@@ -901,7 +913,7 @@ static void mg_take(void) {
         }
         mg.gallery_p++;
         // (opened to be made available offline: saved now there's a list of pages)
-        if (mg_offline_pending && mg.npages) { mg_offline_pending = 0; msave_start(); }
+        if (mg_offline_pending && mg.npages) { mg_offline_pending = 0; msave_from_book = 1; msave_start(); }
         break;
       case MJ_PAGE:
         // (into its texture a slice a frame: a page is up to 15 MB, copied in one frame it was a stutter)
@@ -1142,17 +1154,30 @@ static void draw_manga(void) {
   rrect(16, 8, sw, 36, 18, ACC);
   text(34, 32, RGBA(20, 12, 16, 255), 17, sl);
   if (hit(16, 8, sw, 36) || (in.pressed & SCE_CTRL_START)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 2; sheet_sel = mg.src; sites_scroll = 0; return; }
-  kind_buttons(16 + sw + 10, 7, 2);
+  int kbw = kind_buttons(16 + sw + 10, 7, 2);
   if (screen != S_MANGA) return;
   int rx = W - 16, hb;
-  if (mg.src == MS_MANGADEX) {
+  if (mg.src == MS_MANGADEX) { // (the order: MangaDex's own)
     rx -= head_button(rx, "sort", MD_ORDER[mg.order], SURF2, &hb) + 10;
     if (hb || (in.pressed & SCE_CTRL_TRIANGLE)) { sfx(SFX_TOGGLE); mg.order = (mg.order + 1) % 3; mg_search(); }
+  } else { // (the filter: English only, a glass button lit when on)
+    const char *fl = mg_english ? "English" : "All languages";
+    int fw = text_w(14, fl) + 46, fx = rx - fw;
+    if (mg_english) { rrect(fx, 8, fw, 36, 18, with_alpha(ACC, 150)); rrect(fx + 2, 9, fw - 4, 14, 7, with_alpha(TEXT, 30)); } else glass(fx, 8, fw, 36, 0);
+    icon("sliders", fx + 20, 26, TEXT);
+    text(fx + 34, 31, TEXT, 14, fl);
+    if (hit(fx, 4, fw, 44) || (in.pressed & SCE_CTRL_TRIANGLE)) { sfx(SFX_TOGGLE); mg_english = !mg_english; mg_search(); }
+    rx = fx - 10;
   }
-  rrect(16, 50, W - 32, 36, 18, SURF2);
-  icon("search", 38, 68, mg.query[0] ? TEXT : FAINT);
-  text_fit(56, 74, mg.query[0] ? TEXT : FAINT, 16, mg.query[0] ? mg.query : "Search titles", W - 100);
-  if (hit(16, 50, W - 32, 36) && !ime_open) ime_start(15, "Search", mg.query, 0);
+  { // the search, in the same row: the room between
+    int qx = 16 + sw + 10 + kbw + 10, qw = rx - qx;
+    if (qw > 60) {
+      rrect(qx, 8, qw, 36, 18, SURF2);
+      icon("search", qx + 20, 26, mg.query[0] ? TEXT : FAINT);
+      text_fit(qx + 38, 32, mg.query[0] ? TEXT : FAINT, 15, mg.query[0] ? mg.query : "Search titles", qw - 48);
+      if (hit(qx, 4, qw, 44) && !ime_open) ime_start(15, "Search", mg.query, 0);
+    }
+  }
   if ((in.pressed & SCE_CTRL_CROSS) && mg.sel < 0) { prog_open(-1 - mg.sel); return; }
   if ((in.pressed & SCE_CTRL_CROSS) && mg.nbooks) { sfx(SFX_SELECT); mg_open_book(mg.sel); return; }
   if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = S_LIBRARY; return; } // (nothing behind it: the Library)
@@ -1165,15 +1190,27 @@ static void draw_book(void) {
   // (the background: the frame is cleared to it already)
   if (mg.book < 0 || mg.book >= mg.nbooks) { screen = S_MANGA; return; }
   LvBook *b = &mg.books[mg.book];
-  // the cover, big, on the left
-  if (mg.big_cover) vita2d_draw_texture_scale(mg.big_cover, 30, 70, 220.0f / vita2d_texture_get_width(mg.big_cover), 312.0f / vita2d_texture_get_height(mg.big_cover));
-  else { rrect(30, 70, 220, 312, 14, SURF); spinner(140, 226, 16); }
-  text_fit(276, 96, TEXT, 22, b->title, W - 300);
+  // (behind it all: its cover, the whole screen, dim, a wash of its colours)
+  if (mg.big_cover) { draw_cover(mg.big_cover, 0, 0, W, H, RGBA(255, 255, 255, 60)); vita2d_draw_rectangle(0, 0, W, H, with_alpha(BG, 170)); grad(0, 0, W, 120, with_alpha(BG, 255), 200, 0, 0); }
+  // the cover on the left: rounded, lifted on a shadow, a glass rim
+  const float cvx = 34, cvy = 64, cvw = 196, cvh = 278;
+  rrect(cvx - 3, cvy + 5, cvw + 6, cvh + 4, 16, RGBA(0, 0, 0, 120));
+  rrect(cvx - 3, cvy - 3, cvw + 6, cvh + 6, 16, with_alpha(TEXT, 40));
+  if (mg.big_cover) draw_cover_round(mg.big_cover, cvx, cvy, cvw, cvh, 13, RGBA(255, 255, 255, 255));
+  else { rrect(cvx, cvy, cvw, cvh, 13, SURF); spinner(cvx + cvw / 2, cvy + cvh / 2, 16); }
+  { // the source and its kind, as a small glass pill, over the title
+    char sk[80]; snprintf(sk, sizeof sk, "%s \u00b7 %s", LV_MSRC[mg.src].name, LV_MK_NAME[LV_MSRC[mg.src].kind]);
+    int pw = text_w(12, sk) + 22;
+    glass(276, 62, pw, 24, 0);
+    text(287, 79, DIM, 12, sk);
+  }
+  text_fit(277, 112, TEXT, 24, b->title, W - 300);
+  text_fit(276, 112, TEXT, 24, b->title, W - 300);
   char tags[400];
   snprintf(tags, sizeof tags, "%.390s", b->tags);
   for (char *p = tags; *p; p++) if (*p == '|') *p = ',';
-  text_fit(276, 122, FAINT, 13, tags, W - 300);
-  int listy = 146;
+  text_fit(276, 134, FAINT, 13, tags, W - 300);
+  int listy = 152;
   // (left part way: picked up again)
   int pk = prog_find(LV_MSRC[mg.src].name, b->id);
   if (pk >= 0 && (prog[pk].page > 0 || prog[pk].chid[0]) && !mg.ch_loading) {
@@ -1261,12 +1298,25 @@ static void draw_book(void) {
       text(x3 + 18, 38, TEXT, 16, al);
       if (hit(x3, 8, aw, 48) || (in.pressed & SCE_CTRL_START)) { msave_series_start(); return; }
     }
-    rrect(x1, 12, fw, 40, 20, fav ? ACC : SURF2);
-    text(x1 + 18, 38, fav ? RGBA(20, 12, 16, 255) : TEXT, 16, fl);
-    rrect(x2, 12, ow, 40, 20, SURF2);
-    text(x2 + 18, 38, TEXT, 16, ol);
-    if (hit(x1, 8, fw, 48) || (in.pressed & SCE_CTRL_SQUARE)) fav_toggle_comic(b, mg.src);
-    if ((hit(x2, 8, ow, 48) || (in.pressed & SCE_CTRL_TRIANGLE)) && !msave_on) {
+    (void)fw; (void)ow; (void)x1; (void)x2;
+    // Favourite and Offline: two big round glossy buttons under the cover, their words beneath
+    const float by = cvy + cvh + 46, r = 30;
+    float fx = cvx + cvw / 2 - 48, ox = cvx + cvw / 2 + 48;
+    for (int k2 = 0; k2 < 2; k2++) {
+      float cx = k2 ? ox : fx;
+      int lit = k2 ? msave_on : fav, pressed = in.touching && hypotf(in.tx - cx, in.ty - by) < r + 6;
+      float rr = r * (pressed ? 0.92f : 1);
+      circle(cx, by + 3, rr + 1, RGBA(0, 0, 0, 110));
+      circle(cx, by, rr, lit ? ACC : mix_col(SURF2, ACC, 0.18f));
+      circle(cx, by - rr * 0.32f, rr * 0.66f, RGBA(255, 255, 255, lit ? 60 : 30)); // (gloss)
+      unsigned ink = lit ? RGBA(20, 12, 16, 255) : TEXT;
+      if (k2 == 0) heart(cx, by + 2, 10, ink);
+      else if (msave_on) spinner((int)cx, (int)by, 11); else icon("save", cx, by, ink);
+      text_center((int)cx, (int)(by + r + 20), DIM, 13, k2 ? ol : (fav ? "Favourite" : "Favourite"));
+    }
+    int x1h = (int)(fx - r), x2h = (int)(ox - r);
+    if (hit(x1h, (int)(by - 34), 64, 70) || (in.pressed & SCE_CTRL_SQUARE)) fav_toggle_comic(b, mg.src);
+    if ((hit(x2h, (int)(by - 34), 64, 70) || (in.pressed & SCE_CTRL_TRIANGLE)) && !msave_on) {
       if (!mg_chapters(mg.src) || (mg.nch && !mg.ch_loading)) { mg_offline_pending = 1; sfx(SFX_OPEN); mg_read(!mg_chapters(mg.src) ? 0 : mg.ch_sel); return; }
       else { sfx(SFX_ERROR); say(mg.ch_loading ? "The chapters are still coming" : "Nothing here to save"); }
     }
@@ -1342,6 +1392,12 @@ static void draw_reader(void) {
       static int asked[3] = {-1, -1, -1};
       if (p < mg.npages && mg.ptex_page[k] != p && asked[k] != p + mg.chapter * 100000) { asked[k] = p + mg.chapter * 100000; mg_want_page(p, 0); }
     }
+    // (and the three after those, their files fetched into memory ahead of time)
+    static int warm_asked = -1;
+    if (queued < 2 && warm_asked != mg.page + mg.chapter * 100000) {
+      warm_asked = mg.page + mg.chapter * 100000;
+      for (int k = 3; k <= 5; k++) if (mg.page + k < mg.npages) mg_push(MJ_PAGE, mg.page + k, 0, mg.pages[mg.page + k]);
+    }
   }
   // the pages, read as the reading options say (reader.c): this chapter's, as they come
   static ComicSrc src;
@@ -1357,6 +1413,35 @@ static void draw_reader(void) {
   vita2d_texture *t = mg.ptex_page[0] == mg.page ? mg.ptex[0] : NULL;
   if (rd.zoom > 1.25f && hi_page != mg.page && t && vita2d_texture_get_width(t) <= W) { hi_page = mg.page; mg_want_page(mg.page, 1); }
   if (rd.zoom < 1.01f) hi_page = -1;
+  // (made available offline from the book: its own screen over the reader while it saves, a bar and a
+  //  ring and the page it's on; done, back to the book by itself)
+  if (msave_from_book) {
+    if (!msave_on && frame_no > 2) { static unsigned done_at; if (!done_at) done_at = frame_no; if (frame_no - done_at > 40) { done_at = 0; msave_from_book = 0; mg_rd_close(); return; } }
+    vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 200));
+    const int ww = 460, wh = 250, wx = (W - ww) / 2, wy = (H - wh) / 2;
+    rrect(wx, wy + 4, ww, wh, 24, RGBA(0, 0, 0, 110));
+    rrect(wx, wy, ww, wh, 24, SURF);
+    rrect(wx + 2, wy + 2, ww - 4, 50, 22, with_alpha(TEXT, 8));
+    float f = msave_total > 0 ? fminf(1, msave_done / (float)msave_total) : 0;
+    // the page just come, small, at the left
+    vita2d_texture *pt = mg.ptex_page[0] >= 0 ? mg.ptex[0] : NULL;
+    if (pt) draw_cover_round(pt, wx + 24, wy + 66, 110, 156, 10, RGBA(255, 255, 255, 255)); else skeleton(wx + 24, wy + 66, 110, 156, 10);
+    text(wx + 24, wy + 36, TEXT, 18, msave_on ? "Saving for offline" : "Saved for offline");
+    // the ring, and the count in it
+    float rcx = wx + 210, rcy = wy + 128, rr = 40;
+    for (int k = 0; k < 60; k++) { float an = -1.5708f + k * 6.2832f / 60; circle(rcx + cosf(an) * rr, rcy + sinf(an) * rr, 3, with_alpha(TEXT, 30)); }
+    for (int k = 0; k < (int)(60 * f); k++) { float an = -1.5708f + k * 6.2832f / 60; circle(rcx + cosf(an) * rr, rcy + sinf(an) * rr, 3.4f, ACC); }
+    char c[32]; snprintf(c, sizeof c, "%d%%", (int)(f * 100));
+    text_center((int)rcx, (int)rcy + 7, TEXT, 18, c);
+    char pg[48]; snprintf(pg, sizeof pg, "%d of %d pages", msave_done, msave_total);
+    text(wx + 272, wy + 120, DIM, 15, pg);
+    if (msave_series_n) { char sc[48]; snprintf(sc, sizeof sc, "Chapter %d of %d", msave_series_at ? msave_series_at : 1, msave_series_n); text(wx + 272, wy + 144, FAINT, 13, sc); }
+    // the bar under it all
+    pill_progress(wx + 24, wy + wh - 26, ww - 48, 12, msave_total > 0 ? f : -1, 255);
+    if (in.pressed & SCE_CTRL_CIRCLE) { msave_from_book = 0; mg_rd_close(); } // (○: back; it carries on saving)
+    in.pressed = 0; in.tap = 0;
+    return;
+  }
   // the save button, with the controls (or □)
   if (!ro_open && (frame_no < rd.chrome_until || msave_on)) {
     char sl[64];

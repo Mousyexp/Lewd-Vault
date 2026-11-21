@@ -2553,10 +2553,14 @@ static void lhero_build(void) {
       if (!dup) { lhero_kind[nlhero] = 1; lhero[nlhero++] = liked[k]; }
     }
     if (nlhero < 2) nlhero = 0; // (one alone isn't a row)
+  } else if (book_shelf && !book_inside && !lsearch.n && !selecting && book_read && book_count) {
+    // (the Comics shelf: the books left part way, to carry on with)
+    for (int k = 0; k < nshown && nlhero < 12; k++) { int i = shown[k]; if (book_read[i] > 0 && book_read[i] < book_count[i]) { lhero_kind[nlhero] = 2; lhero[nlhero++] = i; } }
   }
   for (int k = 0; k < nlhero; k++) {
     const LvItem *it = &vault.items[lhero[k]];
     lhero_done[k] = lhero_kind[k] == 0 && it->duration > 0 ? fminf(1, resume_of(it) / (float)it->duration) : 0;
+    if (lhero_kind[k] == 2 && book_count && book_count[lhero[k]] > 0) lhero_done[k] = fminf(1, book_read[lhero[k]] / (float)book_count[lhero[k]]);
   }
   if (!nlhero) lhero_on = 0;
   if (lhero_sel >= nlhero) lhero_sel = nlhero ? nlhero - 1 : 0;
@@ -2620,7 +2624,7 @@ static int lhero_draw(float y, int *want, int nwant_max) {
   for (int k = 0; k < nlhero; k++) {
     float x = JMARGIN + k * (LHERO_CW + 12) - lhero_x, cy = y + 24;
     if (k == 0 || lhero_kind[k] != lhero_kind[k - 1]) {
-      const char *ttl = lhero_kind[k] == 0 ? "Continue watching" : "Recently appreciated";
+      const char *ttl = lhero_kind[k] == 0 ? "Continue watching" : lhero_kind[k] == 2 ? "Continue reading" : "Recently appreciated";
       float tx = fmaxf(JMARGIN, x);
       if (tx < W) text(tx, y + 16, DIM, 15, ttl);
     }
@@ -2633,7 +2637,7 @@ static int lhero_draw(float y, int *want, int nwant_max) {
       if (nw < nwant_max && tstate[i] != 3) { want_size(i, LHERO_CW, LHERO_CH); want[nw++] = i; }
     }
     const LvItem *it = &vault.items[i];
-    if (lhero_kind[k] == 0 && it->duration > 0) {
+    if ((lhero_kind[k] == 0 && it->duration > 0) || lhero_kind[k] == 2) {
       // how far it got
       float f = lhero_done[k];
       rrect(x, cy + LHERO_CH - 4, LHERO_CW, 4, 2, RGBA(0, 0, 0, 160));
@@ -2783,6 +2787,7 @@ static void draw_library(void) {
     int i = shown[k];
     Rect rc = lgrid.r[k];
     float x = rc.x, y = TOP + 6 + rc.y - scroll, cw = rc.w, ch = rc.h;
+    if (book_shelf) { x += 7; y += 7; cw -= 14; ch -= 14; } // (the Comics shelf: room between the books)
     if (y > H) break;
     last = k + 1;
     if (y + ch < TOP - 4) continue;
@@ -2791,8 +2796,8 @@ static void draw_library(void) {
     int on = k == sel && !in.touching && !lhero_on && !sheet_up; // (a sheet open: the ring is the sheet's)
     float grow = on ? 3 : 0;
     if (on) { fr_x = x - grow; fr_y = y - grow; fr_w = cw + 2 * grow; fr_h = ch + 2 * grow; }
-    int in_all_book = !book_shelf && is_cover_in_all(i);
-    if (book_shelf || in_all_book) { // (the pages' edges behind it, a book's thickness)
+    // (in All a comic is a plain card like the rest: the book's look is the Comics shelf's)
+    if (book_shelf) { // (the pages' edges behind it, a book's thickness)
       int bp = book_shelf ? book_count[i] : cover_pages ? cover_pages[i] : 1;
       int pages = bp > 40 ? 4 : bp > 12 ? 3 : 2;
       for (int e = pages; e >= 1; e--) rrect(x - grow + e * 3, y - grow + e * 3, cw + 2 * grow, ch + 2 * grow, 6, e & 1 ? RGBA(238, 232, 224, 255) : RGBA(180, 172, 164, 255));
@@ -2825,20 +2830,29 @@ static void draw_library(void) {
       }
       grad(x, y + ch - 46, cw, 46, RGBA(0, 0, 0, 255), 0, 200, 0);
       text_fit((int)x + 8, (int)(y + ch - 10), TEXT, 14, it->collection, (int)cw - 16);
+      { // (on the card: readable offline, a small glass badge)
+        int bw = text_w(11, "Offline") + 30;
+        rrect(x + 18, y + 7, bw, 20, 10, RGBA(0, 0, 0, 120));
+        rrect(x + 18, y + 6, bw, 20, 10, with_alpha(mix_col(SURF2, ACC, 0.3f), 220));
+        rrect(x + 20, y + 7, bw - 4, 8, 4, with_alpha(TEXT, 30));
+        icon("save", x + 30, y + 16, ACC);
+        text(x + 40, y + 20, TEXT, 11, "Offline");
+      }
       char pc[24];
       snprintf(pc, sizeof pc, "%d p", book_count[i]);
       int tw = text_w(13, pc);
       rrect(x + cw - tw - 16, y + 6, tw + 12, 20, 10, RGBA(0, 0, 0, 160));
       text(x + cw - tw - 10, y + 21, TEXT, 13, pc);
     }
-    if (in_all_book) { // (a comic in All: its spine, and a badge saying so, with its pages)
-      grad(x, y, 14, ch, RGBA(0, 0, 0, 255), 150, 0, 1);
+    if (!book_shelf && is_cover_in_all(i)) { // (a comic in All: a plain card, a glass badge saying so, with its pages)
       char bl[32];
-      snprintf(bl, sizeof bl, "COMIC \u00b7 %d p", cover_pages ? cover_pages[i] : 0);
+      snprintf(bl, sizeof bl, "Comic \u00b7 %d p", cover_pages ? cover_pages[i] : 0);
       int bw = text_w(11, bl) + 34;
-      rrect(x + 8, y + 8, bw, 22, 11, with_alpha(ACC, 235));
-      icon("book", x + 21, y + 19, RGBA(20, 12, 16, 255));
-      text(x + 32, y + 23, RGBA(20, 12, 16, 255), 11, bl);
+      rrect(x + 8, y + 9, bw, 22, 11, RGBA(0, 0, 0, 120));
+      rrect(x + 8, y + 8, bw, 22, 11, with_alpha(mix_col(SURF2, ACC, 0.35f), 225));
+      rrect(x + 10, y + 9, bw - 4, 9, 4, with_alpha(TEXT, 30));
+      icon("book", x + 21, y + 19, ACC);
+      text(x + 32, y + 23, TEXT, 11, bl);
     }
     if (lv_likes_of(&vault, it) > 0) { // (its hearts: how many times it's been appreciated)
       int nl = lv_likes_of(&vault, it);
