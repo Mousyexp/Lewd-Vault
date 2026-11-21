@@ -209,6 +209,7 @@ vita_create_vpk(${LV_VPK_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE sites/hentaiworld.png sites/hentaiworld.png
   FILE sites/hentaicloud.png sites/hentaicloud.png
   FILE sites/hentaicity.png sites/hentaicity.png
+  FILE sites/hentaiocean.png sites/hentaiocean.png
   FILE sites/hentaifox.png sites/hentaifox.png
   FILE sites/asmhentai.png sites/asmhentai.png
   FILE sites/hentaiera.png sites/hentaiera.png

@@ -14,6 +14,7 @@ static const VSource VSRC_BUILTIN[] = {
   //  HentaiCity first, the default; HentaiWorld, the XVideos episode lists, Sakugabooru, Xbooru,
   //  hanime.tv and MissAV taken off the list, 2026-11)
   {"HentaiCity", "HentaiCity", "", "hentaicity", "Hentai episodes, 8 min+", 0},
+  {"HentaiOcean", "HentaiOcean", "", "hentaiocean", "Hentai episodes, new each day", 0},
   {"HentaiCloud", "HentaiCloud", "", "hentaicloud", "Hentai episodes, English subs", 0},
   {"R34V Longest", "Rule34Video", "longest", "rule34video", "The longest hentai videos", 0},
   {"Rule34Video", "Rule34Video", "hentai", "rule34video", "Hentai animations", 0},

@@ -7,6 +7,8 @@
 #include <string.h>
 #include <strings.h>
 #include <time.h>
+#include <pthread.h>
+static void hocean_note(int page, const char *q);
 
 // No account needed for these, but Gelbooru and Rule34 (the last two) want an account's API key.
 LvSite LV_SITES[LV_MAX_SITES] = {
@@ -35,11 +37,12 @@ LvSite LV_SITES[LV_MAX_SITES] = {
   {"HentaiWorld", BK_HWORLD, "https://hentaiworld.tv", NULL, 1, 0, "hentaiworld", "Hentai episodes", NULL, 1},
   {"HentaiCloud", BK_HCLOUD, "https://www.hentaicloud.com", NULL, 1, 0, "hentaicloud", "Hentai episodes", NULL, 1},
   {"HentaiCity", BK_HCITY, "https://www.hentaicity.com", NULL, 1, 0, "hentaicity", "Hentai episodes, 8 min and longer", NULL, 1},
+  {"HentaiOcean", BK_HOCEAN, "https://hentaiocean.com", NULL, 0, 0, "hentaiocean", "Hentai episodes, new each day", NULL, 1},
 };
 const int LV_NBUILTIN = 20;
 int LV_NSITES = 20;
-int lv_site_checks_items(const LvSite *s) { return s->kind == BK_HWORLD || s->kind == BK_HCLOUD || s->kind == BK_HCITY; }
-int lv_is_long(const LvSite *s, const LvPost *p) { return lv_post_is_video(p) && (p->duration >= LV_LONG_VIDEO || (s && (s->kind == BK_XV || s->kind == BK_HWORLD || s->kind == BK_HCLOUD || s->kind == BK_HCITY))); }
+int lv_site_checks_items(const LvSite *s) { return s->kind == BK_HWORLD || s->kind == BK_HCLOUD || s->kind == BK_HCITY || s->kind == BK_HOCEAN; }
+int lv_is_long(const LvSite *s, const LvPost *p) { return lv_post_is_video(p) && (p->duration >= LV_LONG_VIDEO || (s && (s->kind == BK_XV || s->kind == BK_HWORLD || s->kind == BK_HCLOUD || s->kind == BK_HCITY || s->kind == BK_HOCEAN))); }
 int lv_site_is_booru(const LvSite *s) { return s->kind <= BK_E621; }
 // (the strings of the sites added by hand, kept here)
 static char added_names[LV_MAX_SITES][48], added_bases[LV_MAX_SITES][160];
@@ -215,6 +218,14 @@ void lv_booru_url_ex(const LvSite *s, const char *tags, int ratings, int sort, i
       enc(w, e, sizeof e);
       snprintf(out, cap, "%s/api/legacy/query/entity?query=%s", s->base, e);
     }
+    return;
+  }
+  if (s->kind == BK_HOCEAN) {
+    // (no search and no pages of its own: its feed, every episode, newest first; the page asked for
+    //  and the words searched kept for this thread's parse, which hands out 24 at a time)
+    hocean_note(page, clean);
+    if (page > 34) { out[0] = 0; return; }
+    snprintf(out, cap, "%s/rss.xml", s->base);
     return;
   }
   if (s->kind == BK_HCITY) {
@@ -440,6 +451,64 @@ static LvPost *kvs_parse(const char *text, size_t len, int *n) {
   return out;
 }
 // ---------- xvideos: its search page's thumbnails, read as HTML ----------
+// ---- HentaiOcean: its feed, read a page at a time ----
+static struct { pthread_t t; int used, page; char q[128]; } hoq[8];
+static pthread_mutex_t hoq_mx = PTHREAD_MUTEX_INITIALIZER;
+static void hocean_note(int page, const char *q) {
+  pthread_mutex_lock(&hoq_mx);
+  int k = 0;
+  for (int i = 0; i < 8; i++) if (hoq[i].used && pthread_equal(hoq[i].t, pthread_self())) { k = i; goto found; }
+  for (k = 0; k < 8 && hoq[k].used; k++) {}
+  if (k == 8) k = 0;
+found:
+  hoq[k].used = 1; hoq[k].t = pthread_self(); hoq[k].page = page < 1 ? 1 : page;
+  snprintf(hoq[k].q, sizeof hoq[k].q, "%s", q ? q : "");
+  pthread_mutex_unlock(&hoq_mx);
+}
+static LvPost *hocean_parse(const char *text, int *n) {
+  int page = 1; char q[128] = "";
+  pthread_mutex_lock(&hoq_mx);
+  for (int i = 0; i < 8; i++) if (hoq[i].used && pthread_equal(hoq[i].t, pthread_self())) { page = hoq[i].page; snprintf(q, sizeof q, "%s", hoq[i].q); }
+  pthread_mutex_unlock(&hoq_mx);
+  for (char *c = q; *c; c++) if (*c == '_') *c = ' ';
+  LvPost *out = calloc(25, sizeof *out);
+  if (!out) return NULL;
+  int match = 0, got = 0, first = (page - 1) * 24;
+  for (const char *p = strstr(text, "<item>"); p && got < 24; p = strstr(p + 6, "<item>")) {
+    const char *end = strstr(p, "</item>");
+    if (!end) break;
+    char title[300] = "", link[400] = "", thumb[400] = "";
+    const char *a;
+    if ((a = strstr(p, "<title>")) && a < end) { a += 7; size_t k = 0; while (a[k] && a[k] != '<' && k < sizeof title - 1) { title[k] = a[k]; k++; } title[k] = 0; }
+    if ((a = strstr(p, "<link>")) && a < end) { a += 6; size_t k = 0; while (a[k] && a[k] != '<' && k < sizeof link - 1) { link[k] = a[k]; k++; } link[k] = 0; }
+    if ((a = strstr(p, "media:thumbnail url=\"")) && a < end) { a += 21; size_t k = 0; while (a[k] && a[k] != '"' && k < sizeof thumb - 1) { thumb[k] = a[k]; k++; } thumb[k] = 0; }
+    if (!link[0]) continue;
+    // (the words searched: each in its title)
+    int ok = 1;
+    char w[128]; const char *qp = q; int wn;
+    while (ok && sscanf(qp, "%127s%n", w, &wn) == 1) { qp += wn; if (!strcasestr(title, w)) ok = 0; }
+    if (!ok) continue;
+    if (match++ < first) continue;
+    LvPost *o = &out[got++];
+    unsigned long long h = 1469598103934665603ull;
+    for (const char *x = link; *x; x++) h = (h ^ (unsigned char)*x) * 1099511628211ull;
+    o->id = (long long)(h >> 1);
+    o->page = strdup(link);
+    o->preview = strdup(thumb);
+    o->sample = strdup(thumb);
+    o->file = strdup(link);
+    o->source = strdup(link);
+    // (its tags: the words of its name, small, as the vault keeps them)
+    char tg[300]; size_t t = 0;
+    for (const char *x = title; *x && t < sizeof tg - 1; x++) tg[t++] = *x == ' ' ? '_' : (char)tolower((unsigned char)*x);
+    tg[t] = 0;
+    o->tags = strdup(tg);
+    snprintf(o->ext, sizeof o->ext, "mp4");
+    o->width = 1280; o->height = 720; o->rating = LV_R_EXPLICIT;
+  }
+  *n = got;
+  return out;
+}
 static LvPost *xv_parse(const char *text, size_t len, int *n) {
   (void)len;
   int cap = 0;
@@ -601,6 +670,28 @@ int lv_item_check(const LvSite *s, LvPost *post, const char *html) {
   char words[4000];
   words_of(text, words, sizeof words);
   if (any_never(words)) return 0;
+  // (HentaiOcean: its page names the file on its player's server, "...play?vid=<file>")
+  if (s->kind == BK_HOCEAN) {
+    const char *v = strstr(html, "/play?vid=");
+    if (!v) return 0;
+    v += 10;
+    char fn[300]; size_t k = 0;
+    while (v[k] && v[k] != '"' && k < sizeof fn - 1) { fn[k] = v[k]; k++; }
+    fn[k] = 0;
+    char url[1000]; size_t o = (size_t)snprintf(url, sizeof url, "https://w2.hentaiocean.com/video/");
+    for (const char *c = fn; *c && o < sizeof url - 4; c++) {
+      if (*c == '\\' && c[1] == '/') { url[o++] = '/'; c++; continue; }
+      unsigned char ch = (unsigned char)*c;
+      if (isalnum(ch) || ch == '.' || ch == '-' || ch == '_') url[o++] = (char)ch;
+      else o += (size_t)snprintf(url + o, sizeof url - o, "%%%02X", ch);
+    }
+    url[o] = 0;
+    char *d = strdup(url);
+    if (!d) return 0;
+    free(post->file);
+    post->file = d;
+    return 1;
+  }
   // the MP4, where the page names it (HentaiWorld: its og:video)
   if (s->kind == BK_HWORLD || s->kind == BK_HCITY) {
     char mp4[600] = "";
@@ -845,6 +936,7 @@ LvPost *lv_booru_parse(const LvSite *s, const char *text, size_t len, int rating
   if (s->kind == BK_KVS) return kvs_parse(text, len, n);
   if (s->kind == BK_XV) return xv_parse(text, len, n);
   if (s->kind == BK_HWORLD || s->kind == BK_HCLOUD || s->kind == BK_HCITY) return episodes_parse(s, text, n);
+  if (s->kind == BK_HOCEAN) return hocean_parse(text, n);
   if (s->kind == BK_ESHUU || s->kind == BK_BOORUIO) return image_site_parse(s, text, len, ratings, n);
   Json j;
   if (json_parse(&j, text, len) != 0) return NULL;

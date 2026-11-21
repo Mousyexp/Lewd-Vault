@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html data-theme="dark">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Watch Hitori Tsuma 1 - Hentai Ocean</title>
+    <meta name="description" content="He&#039;s at it again...
+
+Yukina came to visit her husband who got injured at work, only to be left stunned by the sight of him hitting on every woman in sight ...">
+    <meta property="og:title" content="Watch Hitori Tsuma 1 - Hentai Ocean" />
+    <meta property="og:description" content="He&#039;s at it again...
+
+Yukina came to visit her husband who got injured at work, only to be left stunned by the sight of him hitting on every woman in sight ..." />
+    <meta property="og:image" content="https://hentaiocean.com/assets/cover/1ad48497744f98126d407e96db5c49bc5c23f3dc.jpg" />
+    
+    <link rel="shortcut icon" href="/favicon.png">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.3/css/bulma.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" integrity="sha512-Evv84Mr4kqVGRNSgIGL/F/aIDqQb7xQ2vcrdIwxfjThSH8CSR7PBEakCr51Ck+w+/U6swU2Im1vVX0SVk9ABhg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <link rel="stylesheet" href="/main.css?v=44">
+    <script src="/main.js?v=53"></script>
+</head>
+
+<body class="has-navbar-fixed-top">
+
+    <nav class="navbar navbar is-fixed-top" role="navigation" aria-label="main navigation">
+    <div class="navbar-brand">
+        <a class="navbar-item" href="https://hentaiocean.com">
+            <img class="logo" src="/assets/logo/logo.png">
+        </a>
+        <a role="button" class="navbar-burger" data-target="navbar-menu" aria-label="menu" aria-expanded="false">
+            <span aria-hidden="true"></span>
+            <span aria-hidden="true"></span>
+            <span aria-hidden="true"></span>
+            <span aria-hidden="true"></span>
+        </a>
+
+    </div>
+    <div class="navbar-menu" id="navbar-menu">
+        <div class="navbar-start">
+          <a class="navbar-item" href="https://hentaiocean.com/genre">
+              Genres
+          </a>
+          <a class="navbar-item" href="/explore">
+              Search
+          </a>
+          <a class="navbar-item" href="/scroller">
+              Scroller
+          </a>
+          <a class="navbar-item" href="/manhwa/home">
+              Pornhwa   
+          </a>
+        </div>
+
+        <div class="navbar-end">
+          
+    <div class="navbar-item">
+        <button class="button is-hocblue is-small" id="open-login-modal">
+            <span class="icon"><i class="fa-solid fa-right-to-bracket"></i></span>
+            <span>Login</span>
+        </button>
+    </div>
+
+<div class="modal" id="modal_login">
+    <div class="modal-background"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">Log in</p>
+            <button class="delete" aria-label="close"></button>
+        </header>
+        <section class="modal-card-body">
+            <div class="notification is-danger is-light is-hidden" id="login-err"></div>
+            <div class="field">
+                <label class="label">Username</label>
+                <div class="control has-icons-left">
+                    <input class="input user-username-input" type="text" id="login-username"
+                           autocomplete="username" maxlength="20">
+                    <span class="icon is-small is-left"><i class="fa-solid fa-user"></i></span>
+                </div>
+            </div>
+            <div class="field">
+                <label class="label">Password</label>
+                <div class="control has-icons-left">
+                    <input class="input" type="password" id="login-password" autocomplete="current-password">
+                    <span class="icon is-small is-left"><i class="fa-solid fa-lock"></i></span>
+                </div>
+            </div>
+
+                        <div class="field mt-3">
+                <div class="hoc-captcha" id="login-captcha"
+                     data-sitekey="0x4AAAAAAA_aFGKR3miZn5Ih"></div>
+            </div>
+            
+            <p class="help mt-3">
+                Don't have an account?
+                <a id="switch-to-signup" href="#">Sign up</a>
+            </p>
+        </section>
+        <footer class="modal-card-foot">
+            <div class="buttons">
+                <button class="button is-hocblue" id="login-submit">Log in</button>
+                <button class="button modal__close">Cancel</button>
+            </div>
+        </footer>
+    </div>
+</div>
+
+<div class="modal" id="modal_signup">
+    <div class="modal-background"></div>
+    <div class="modal-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">Create an account</p>
+            <button class="delete" aria-label="close"></button>
+        </header>
+        <section class="modal-card-body">
+            <div class="notification is-danger is-light is-hidden" id="signup-err"></div>
+
+            <div class="field">
+                <label class="label">Username</label>
+                <div class="control has-icons-left">
+                    <input class="input user-username-input" type="text" id="signup-username" autocomplete="username" maxlength="20" placeholder="Username">
+                    <span class="icon is-small is-left"><i class="fa-solid fa-user"></i></span>
+                </div>
+                <p class="help">3-20 chars, letters and numbers only.</p>
+            </div>
+            <div class="field">
+                <label class="label">Email</label>
+                <div class="control has-icons-left">
+                    <input class="input" type="email" id="signup-email" autocomplete="email" placeholder="Email">
+                    <span class="icon is-small is-left"><i class="fa-solid fa-envelope"></i></span>
+                </div>
+            </div>
+            <div class="field">
+                <label class="label">Password</label>
+                <div class="control has-icons-left">
+                    <input class="input" type="password" id="signup-password" autocomplete="new-password" placeholder="Password">
+                    <span class="icon is-small is-left"><i class="fa-solid fa-lock"></i></span>
+                </div>
+            </div>
+            <div class="field">
+                <label class="label">Repeat password</label>
+                <div class="control has-icons-left">
+                    <input class="input" type="password" id="signup-password2" autocomplete="new-password" placeholder="Password">
+                    <span class="icon is-small is-left"><i class="fa-solid fa-lock"></i></span>
+                </div>
+            </div>
+
+                        <div class="field mt-3">
+                <div class="hoc-captcha" id="signup-captcha"
+                     data-sitekey="0x4AAAAAAA_aFGKR3miZn5Ih"></div>
+            </div>
+            
+            <p class="help mt-3">
+                Already have an account?
+                <a id="switch-to-login" href="#">Log in</a>
+            </p>
+        </section>
+        <footer class="modal-card-foot">
+            <div class="buttons">
+                <button class="button is-hocblue" id="signup-submit">Sign up</button>
+                <button class="button modal__close">Cancel</button>
+            </div>
+        </footer>
+    </div>
+</div>
+
+<script>
+    window.HOC_USER = {
+        loggedIn: false,
+        username: null,
+        userid:   null,
+        csrf:     "ce41d08dc154fa7dac04ab7dde5db726",
+    };
+</script>
+            
+        </div>
+        
+    </div>
+</nav>
+<link rel="stylesheet" href="/users.css?v=4">
+<script src="/users.js?v=4" defer></script>
+
+    <section class="section">
+        <div class="container">
+            <div class="notification is-info">
+                If your device can't play the video from VIP Mirror, please switch to Universal Mirror if available, or download the video and play it using a media player like VLC.
+            </div>
+            <div class="video-container">
+                <div class="video-window">
+                    <div id="video">
+                        <iframe src="" frameborder="0" marginwidth="0" marginheight="0" scrolling="no" allowfullscreen="true"></iframe>
+                    </div>
+                </div>
+            </div>
+            <div class="video-footer columns is-mobile is-multiline">
+                <div class="column">
+                    <p class="buttons">
+                        <button class="button js-modal-trigger" onclick="grab_download()">
+                            <span class="icon">
+                            <i class="fa-solid fa-download"></i>
+                            </span>
+                            <span>Download</span>
+                        </button>
+                                            </p>
+                </div>
+                <div class="column is-narrow">
+                    <p class="buttons">
+                        <button class="button js-modal-trigger" data-target="modal_embed">
+                            <span class="icon">
+                            <i class="fa-solid fa-code"></i>
+                            </span>
+                            <span>Embed</span>
+                        </button>
+                        <button class="button js-modal-trigger" data-target="modal_share">
+                            <span class="icon">
+                            <i class="fa-solid fa-share"></i>
+                            </span>
+                            <span>Share</span>
+                        </button>
+                    </p>
+                </div>
+            </div>
+            <h1 class="title">
+            Hitori Tsuma 1            </h1>
+
+            <div class="tags are-medium tags-container">
+                            </div>
+            
+            
+            <div class="message">
+                <div class="message-header">
+                    <p>Mirrors - Switch if the video doesn't work</p>
+                </div>
+                <div class="message-body buttons" id="mirrors-container">
+                </div>
+            </div>
+
+            
+            <div class="columns">
+                <div class="column"><img src="https://hentaiocean.com/assets/cover/1ad48497744f98126d407e96db5c49bc5c23f3dc.jpg" class="cover-ratio-img"></div>
+                <div class="column is-9">
+                    <p><b>Name:</b> Hitori Tsuma 1</p>
+                    <p><b>Release date:</b> 2026-10-30</p>
+                    <p><b>Upload date:</b> 2026-11-17</p>
+                    <hr>
+                    He&#039;s at it again...<br />
+<br />
+Yukina came to visit her husband who got injured at work, only to be left stunned by the sight of him hitting on every woman in sight without discrimination.<br />
+<br />
+Ignoring him, she sits down on a bench in the hallway. A coffee is offered to her there. It&#039;s the young man Yuto, who&#039;s come to visit the girlfriend he recently met.<br />
+<br />
+He&#039;s attentively looking after her, with that easygoing, refreshing charm. For Yukina, who can&#039;t help comparing him to her husband, it&#039;s nothing more than a brief distraction, perfect eye candy. Or so she thought she was simply enjoying that moment...<br />
+<br />
+She wandered into a café after spotting a help-wanted poster for part-time work and striking out on her own.<br />
+<br />
+Facing her across the counter is the same guy from the hospital, Yuto.<br />
+The job was decided on the spot. It&#039;s a brand-new shop, just the two of them: the master, Yuto, and her...<br />
+<br />
+The new encounter of this married woman who had devoted herself entirely to her husband... marked the arrival of a daily life steeped in immorality, filthy, lewd, and maddeningly intoxicating...                </div>
+            </div>
+            <br>
+
+             <div class="related-videos-section">
+                <div class="section-title-bar">
+                    <h2 class="section-title">Related Videos</h2>
+                </div>
+                
+                <div class="compact-videos-container">
+                                    </div>
+            </div>
+
+            <br>
+            <h2 class="title">Watch more</h2>
+            <div class="fixed-grid has-5-cols-desktop has-3-cols-tablet has-2-cols-mobile">
+                <div class="grid">
+                        <a href="https://hentaiocean.com/watch/hitori-tsuma-1" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/1ad48497744f98126d407e96db5c49bc5c23f3dc.webp" alt="Hitori Tsuma 1" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/1ad48497744f98126d407e96db5c49bc5c23f3dc.jpg';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Hitori Tsuma 1</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/so_low-4" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/0bc8537046a93dc00a35afc7601ded7d344568f9.webp" alt="so_low 4" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/0bc8537046a93dc00a35afc7601ded7d344568f9.jpg';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">so_low 4</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/mouse-cursor-de-genjitsu-o-sousa-dekiru-you-ni-natta-no-de-onnanoko-o-ippai-click-shimasu-6" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/85f944009110c3bd1f8f451a97fcf869daf05b2c.webp" alt="Mouse Cursor de Genjitsu o Sousa Dekiru You ni Natta no de, Onnanoko o Ippai Click Shima~su 6" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/85f944009110c3bd1f8f451a97fcf869daf05b2c.jpg';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Mouse Cursor de Genjitsu o Sousa Dekiru You ni Natta no de, Onnanoko o Ippai Click Shima~su 6</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/hitozukiai-ga-nigate-na-miboujin-no-yukionna-san-to-noroi-no-yubiwa-6" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/eb11bb1dbd8ca11837d155be814b17f9dfc68bf7.webp" alt="Hitozukiai ga Nigate na Miboujin no Yukionna-san to Noroi no Yubiwa 6" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/eb11bb1dbd8ca11837d155be814b17f9dfc68bf7.webp';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Hitozukiai ga Nigate na Miboujin no Yukionna-san to Noroi no Yubiwa 6</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/netorareta-bakunyuu-tsuma-tachi-2-episode-2" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/968ad31300cab341b226dc45dd319488248ba2ca.webp" alt="Netorareta Bakunyuu Tsuma-tachi 2 Episode 2" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/968ad31300cab341b226dc45dd319488248ba2ca.png';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Netorareta Bakunyuu Tsuma-tachi 2 Episode 2</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/harem-tou-e-youkoso-2" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/65f43aa2720a623e47092c3a86c62856e80e711b.webp" alt="Harem-tou e Youkoso! 2" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/65f43aa2720a623e47092c3a86c62856e80e711b.png';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Harem-tou e Youkoso! 2</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/muramata-san-no-aijou-2" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/a858b1ae4d12750458e8ac36aeb87412b8e3dedc.webp" alt="Muramata-san no Aijou 2" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/a858b1ae4d12750458e8ac36aeb87412b8e3dedc.png';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Muramata-san no Aijou 2</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/mujikaku-na-osananajimi-to-kyoumi-honi-de-yatte-mitara-3" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/3c60cb57a8fac19a2523805b37ec37c98a1d3ce3.webp" alt="Mujikaku na Osananajimi to Kyoumi Honi de Yatte Mitara 3" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/3c60cb57a8fac19a2523805b37ec37c98a1d3ce3.png';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Mujikaku na Osananajimi to Kyoumi Honi de Yatte Mitara 3</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/sister-breeder-6" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/926069b17ff56ac6ddfe180fddc46e3afe75f712.webp" alt="Sister Breeder 6" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/926069b17ff56ac6ddfe180fddc46e3afe75f712.png';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Sister Breeder 6</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/sister-breeder-5" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/3ce66799cfa1d7113edaa4ecf7e993bff5ee6c46.webp" alt="Sister Breeder 5" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/3ce66799cfa1d7113edaa4ecf7e993bff5ee6c46.png';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Sister Breeder 5</p>
+                </div>
+            </div>
+        </div>
+    </a>                 </div>
+            </div>
+            
+            <br>
+            <h2 class="title">Random</h2>
+            <div class="fixed-grid has-5-cols-desktop has-3-cols-tablet has-2-cols-mobile">
+                <div class="grid">
+                        <a href="https://hentaiocean.com/watch/papa-datte-shitai-8" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/900dfd6fc6dfcbfc0a51681a0f50ec10399cc97e.webp" alt="Papa Datte, Shitai 8" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/900dfd6fc6dfcbfc0a51681a0f50ec10399cc97e.png';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Papa Datte, Shitai 8</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/cool-de-m-2" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/23af10176e7490901a6a5bc74eab8ef682063ed6.webp" alt="Cool de M 2" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/23af10176e7490901a6a5bc74eab8ef682063ed6.jpg';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Cool de M 2</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/eroriman-3" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/090098a819efb722f66c698c7ee00c4c4d1f5298.webp" alt="Eroriman 3" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/090098a819efb722f66c698c7ee00c4c4d1f5298.jpg';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Eroriman 3</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/do-s-na-pet-2" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/17bcf1ce3fc6ce9c89c252c8d39701f6c01ab06a.webp" alt="Do S na Pet 2" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/17bcf1ce3fc6ce9c89c252c8d39701f6c01ab06a.jpg';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Do S na Pet 2</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/kimi-wa-yasashiku-netorareru-the-animation-4" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/188b0efda99dc53b0ab95b29bc8314852bfd8b0c.webp" alt="Kimi wa Yasashiku Netorareru The Animation 4" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/188b0efda99dc53b0ab95b29bc8314852bfd8b0c.jpg';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Kimi wa Yasashiku Netorareru The Animation 4</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/gobaku-moe-mama-tsurezure-1" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/6ff9a9d8c89b36f00fc0ac6530a0869c265635e8.webp" alt="Gobaku: Moe Mama Tsurezure 1" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/6ff9a9d8c89b36f00fc0ac6530a0869c265635e8.jpg';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Gobaku: Moe Mama Tsurezure 1</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/sinisistar-1" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/542f8fe535d59b2d92fc87b5e45991e2fa5fc5c8.webp" alt="SiNiSistar 1" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/542f8fe535d59b2d92fc87b5e45991e2fa5fc5c8.jpg';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">SiNiSistar 1</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/karada-de-kaiketsu-hyakkiya-tantei-jimusho-2" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/d3b87b752d26607004fdf87510b07c95d0521061.webp" alt="Karada de Kaiketsu: Hyakkiya Tantei Jimusho 2" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/d3b87b752d26607004fdf87510b07c95d0521061.jpg';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Karada de Kaiketsu: Hyakkiya Tantei Jimusho 2</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/jitaku-keibiin-2-episode-1" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/936eb6b0655cafd0659ff1a7a93ca8788c89fa0f.webp" alt="Jitaku Keibiin 2 Episode 1" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/936eb6b0655cafd0659ff1a7a93ca8788c89fa0f.jpg';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">Jitaku Keibiin 2 Episode 1</p>
+                </div>
+            </div>
+        </div>
+    </a>     <a href="https://hentaiocean.com/watch/1ldkjk-ikinari-doukyo-micchaku-hatsu-ecchi-3" class="cell card">
+        <div class="card-image">
+            
+            <div class="image cover-ratio">
+                <img src="https://hentaiocean.com/assets/optcover/d541ccfed3e48f086d75a7d7d42176348a7083ed.webp" alt="1LDK+JK Ikinari Doukyo? Micchaku!? Hatsu Ecchi!!? 3" loading="lazy" onerror="this.onerror=null; this.src='/assets/cover/d541ccfed3e48f086d75a7d7d42176348a7083ed.jpg';" >
+            </div>
+        </div>
+        <div class="card-content">
+            <div class="media">
+                <div class="media-content">
+                <p class="subtitle is-6 col has-text-centered lock-lh-2">1LDK+JK Ikinari Doukyo? Micchaku!? Hatsu Ecchi!!? 3</p>
+                </div>
+            </div>
+        </div>
+    </a>                 </div>
+            </div>
+
+        </div>
+    </section>
+    <script>
+        var jsondata = {"info":[{"id":779,"urlname":"hitori-tsuma-1","videoname":"Hitori Tsuma 1","description":"He's at it again...\r\n\r\nYukina came to visit her husband who got injured at work, only to be left stunned by the sight of him hitting on every woman in sight without discrimination.\r\n\r\nIgnoring him, she sits down on a bench in the hallway. A coffee is offered to her there. It's the young man Yuto, who's come to visit the girlfriend he recently met.\r\n\r\nHe's attentively looking after her, with that easygoing, refreshing charm. For Yukina, who can't help comparing him to her husband, it's nothing more than a brief distraction, perfect eye candy. Or so she thought she was simply enjoying that moment...\r\n\r\nShe wandered into a caf\u00e9 after spotting a help-wanted poster for part-time work and striking out on her own.\r\n\r\nFacing her across the counter is the same guy from the hospital, Yuto.\r\nThe job was decided on the spot. It's a brand-new shop, just the two of them: the master, Yuto, and her...\r\n\r\nThe new encounter of this married woman who had devoted herself entirely to her husband... marked the arrival of a daily life steeped in immorality, filthy, lewd, and maddeningly intoxicating...","releasedate":"2026-10-30","uploaddate":"2026-11-17","coverimg":"1ad48497744f98126d407e96db5c49bc5c23f3dc.jpg","series":null,"status":1,"recentrelease":1}],"mirrors":[{"mirrorurl":"https:\/\/w2.hentaiocean.com\/play?vid=[HentaiOcean.com] Hitori Tsuma 01.mp4"}],"genres":[]}    </script>
+
+    <div style="max-width:100.0000000000000000000001%;overflow-x:auto;">
+   <iframe data-aa='2382108' src='//ad.a-ads.com/2382108?size=728x90' style='width:728px; height:90px; border:0px; padding:0; overflow:hidden; background-color: transparent;'></iframe>
+    <a href="https://javfrog.com" target="_blank"><img src="/assets/upload/banner2.png"></a>
+</div>
+<div style="max-width:100.0000000000000000000001%;overflow-x:auto;">
+   <ins class="eas6a97888e2" data-zoneid="5629970"></ins> 
+   <ins class="eas6a97888e2" data-zoneid="5645400"></ins>
+</div>
+<footer class="footer has-text-light">
+  <div class="container">
+    <div class="columns is-variable is-8 is-vcentered">
+      <div class="column is-4">
+        <div class="mb-3">
+          <a href="/">
+            <img src="/favicon.png" alt="Hentai Ocean" style="height: 40px;">
+          </a>
+          <p>Streaming English subbed hentai.</p>
+        </div>
+        <div class="buttons">
+          <a href="https://x.com/hentaioceancom" target="_blank" rel="nofollow" class="button is-small social-icon">
+            <span class="icon has-text-light">
+              <i class="fab fa-x-twitter"></i>
+            </span>
+          </a>
+          <a href="https://bsky.app/profile/hentaiocean.com" target="_blank" rel="nofollow" class="button is-small social-icon">
+            <span class="icon has-text-light">
+              <i class="fab fa-bluesky"></i>
+            </span>
+          </a>
+          <a href="https://discord.gg/mfvmbmuVSS" target="_blank" rel="nofollow" class="button is-small social-icon">
+            <span class="icon has-text-light">
+              <i class="fab fa-discord"></i>
+            </span>
+          </a>
+        </div>
+      </div>
+      <div class="column is-8">
+        <div class="columns is-multiline is-mobile is-justify-content-flex-end">
+          <div class="column is-12-mobile is-4-tablet">
+            <p class="has-text-weight-semibold has-text-light mb-2">Links</p>
+            <ul>
+              <li><a href="https://otome.hentaiocean.com" target="_blank" class="nav-link">Otome (BL)</a></li>
+              <li><a href="https://hentaiocean.com/api-docs" class="nav-link">Hentai API</a></li>
+            </ul>
+          </div>
+          <div class="column is-12-mobile is-4-tablet">
+            <p class="has-text-weight-semibold has-text-light mb-2">Genres</p>
+            <ul>
+              <li><a href="/genre/Milf" class="nav-link">Milf Hentai</a></li>
+              <li><a href="/genre/Creampie" class="nav-link">Creampie Hentai</a></li>
+              <li><a href="/genre/Ugly Bastard" class="nav-link">Ugly Bastard Hentai</a></li>
+            </ul>
+          </div>
+          <div class="column is-12-mobile is-4-tablet">
+            <p class="has-text-weight-semibold has-text-light mb-2">Contact</p>
+            <ul>
+              <li><a href="https://discord.gg/mfvmbmuVSS" target="_blank" rel="nofollow" class="nav-link">Discord</a></li>
+              <li><a href="https://hentaiocean.com/dmca" class="nav-link">DMCA</a></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+<script>
+if (location.pathname.startsWith('/watch/') && jsondata?.genres?.length) {
+  const keywords = jsondata.genres
+    .map(g => g.genre)
+    .filter(Boolean)
+    .join(', ');
+
+  document.querySelectorAll('ins[data-zoneid]')
+    .forEach(el => el.dataset.keywords = keywords);
+}
+</script>
+<script async type="application/javascript" src="https://a.magsrv.com/ad-provider.js"></script> 
+<script>
+  (AdProvider = window.AdProvider || []).push({"serve": {}});
+</script>
+<script>
+(function () {
+
+    function loadScript(url, timeout) {
+        return new Promise(function (resolve, reject) {
+            var s = document.createElement("script");
+            s.src = url;
+            s.async = true;
+
+            var timer = setTimeout(function () {
+                reject(new Error("timeout"));
+            }, timeout);
+
+            s.onload = function () {
+                clearTimeout(timer);
+                resolve();
+            };
+
+            s.onerror = function () {
+                clearTimeout(timer);
+                reject(new Error("load failed"));
+            };
+
+            document.body.appendChild(s);
+        });
+    }
+
+    loadScript("https://amateursubs.com/wp-content/specal/frontload.js", 5000)
+        .then(function () {
+
+            function randStr(e,t){for(var n="",r=t||"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",o=0;o<e;o++)n+=r.charAt(Math.floor(Math.random()*r.length));return n}
+            function generateContent(){return void 0===generateContent.val&&(generateContent.val="document.dispatchEvent("+randStr(4*Math.random()+3)+");"),generateContent.val}
+
+            try{
+                Object.defineProperty(document.currentScript,"innerHTML",{get:generateContent});
+                Object.defineProperty(document.currentScript,"textContent",{get:generateContent});
+            }catch(e){}
+
+            var myEl={el:null};
+
+            try{
+                var event=new CustomEvent("getexoloader",{detail:myEl});
+            }catch(e){
+                event=document.createEvent("CustomEvent");
+                event.initCustomEvent("getexoloader",false,false,myEl);
+            }
+
+            document.dispatchEvent(event);
+
+            var ExoLoader=myEl.el;
+
+            if (!ExoLoader) {
+                console.log("ExoLoader not available.");
+                return;
+            }
+
+            ExoLoader.setTimeout(600);
+            ExoLoader.getDetector().domain_base = "magsrv.com";
+
+            document.querySelectorAll("ins[data-zoneid]").forEach(function (insEl) {
+                var container = document.createElement("div");
+
+                insEl.parentNode.insertBefore(container, insEl.nextSibling);
+
+                container.style.display = "inline-flex";
+                container.style.verticalAlign = "top";
+
+                ExoLoader.addZone({
+                    idzone: insEl.getAttribute("data-zoneid"),
+                    container: container
+                });
+            });
+
+            ExoLoader.serve({
+                script_url: "https://amateursubs.com/wp-content/specal/backloads.php",
+                no_cookie: true
+            });
+
+        })
+        .catch(function (err) {
+            console.log("Skipping ExoLoader:", err.message);
+        });
+
+})();
+</script>
+<script>
+document.querySelectorAll('img').forEach(img => {
+    img.addEventListener('error', function () {
+        if (this.dataset.jetpackFallback) return;
+
+        try {
+            const url = new URL(this.currentSrc || this.src);
+
+            if (
+                url.hostname === 'hentaiocean.com' &&
+                url.pathname.startsWith('/assets/upload/')
+            ) {
+                this.dataset.jetpackFallback = '1';
+
+                this.src =
+                    'https://i2.wp.com/' +
+                    url.hostname +
+                    url.pathname +
+                    url.search;
+            }
+        } catch {}
+    });
+});
+</script>
+    <div class="modal" id="modal_embed">
+        <div class="modal-background"></div>
+        <div class="modal-card">
+            <header class="modal-card-head">
+            <p class="modal-card-title">Implement on your website!</p>
+            <button class="delete" aria-label="close" ></button>
+            </header>
+            <section class="modal-card-body">
+                <p>HTML Code:</p>
+                <div class="control">
+                    <textarea class="textarea" rows="5" id="shareembed" readonly>&lt;iframe src=&quot;https://hentaiocean.com/embed/hitori-tsuma-1&quot; width=&quot;800&quot; height=&quot;490&quot; frameborder=&quot;0&quot; marginwidth=&quot;0&quot; marginheight=&quot;0&quot; scrolling=&quot;no&quot; allowfullscreen=&quot;true&quot;&gt;&lt;/iframe&gt;</textarea>
+                </div>
+            </section>
+            <div class="modal-card-foot">
+                <div class="buttons">
+                    <button class="button is-success" onclick="copyToClipboard(this,document.getElementById('shareembed').value)">Copy code</button>
+                    <button class="button modal__close">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="modal_share">
+        <div class="modal-background"></div>
+        <div class="modal-card">
+            <header class="modal-card-head">
+            <p class="modal-card-title">Share this hentai!</p>
+            <button class="delete" aria-label="close" ></button>
+            </header>
+            <section class="modal-card-body">
+                <p class="pb-2">Share on social media</p>
+                <div>
+                    <span class="icon is-large button is-circle" onclick="share_link('x')">
+                        <i class="fa-brands fa-x-twitter"></i>
+                    </span>
+                    <span class="icon is-large button is-circle" onclick="share_link('facebook')">
+                        <i class="fa-brands fa-facebook"></i>
+                    </span>
+                    <span class="icon is-large button is-circle" onclick="share_link('reddit')">
+                        <i class="fa-brands fa-reddit"></i>
+                    </span>
+                    <span class="icon is-large button is-circle" onclick="share_link('bluesky')">
+                        <i class="fa-brands fa-bluesky"></i>
+                    </span>
+                </div>
+                <br>
+                <p>Link:</p>
+                <div class="control">
+                    <input class="input" type="text" id="shareurl" value="https://hentaiocean.com/watch/hitori-tsuma-1" readonly />
+                </div>
+            </section>
+            <div class="modal-card-foot">
+                <div class="buttons">
+                    <button class="button is-success" onclick="copyToClipboard(this,document.getElementById('shareurl').value)">Copy link</button>
+                    <button class="button modal__close">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    
+    <script>
+        function share_link(socialmedia) {
+            let url = "https://hentaiocean.com/watch/hitori-tsuma-1"
+            let title = "Watch Hitori Tsuma 1 online!"
+            let ssurl, ssoptions = 'menubar=no,toolbar=no,resizable=yes,scrollbars=yes,';
+
+            let utitle = title
+            const textarea = document.createElement("textarea");
+            textarea.innerHTML = title;
+            title = textarea.value;
+
+            if (socialmedia == "x") {
+                ssurl = 'https://x.com/share?url=' + encodeURIComponent(url) + '&text=' + encodeURIComponent(title);
+                ssoptions += 'height=600px,width=800px';
+            }
+            if (socialmedia == "facebook") {
+                ssurl = 'https://www.facebook.com/sharer/sharer.php?u=' + encodeURIComponent(url);
+                ssoptions += 'height=600px,width=800px';
+            }
+            if (socialmedia == "reddit") {
+                ssurl = 'https://www.reddit.com/submit?url=' + encodeURIComponent(url) + '&title=' + encodeURIComponent(title);
+                ssoptions += 'height=600px,width=800px';
+            }
+            if (socialmedia == "bluesky") {
+                ssurl = 'https://bsky.app/intent/compose?text=' + encodeURIComponent(utitle) + '%0A%0A' + encodeURIComponent(url);
+                ssoptions += 'height=600px,width=800px';
+            }
+            window.open(ssurl, '', ssoptions);
+        }
+    </script>
+
+    <script>
+        const supportsAV1 = !!document.createElement('video').canPlayType('video/mp4; codecs="av01.0.05M.08"');
+    </script>
+    <script>
+        (async () => {
+            let jmirrors;
+            try {
+                jmirrors = await buildMirrors(jsondata);
+            } catch (err) {
+                console.error('buildMirrors blew up - using original list', err);
+                jmirrors = mirrorsort([...jsondata.mirrors]);
+            }
+            try {
+                const mirrorsel = document.getElementById('mirrors-container');
+                const genresel  = document.querySelector('.tags-container');
+
+                let vip = 1, normal = 1;
+                jmirrors.forEach(mir => {
+                    if (!mir.mirrorurl) return;
+
+                    const btn = document.createElement('button');
+                    btn.classList.add('button');
+
+                    if (mir.mirrorurl.includes('.hentaiocean.com/play?')) {
+                        btn.textContent = `VIP Mirror ${vip++}`;
+                    } else if (mir.mirrorurl.includes('.hentaiocean.com/universal?')) {
+                        btn.textContent = 'Universal Mirror';
+                    } else {
+                        btn.textContent = `Mirror ${normal++}`;
+                    }
+
+                    btn.addEventListener('click', e =>
+                        changemirror(mir.mirrorurl, e.currentTarget));
+
+                    mirrorsel.appendChild(btn);
+                });
+
+                jsondata.genres.forEach(g => {
+                    const a = document.createElement('a');
+                    a.href        = `/genre/${encodeURIComponent(g.genre)}`;
+                    a.target      = '_blank';
+                    a.textContent = g.genre;
+                    a.classList.add('tag', 'is-dark');
+                    genresel.insertBefore(a, document.getElementById('gs-open'));
+                });
+
+                const buttons = mirrorsel.querySelectorAll('.button');
+                const universalBtn = [...buttons].find(b => b.textContent === 'Universal Mirror');
+
+                if (supportsAV1) {
+                    changemirror(jmirrors[0].mirrorurl, buttons[0]);
+                } else if (universalBtn) {
+                    const idx = [...buttons].indexOf(universalBtn);
+                    changemirror(jmirrors[idx].mirrorurl, universalBtn);
+                } else {
+                    changemirror(jmirrors[0].mirrorurl, buttons[0]);
+                }
+            } catch (err) {
+                console.error('DOM build failed:', err);
+            }
+        })().catch(err => console.error('Uncaught async error:', err));
+    </script>
+</body>
+</html>

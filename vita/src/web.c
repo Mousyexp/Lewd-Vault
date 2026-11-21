@@ -1718,11 +1718,12 @@ static void find_add(int k) {
 //  like the others, with its rows, and □ in the switcher removes it)
 static int own_open, own_sel, own_site_i;
 static char own_tags[64], own_title[48];
+static char own_addr[160]; static int own_kind; // (your own source: its address and how it answers)
 static int own_sites(int *out) {
   int n = 0;
   for (int s2 = 0; s2 < LV_NSITES && n < 64; s2++) {
     const LvSite *st = &LV_SITES[s2];
-    int vid = st->kind == BK_KVS || st->kind == BK_XV || st->kind == BK_HWORLD || st->kind == BK_HCLOUD || st->kind == BK_HCITY ||
+    int vid = st->kind == BK_KVS || st->kind == BK_XV || st->kind == BK_HWORLD || st->kind == BK_HCLOUD || st->kind == BK_HCITY || st->kind == BK_HOCEAN ||
               ((st->kind == BK_DANBOORU || st->kind == BK_GELBOORU || st->kind == BK_MOEBOORU) && !st->hidden);
     if (vid && st->base) out[n++] = s2;
   }
@@ -1730,53 +1731,55 @@ static int own_sites(int *out) {
 }
 static int vsrc_add_own(const char *site, const char *tags, const char *title);
 static unsigned own_at; // (when it opened: it rises in)
-static void own_window_open(void) { own_open = 1; own_at = frame_no; own_sel = 0; own_tags[0] = 0; own_title[0] = 0; sfx(SFX_OPEN); }
+static void own_window_open(void) { own_open = 1; own_at = frame_no; own_sel = 0; own_tags[0] = 0; own_title[0] = 0; own_addr[0] = 0; own_kind = 1; sfx(SFX_OPEN); }
 static void draw_own_window(void) {
-  int sites[64], ns = own_sites(sites);
-  if (own_site_i >= ns) own_site_i = 0;
-  const LvSite *st = ns ? &LV_SITES[sites[own_site_i]] : NULL;
+  static const char *const PROTO[4] = {"Danbooru", "Gelbooru", "Moebooru (yande.re-like)", "e621"};
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 170));
   float rise = 1 - fminf(1, (frame_no - own_at) / 12.0f);
-  const int ww = 600, wh = 362, wx = (W - ww) / 2, wy = (H - wh) / 2 + (int)(rise * rise * 40); // (it rises in)
+  const int ww = 640, wh = 420, wx = (W - ww) / 2, wy = (H - wh) / 2 + (int)(rise * rise * 40); // (it rises in)
   rrect(wx, wy + 4, ww, wh, 24, RGBA(0, 0, 0, 90));
   rrect(wx, wy, ww, wh, 24, SURF);
   rrect(wx + 2, wy + 2, ww - 4, 60, 22, with_alpha(TEXT, 8));
   icon("plus", wx + 32, wy + 32, ACC);
-  text(wx + 54, wy + 40, TEXT, 21, "Your own video source");
-  text(wx + 24, wy + 82, DIM, 14, "Three steps: a site, the tags to ask it for, a name. It joins the video sources.");
-  const char *lab[3] = {"1  Site", "2  Tags", "3  Name"};
-  char val[3][96];
-  snprintf(val[0], 96, "‹  %s  ›", st ? st->name : "(none)");
-  snprintf(val[1], 96, "%s", own_tags[0] ? own_tags : "✕ to type (like overwatch, or milf uncensored)");
-  snprintf(val[2], 96, "%s", own_title[0] ? own_title : "✕ to type (it's what the source is called)");
-  for (int k = 0; k < 3; k++) {
-    int ry = wy + 98 + k * 58, on = k == own_sel;
+  text(wx + 54, wy + 40, TEXT, 21, "Your own source");
+  text(wx + 24, wy + 82, DIM, 14, "Any site that answers like one of these: its name, its address, how it answers.");
+  const char *lab[4] = {"1  Name", "2  Address", "3  Answers as", "4  Tags"};
+  char val[4][160];
+  snprintf(val[0], 160, "%s", own_title[0] ? own_title : "\u2715 to type (what it's called)");
+  snprintf(val[1], 160, "%s", own_addr[0] ? own_addr : "\u2715 to type (like https://example.booru.org)");
+  snprintf(val[2], 160, "\u2039  %s  \u203a", PROTO[own_kind]);
+  snprintf(val[3], 160, "%s", own_tags[0] ? own_tags : "\u2715 to type (optional: video, or what it's about)");
+  for (int k = 0; k < 4; k++) {
+    int ry = wy + 98 + k * 58, on = k == own_sel, empty = (k == 0 && !own_title[0]) || (k == 1 && !own_addr[0]) || (k == 3 && !own_tags[0]);
     if (on) glass(wx + 16, ry, ww - 32, 50, 0); else rrect(wx + 16, ry, ww - 32, 50, 16, with_alpha(SURF2, 150));
     text(wx + 34, ry + 32, DIM, 15, lab[k]);
-    text_fit(wx + 110, ry + 32, (k && !(k == 1 ? own_tags[0] : own_title[0])) ? FAINT : TEXT, 16, val[k], ww - 150);
+    text_fit(wx + 170, ry + 32, empty ? FAINT : TEXT, 16, val[k], ww - 210);
     if (hit(wx + 16, ry, ww - 32, 50)) {
       own_sel = k;
-      if (k == 0) { int d = in.tap_x < wx + ww / 2 ? -1 : 1; own_site_i = (own_site_i + d + ns) % (ns ? ns : 1); sfx(SFX_TICK); }
+      if (k == 2) { own_kind = (own_kind + (in.tap_x < wx + ww / 2 ? 3 : 1)) % 4; sfx(SFX_TICK); }
       else in.pressed |= SCE_CTRL_CROSS;
     }
   }
-  int ok = st && own_tags[0];
-  int bw = 160, bx = wx + ww - 16 - bw, by = wy + wh - 62;
+  int ok = own_title[0] && !strncmp(own_addr, "http", 4);
+  int bw = 180, bx = wx + ww - 16 - bw, by = wy + wh - 62;
   rrect_round(bx, by, bw, 46, 23, ok ? ACC : with_alpha(SURF2, 200));
   text_center(bx + bw / 2, by + 30, ok ? RGBA(20, 12, 16, 255) : FAINT, 17, "Save source");
-  text(wx + 24, by + 30, FAINT, 13, ok ? "Ready: Save source (START)" : !st ? "1: pick a site (\u2190\u2192)" : "2: tags to ask for (\u2715 to type)");
+  text(wx + 24, by + 30, FAINT, 13, ok ? "Ready: Save source (START)" : !own_title[0] ? "1: its name (\u2715 to type)" : "2: its address, starting https://");
   int add = (hit(bx, by, bw, 46) || (in.pressed & SCE_CTRL_START)) && ok;
-  if (in.pressed & SCE_CTRL_DOWN) { own_sel = (own_sel + 1) % 3; sfx(SFX_TICK); }
-  if (in.pressed & SCE_CTRL_UP) { own_sel = (own_sel + 2) % 3; sfx(SFX_TICK); }
-  if (own_sel == 0 && (in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_RIGHT)) && ns) { own_site_i = (own_site_i + ((in.pressed & SCE_CTRL_RIGHT) ? 1 : ns - 1)) % ns; sfx(SFX_TICK); }
+  if (in.pressed & SCE_CTRL_DOWN) { own_sel = (own_sel + 1) % 4; sfx(SFX_TICK); }
+  if (in.pressed & SCE_CTRL_UP) { own_sel = (own_sel + 3) % 4; sfx(SFX_TICK); }
+  if (own_sel == 2 && (in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_RIGHT))) { own_kind = (own_kind + ((in.pressed & SCE_CTRL_RIGHT) ? 1 : 3)) % 4; sfx(SFX_TICK); }
   if ((in.pressed & SCE_CTRL_CROSS) && !ime_open) {
-    if (own_sel == 1) ime_start(20, "Tags to ask the site for", own_tags, 0);
-    else if (own_sel == 2) ime_start(21, "A name for the source", own_title[0] ? own_title : own_tags, 0);
+    if (own_sel == 0) ime_start(21, "The source's name", own_title, 0);
+    else if (own_sel == 1) ime_start(24, "Its address (https://...)", own_addr[0] ? own_addr : "https://", 0);
+    else if (own_sel == 3) ime_start(20, "Tags to ask it for (optional)", own_tags, 0);
   }
   if (add) {
-    char title[48];
-    snprintf(title, sizeof title, "%s", own_title[0] ? own_title : own_tags);
-    if (vsrc_add_own(st->name, own_tags, title) == 0) { sfx(SFX_DONE); say("Added to the video sources"); own_open = 0; }
+    static const int KIND[4] = {BK_DANBOORU, BK_GELBOORU, BK_MOEBOORU, BK_E621};
+    int have = 0;
+    for (int k = 0; k < LV_NSITES; k++) if (!strcmp(LV_SITES[k].name, own_title)) have = 1;
+    if (!have && lv_booru_add_site(own_title, KIND[own_kind], own_addr) == 0) custom_sites_save();
+    if (vsrc_add_own(own_title, own_tags[0] ? own_tags : "video", own_title) == 0) { sfx(SFX_DONE); say("Added: it's with the video sources, and the picture sites"); own_open = 0; }
     else { sfx(SFX_ERROR); say("No room, or one has that name already"); }
   }
   if ((in.pressed & SCE_CTRL_CIRCLE) || (in.tap && !(in.tap_x >= wx && in.tap_x < wx + ww && in.tap_y >= wy && in.tap_y < wy + wh))) { own_open = 0; sfx(SFX_CLOSE); }

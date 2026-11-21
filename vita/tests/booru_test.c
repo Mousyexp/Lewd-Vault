@@ -117,6 +117,29 @@ int main(void) {
     CHECK(lv_item_check(&hw, &q, t) == 1 && strstr(q.file, "cdn.hentaiworld.tv/") && strstr(q.file, "video.mp4"), "hw episode mp4 %s", q.file);
     free(q.file);
     free(t);
+    // HentaiOcean: its feed, 24 a page, a search over its titles; an episode's page naming its file
+    {
+      LvSite ho = {"HentaiOcean", BK_HOCEAN, "https://hentaiocean.com", NULL, 0, 0, NULL, NULL, NULL, 1};
+      char hu[400];
+      lv_booru_url_ex(&ho, "", LV_R_ALL, LV_SORT_LATEST, 0, NULL, 1, hu, sizeof hu);
+      CHECK(!strcmp(hu, "https://hentaiocean.com/rss.xml"), "ho url %s", hu);
+      char *rt = slurp("tests/booru/hocean_rss.xml", &n);
+      int hc2 = 0;
+      LvPost *hp = lv_booru_parse(&ho, rt, n, LV_R_ALL, &hc2);
+      CHECK(hp && hc2 == 24 && !strncmp(hp[0].page, "https://hentaiocean.com/watch/", 30) && strstr(hp[0].preview, "/assets/cover/"), "ho feed %d", hc2);
+      lv_posts_free(hp, hc2);
+      lv_booru_url_ex(&ho, "showtime", LV_R_ALL, LV_SORT_LATEST, 0, NULL, 1, hu, sizeof hu);
+      hp = lv_booru_parse(&ho, rt, n, LV_R_ALL, &hc2);
+      CHECK(hp && hc2 >= 1 && strcasestr(hp[0].tags, "showtime"), "ho search %d", hc2);
+      lv_posts_free(hp, hc2);
+      free(rt);
+      rt = slurp("tests/booru/hocean_watch.html", &n);
+      LvPost hq = {0};
+      hq.file = strdup("x");
+      CHECK(lv_item_check(&ho, &hq, rt) == 1 && !strcmp(hq.file, "https://w2.hentaiocean.com/video/%5BHentaiOcean.com%5D%20Hitori%20Tsuma%2001.mp4"), "ho file %s", hq.file);
+      free(hq.file);
+      free(rt);
+    }
     t = slurp("tests/booru/hcloud_list.html", &n);
     p = lv_booru_parse(&hc, t, n, LV_R_ALL, &c);
     CHECK(p && c >= 20, "hc cards %d", c);

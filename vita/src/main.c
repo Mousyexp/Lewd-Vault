@@ -5459,6 +5459,7 @@ int main(void) {
       if (r == 1 && ime_for == 22 && got[0]) otag_add(got); // (a tag of your own, for a save)
       if (r == 1 && ime_for == 23) snprintf(otag_title, sizeof otag_title, "%s", got); // (and a video's title)
       if (r == 1 && ime_for == 21) snprintf(own_title, sizeof own_title, "%s", got); // (and its name)
+      if (r == 1 && ime_for == 24) snprintf(own_addr, sizeof own_addr, "%s", got); // (and its address)
       if (r == 1 && ime_for == 15) { snprintf(mg.query, sizeof mg.query, "%s", got); mg_search(); }
       if (r == 1 && ime_for == 17 && got[0]) { snprintf(conv_keys[conv_sel], sizeof conv_keys[conv_sel], "%s", got); conv_keys_save(); sfx(SFX_DONE); say("Key saved"); }
       if (r == 1 && ime_for == 16 && got[0]) { for (char *c = got; *c; c++) if (*c == ',' || *c == '"') *c = ' '; snprintf(sw_cat, sizeof sw_cat, "%.63s", got); sw_catsel = sw_ncats() - 1; }
