@@ -147,8 +147,8 @@ static int vsource_site(int k) {
 
 #define VB_ROWS 8 // (at most: the source's own, five orders or a New row and its genres)
 #define VB_PER 24
-#define VB_CW 190
-#define VB_CH 107
+#define VB_CW 236
+#define VB_CH 133 // (bigger cards: fewer at a time, easier to see)
 #define HERO_H 270
 // A row: its title, the order asked for and, for a genre, the words searched for with the source's
 typedef struct { const char *title; int sort, span; const char *tag; } VRowDef;
@@ -526,13 +526,22 @@ static void vb_title_of(const LvPost *p, char *out, size_t cap) {
   const char *pg = p && p->page ? p->page : "";
   size_t pl = strlen(pg); while (pl && pg[pl - 1] == '/') pl--;
   size_t ps = pl; while (ps && pg[ps - 1] != '/') ps--;
+  // (an address ending in its language, ".../title/english", or a bare number: the part before)
+  static const char *const LANG[] = {"english", "eng", "en", "raw", "sub", "dub", "subbed", "dubbed", "uncensored", NULL};
+  for (int tries = 0; tries < 2 && ps > 1; tries++) {
+    int skip = 1;
+    for (size_t i = ps; i < pl; i++) if (!isdigit((unsigned char)pg[i])) skip = 0;
+    for (int k = 0; LANG[k] && !skip; k++) if (pl - ps == strlen(LANG[k]) && !strncasecmp(pg + ps, LANG[k], pl - ps)) skip = 1;
+    if (!skip) break;
+    pl = ps - 1; ps = pl; while (ps && pg[ps - 1] != '/') ps--;
+  }
   size_t j = 0;
   for (size_t i = ps; i < pl && j < cap - 1 && pg[i] != '?' && pg[i] != '.'; i++) out[j++] = pg[i] == '-' || pg[i] == '_' ? ' ' : pg[i];
   out[j] = 0;
   if (out[0]) out[0] = (char)toupper((unsigned char)out[0]);
 }
 static int vb_all_row = -1; static float vb_all_scroll; static unsigned vb_all_at; // (All: the row's window, over the page)
-static int vb_lock; static int vb_free; static float vb_vy; // (a touch: locked to across or down; scrolled freely by it)
+static int vb_lock; static int vb_free; static float vb_vy; static int vb_free_x[VB_ROWS + 1]; // (a row moved by touch: stays where it was left until the D-pad moves in it) // (a touch: locked to across or down; scrolled freely by it)
 static int vb_hero_k; static unsigned vb_hero_at; static float vb_hero_x; // (the carousel: which, since when, dragged)
 static void draw_vb_all(void);
 static void draw_videos(void) {
@@ -557,10 +566,10 @@ static void draw_videos(void) {
   // where the view is: the chosen row in sight (the banner scrolls away as rows go down)
   int vis = 0; // (the chosen row's place among those shown)
   for (int r = 0; r < vb_row && r < VB_ROWS; r++) vis += vb_row_shown(r);
-  float target = vb_row == 0 ? 0 : HERO_H - 120 + (vis - 1) * (VB_CH + 52);
+  float target = vb_row == 0 ? 0 : HERO_H - 94 + (vis - 1) * (VB_CH + 52);
   int nshown_rows = 0;
   for (int r = 0; r < VB_ROWS; r++) nshown_rows += vb_row_shown(r);
-  float vmax = HERO_H - 30 + (nshown_rows + (nup ? 1 : 0)) * (VB_CH + 52) - (H - BAR) + 20;
+  float vmax = HERO_H - 4 + (nshown_rows + (nup ? 1 : 0)) * (VB_CH + 52) - (H - BAR) + 20;
   if (vmax < 0) vmax = 0;
   if (in.touching && vb_lock == 2) { vb_y -= in.drag_dy; vb_vy = 0; vb_free = 1; }
   else if (in.flicked && vb_lock == 2) vb_vy = -in.fvy * 1.2f;
@@ -569,70 +578,62 @@ static void draw_videos(void) {
     if (vb_y < 0) { vb_y = 0; vb_vy = 0; } if (vb_y > vmax) { vb_y = vmax; vb_vy = 0; }
     // (the row nearest the middle of the view becomes the chosen one, for the buttons)
     if (!in.touching) { int best = 0, k = 0; float bd = 1e9f;
-      for (int r = 0; r < VB_ROWS; r++) if (vb_row_shown(r)) { float ry = HERO_H - 30 + k * (VB_CH + 52) + VB_CH / 2 - vb_y; float d = fabsf(ry - H / 2); if (d < bd) { bd = d; best = r; } k++; }
+      for (int r = 0; r < VB_ROWS; r++) if (vb_row_shown(r)) { float ry = HERO_H - 4 + k * (VB_CH + 52) + VB_CH / 2 - vb_y; float d = fabsf(ry - H / 2); if (d < bd) { bd = d; best = r; } k++; }
       if (vb_y < 60) best = 0;
       vb_row = best; }
   } else vb_y += (target - vb_y) * ease(0.22f);
   float y0 = -vb_y;
-  // ---- the banner: a carousel of the first five of the first row, turning by itself every six
-  //      seconds or by a swipe; the picture behind, the card itself sharp at the right, the title big ----
+  // ---- the top: the chosen video, its picture over the right half (its own shape, not stretched),
+  //      fading into the page at its left; its name big, its tags as glass chips, Play ----
   VRow *r0 = &vrows[0];
-  int nh = r0->n < 5 ? r0->n : 5;
-  if (nh && vb_hero_k >= nh) vb_hero_k = 0;
-  if (nh > 1 && !in.touching && frame_no - vb_hero_at > 360) { vb_hero_k = (vb_hero_k + 1) % nh; vb_hero_at = frame_no; vb_hero_x = W * 0.4f; }
-  if (in.touching && vb_lock == 1 && in.down_y < y0 + HERO_H - 40 && in.down_y > 60) vb_hero_x += in.drag_dx;
-  else if (fabsf(vb_hero_x) > W * 0.15f && !in.touching && nh > 1 && vb_lock == 0 && fabsf(vb_hero_x) < W) { int d = vb_hero_x < 0 ? 1 : -1; vb_hero_k = (vb_hero_k + d + nh) % nh; vb_hero_at = frame_no; vb_hero_x = -d * W * 0.4f; }
-  if (!in.touching) vb_hero_x += (0 - vb_hero_x) * ease(0.18f);
+  VRow *hr = vb_row < VB_ROWS && vrows[vb_row].n ? &vrows[vb_row] : r0;
+  int hk = vb_row < VB_ROWS && vrows[vb_row].n ? vb_col[vb_row] : 0;
+  if (hk >= hr->n) hk = hr->n ? hr->n - 1 : 0;
+  int hrow = hr == r0 ? 0 : vb_row;
+  (void)vb_hero_k; (void)vb_hero_at; (void)vb_hero_x;
   if (y0 + HERO_H > 0) {
-    vita2d_texture *bt = vb_hero_k == 0 && vb_hero ? vb_hero : (nh ? r0->tex[vb_hero_k] : NULL);
-    if (bt) {
-      float tw = vita2d_texture_get_width(bt), th = vita2d_texture_get_height(bt);
-      float u = 0.5f - 0.5f * cosf(frame_no * 6.2832f / 1500), z = 1.12f;
-      float pw = tw / z, ph = th / z;
-      vita2d_draw_texture_part_scale(bt, vb_hero_x * 0.3f, y0, (tw - pw) * u, (th - ph) * 0.4f, pw, ph, W / pw, HERO_H / ph);
-    } else rrect(0, y0, W, HERO_H, 0, RGBA(30, 20, 30, 255));
-    grad(0, y0 + HERO_H - 140, W, 140, RGBA(8, 6, 10, 255), 15, 255, 0);
-    grad(0, y0, 520, HERO_H, RGBA(8, 6, 10, 255), 230, 0, 1);
-    // the card itself, sharp, at the right, in a glass frame, sliding with the swipe
-    vita2d_texture *ct = nh ? r0->tex[vb_hero_k] : NULL;
-    if (ct) {
-      float cw = 300, ch2 = 169, cx = W - cw - 36 + vb_hero_x, cy = y0 + 66;
-      rrect(cx - 5, cy - 3, cw + 10, ch2 + 10, 16, RGBA(0, 0, 0, 120));
-      rrect(cx - 4, cy - 4, cw + 8, ch2 + 8, 16, with_alpha(TEXT, 40));
-      draw_cover_round(ct, cx, cy, cw, ch2, 12, RGBA(255, 255, 255, 255));
-    }
-  }
-  if (y0 + HERO_H > 0) {
-    text(32, y0 + 84, ACC, 15, src->name);
-    if (nh) {
+    vita2d_texture *bt = hr == r0 && hk == 0 && vb_hero ? vb_hero : (hr->n && hk < VB_PER ? hr->tex[hk] : NULL);
+    const float px0 = W * 0.42f, pw = W - px0;
+    if (bt) draw_cover(bt, px0, y0, pw, HERO_H, RGBA(255, 255, 255, 255));
+    else rrect(px0, y0, pw, HERO_H, 0, RGBA(30, 20, 30, 255));
+    grad(px0, y0, 220, HERO_H, RGBA(8, 6, 10, 255), 255, 0, 1);       // (its left edge fading into the page)
+    grad(px0, y0 + HERO_H - 90, pw, 90, RGBA(8, 6, 10, 255), 0, 255, 0); // (and its foot)
+    if (hr->n) { // (no source name over it: the source button says it already)
       char tt[160];
-      vb_title_of(&r0->p[vb_hero_k], tt, sizeof tt);
-      if (!tt[0]) snprintf(tt, sizeof tt, "%s", VROWS[0].title);
-      // (the title: big and heavy, drawn three times a pixel apart, two lines at most)
-      int tx = 30 + (int)(vb_hero_x * 0.5f);
-      for (int o = 0; o < 3; o++) text_fit(tx + (o == 1), y0 + 126 + (o == 2), TEXT, 34, tt, W - 420);
-      char t[160];
-      snprintf(t, sizeof t, "%.150s", r0->p[vb_hero_k].tags ? r0->p[vb_hero_k].tags : "");
-      text_fit(30, y0 + 154, DIM, 14, t, W - 420);
-      // Play: a round glass button of the accent, its glow breathing; pressed, it gives a little
-      float pcx = 64, pcy = y0 + 206, pr = 28;
+      vb_title_of(&hr->p[hk], tt, sizeof tt);
+      if (!tt[0]) snprintf(tt, sizeof tt, "%s", VROWS[hrow].title);
+      for (int o = 0; o < 3; o++) text_fit(30 + (o == 1), y0 + 110 + (o == 2), TEXT, 30, tt, (int)px0 - 30);
+      // its tags: glass chips, two lines at most
+      { char tg[600]; snprintf(tg, sizeof tg, "%s", hr->p[hk].tags ? hr->p[hk].tags : "");
+        int cx = 30, cy = (int)y0 + 130, lines = 0;
+        for (char *t = strtok(tg, " "); t && lines < 2; t = strtok(NULL, " ")) {
+          for (char *c = t; *c; c++) if (*c == '_') *c = ' ';
+          if (strcasestr(tt, t) || strlen(t) < 3) continue; // (a word of its name isn't a tag)
+          int cw = text_w(12, t) + 20;
+          if (cw > 170) continue;
+          if (cx + cw > px0 + 40) { cx = 30; cy += 30; lines++; if (lines >= 2) break; }
+          rrect(cx, cy, cw, 24, 12, with_alpha(TEXT, 26));
+          rrect(cx + 1, cy + 1, cw - 2, 10, 5, with_alpha(TEXT, 14));
+          text(cx + 10, cy + 17, DIM, 12, t);
+          cx += cw + 6;
+        } }
+      // Play: a pink glass button, a glow beating behind it like a heart; its triangle centred
+      float pcx = 60, pcy = y0 + 222, pr = 24;
       int pressed = in.touching && hypotf(in.tx - pcx, in.ty - pcy) < pr + 6;
-      float br = 0.5f + 0.5f * sinf(frame_no * 0.08f);
-      circle(pcx, pcy, pr + 6 + br * 4, with_alpha(ACC, (int)(50 + 40 * br)));
+      float bt2 = fmodf(frame_no / 60.0f, 1.1f), beat = bt2 < 0.12f ? sinf(bt2 / 0.12f * 3.14159f) : bt2 > 0.22f && bt2 < 0.34f ? 0.7f * sinf((bt2 - 0.22f) / 0.12f * 3.14159f) : 0;
+      for (int g = 3; g >= 1; g--) circle(pcx, pcy, pr + g * 5 + beat * 6, with_alpha(ACC, (int)((18 + 40 * beat) / g)));
       circle(pcx, pcy + 2, pr * (pressed ? 0.9f : 1), RGBA(0, 0, 0, 90));
       circle(pcx, pcy, pr * (pressed ? 0.9f : 1), ACC);
       circle(pcx, pcy - pr * 0.3f, pr * 0.62f, RGBA(255, 255, 255, 50));
-      vc_tri(pcx + 4, pcy, 13, RGBA(20, 12, 16, 255));
-      text(pcx + 42, pcy + 7, TEXT, 19, "Play");
-      if (hit((int)(pcx - pr - 4), (int)(pcy - pr - 4), (int)(pr * 2 + 70), (int)(pr * 2 + 8))) { sfx(SFX_SELECT); vb_play(0, vb_hero_k); in = vb_keep; return; }
-      // (which of the five: dots)
-      for (int k = 0; k < nh; k++) circle(W - 36 - 150 - (nh - 1) * 8 + k * 16 + vb_hero_x, y0 + 252, k == vb_hero_k ? 4 : 3, with_alpha(TEXT, k == vb_hero_k ? 240 : 90));
+      vc_tri(pcx - 3, pcy, 12, RGBA(20, 12, 16, 255));
+      text(pcx + 40, pcy + 7, TEXT, 19, "Play");
+      if (hit((int)(pcx - pr - 4), (int)(pcy - pr - 4), (int)(pr * 2 + 80), (int)(pr * 2 + 8))) { sfx(SFX_SELECT); vb_play(hrow, hk); in = vb_keep; return; }
     } else if (r0->state == 3) text_fit(30, y0 + 134, ACC2, 16, r0->err, 600);
     else if (site >= 0 && LV_SITES[site].needs_key && !wkeys[site][0]) text_fit(30, y0 + 134, ACC2, 16, "Needs your account's API key: the Browser's Filter → API key", 600);
     else spinner(60, y0 + 140, 16);
   }
   // ---- the rows ----
-  int ry = (int)y0 + HERO_H - 30;
+  int ry = (int)y0 + HERO_H - 4;
   for (int r = 0; r < VB_ROWS; r++) {
     VRow *row = &vrows[r];
     if (!vb_row_shown(r)) continue; // (the same as a row above, a genre with nothing, or one this source hasn't)
@@ -649,8 +650,18 @@ static void draw_videos(void) {
     float want = vb_col[r] * (VB_CW + 12) - (W - 60 - VB_CW) / 2.0f;
     if (want < 0) want = 0;
     int held = in.touching && vb_lock == 1 && in.down_y > ry && in.down_y < ry + VB_CH + 40;
-    if (held) { vb_x[r] -= in.drag_dx; vb_row = r; if (in.moved) { int c = (int)((vb_x[r] + (W - 60 - VB_CW) / 2.0f) / (VB_CW + 12) + 0.5f); int mxc = row->n < VB_SHOW ? row->n : VB_SHOW; vb_col[r] = c < 0 ? 0 : c > mxc ? mxc : c; } } // (dragged: the card nearest the middle becomes the chosen one, so it doesn't spring back)
-    else if (r == vb_row || vb_x[r] > want + W) vb_x[r] += (want - vb_x[r]) * ease(0.25f);
+    // (dragged across: it follows the finger; let go, it carries on and slows by itself, no snapping
+    //  back; the card nearest the middle becomes the chosen one as it goes)
+    static float vb_xv[VB_ROWS + 1];
+    int mxc = row->n < VB_SHOW ? row->n : VB_SHOW;
+    float xmax = mxc * (VB_CW + 12) - (W - 60 - VB_CW) / 2.0f; if (xmax < 0) xmax = 0;
+    if (held) { vb_x[r] -= in.drag_dx; vb_xv[r] = -in.drag_dx / fmaxf(ft, 0.5f); vb_row = r; }
+    else if (fabsf(vb_xv[r]) > 0.4f) {
+      vb_x[r] += vb_xv[r] * ft; vb_xv[r] *= decay(0.93f);
+      if (vb_x[r] < 0) { vb_x[r] = 0; vb_xv[r] = 0; } if (vb_x[r] > xmax) { vb_x[r] = xmax; vb_xv[r] = 0; }
+    } else if (r == vb_row && in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_RIGHT | SCE_CTRL_UP | SCE_CTRL_DOWN)) vb_xv[r] = 0;
+    if (held || fabsf(vb_xv[r]) > 0.4f) { int c = (int)((vb_x[r] + (W - 60 - VB_CW) / 2.0f) / (VB_CW + 12) + 0.5f); vb_col[r] = c < 0 ? 0 : c > mxc ? mxc : c; vb_free_x[r] = 1; }
+    else if (!vb_free_x[r] && (r == vb_row || vb_x[r] > want + W)) vb_x[r] += (want - vb_x[r]) * ease(0.25f);
     for (int k = 0; k < row->n && k < VB_SHOW; k++) {
       float x = 30 + k * (VB_CW + 12) - vb_x[r];
       if (x > W || x + VB_CW < 0) continue;
@@ -665,8 +676,8 @@ static void draw_videos(void) {
       else rrect(x - g, cy - g, VB_CW + 2 * g, VB_CH + 2 * g, 10, SURF);
       if (on) focus_ring(x - g, cy - g, VB_CW + 2 * g, VB_CH + 2 * g);
       // the play badge, the kind
-      circle(x + 22, cy + VB_CH - 20, 13, RGBA(0, 0, 0, 150));
-      text_center(x + 23, cy + VB_CH - 15, TEXT, 13, "▶");
+      circle(x + 22, cy + VB_CH - 20, 14, RGBA(0, 0, 0, 150));
+      vc_tri(x + 21, cy + VB_CH - 20, 7, TEXT); // (its triangle centred in the disc)
       char e[8];
       snprintf(e, sizeof e, "%s", row->p[k].ext);
       for (char *c = e; *c; c++) *c = (char)toupper((unsigned char)*c);
@@ -733,13 +744,7 @@ static void draw_videos(void) {
   if (hit(16, 10, sw, 40)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
   int kbw = kind_buttons(16 + sw + 10, 11, 1);
   if (screen != S_VIDEOS) { in = vb_keep; return; }
-  { // (this row in the Browser's grid: a glass button by the kinds)
-    int bx = 16 + sw + 10 + kbw + 10, bw2 = text_w(14, "In the Browser") + 44;
-    glass(bx, 10, bw2, 40, 0);
-    icon("grid", bx + 20, 30, TEXT);
-    text(bx + 34, 35, TEXT, 14, "In the Browser");
-    if (hit(bx, 10, bw2, 40)) { sfx(SFX_TAB); vb_all(vb_row < VB_ROWS ? vb_row : 0); in = vb_keep; return; }
-  }
+  (void)kbw;
   // ---- the buttons ----
   int last_row = nup ? VB_ROWS : VB_ROWS - 1, cur_n;
   in.pressed |= stick_dirs(); // (the left stick as the D-pad)
@@ -750,6 +755,7 @@ static void draw_videos(void) {
   VRow *cur = vb_row < VB_ROWS ? &vrows[vb_row] : NULL;
   // (a row's places: its cards, up to 14, then All; Up next: its favourites)
   cur_n = cur ? (cur->state == 2 ? (cur->n < VB_SHOW ? cur->n : VB_SHOW) + 1 : 0) : nup;
+  if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_LEFT)) vb_free_x[vb_row] = 0; // (the D-pad: the row follows the chosen card again)
   if (in.pressed & SCE_CTRL_RIGHT) { if (vb_col[vb_row] < cur_n - 1) { vb_col[vb_row]++; sfx(SFX_TICK); } }
   if (in.pressed & SCE_CTRL_LEFT) { if (vb_col[vb_row] > 0) { vb_col[vb_row]--; sfx(SFX_TICK); } }
   if ((in.pressed & SCE_CTRL_CROSS) && cur_n) {

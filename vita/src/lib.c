@@ -485,6 +485,14 @@ static void lib_after_change(void) { refilter(); if (sel >= nshown) sel = nshown
 // outline springs out from it and settles, a little past and back, as it lands.
 static unsigned sheet_clip_at; // (a sheet opening: what's drawn after it is cut at the edge it has reached)
 static void sheet_cover_draw(void) { if (sheet_clip_at == frame_no) vita2d_disable_clipping(); } // (main loop, after the screen)
+// (a sheet at the screen's side opening: how far off to the right it still is, sliding in, easing)
+static int sheet_off(void) {
+  static unsigned last, opened;
+  if (frame_no - last > 2) opened = frame_no;
+  last = frame_no;
+  float u = fminf(1, (frame_no - opened) / 13.0f), e = (1 - u) * (1 - u) * (1 - u);
+  return (int)(e * 420);
+}
 static void sheet_frame(int x, int y, int w, int h) {
   static unsigned last, opened;
   if (frame_no - last > 2) opened = frame_no;
@@ -494,7 +502,7 @@ static void sheet_frame(int x, int y, int w, int h) {
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, (int)(150 * fminf(1, age / 6.0f))));
   // (opening: it unrolls from its left edge; what is past the edge reached is not drawn yet)
   float e = 1 - (1 - p) * (1 - p) * (1 - p);
-  if (p < 1) { vita2d_set_clip_rectangle(0, 0, x + (int)(w * e), H); vita2d_enable_clipping(); sheet_clip_at = frame_no; }
+  (void)e; // (it slides in from the side now: sheet_off)
   rrect(x, y, w, h, 16, SURF);
 }
 static int sheet_row(int k, int x, int y, int w, int rh, const char *name, const char *value) {
@@ -526,8 +534,8 @@ static int sheet_nav(int n) {
 static void sheet_close(void) { sfx(SFX_CLOSE); lsheet = LS_NONE; save_edits_now(); }
 // The order: a list to pick from (△ or the button opens it; ✕ or a tap picks)
 static void draw_sort_sheet(void) {
-  static const char *const SORT_ICONS[NSORTS] = {"newest", "oldest", "eye", "star", "heart", "shuffle", "sparkle", "eye_off", "history", "hourglass"};
-  const int rh = 46, w = 320, h = NSORTS * rh + 56, x = W - w - 16, y = 12;
+  static const char *const SORT_ICONS[NSORTS] = {"newest", "oldest", "eye", "star", "heart", "shuffle", "sparkle", "eye_off", "history", "hourglass", "stack"}; // (one per order: a missing one was a crash)
+  const int rh = 42, w = 320, h = NSORTS * rh + 52, x = W - w - 16 + sheet_off(), y = 10;
   sheet_frame(x, y, w, h);
   text(x + 20, y + 32, TEXT, 18, "Order");
   for (int k = 0; k < NSORTS; k++) {
@@ -567,7 +575,7 @@ static void draw_filters_sheet(void) {
   if (!saved_loaded) saved_load();
   enum { F_SEARCH, F_KIND, F_NSFW, F_STARS, F_ALBUM, F_COLL, F_SIZE, F_TAGS, F_SAVED, F_SAVE, F_RESET, F_N };
   // (rows a little taller, each with its icon; the list scrolls to keep the chosen one in sight)
-  int w = 470, x = W - w - 12, y = 12, rh = 54, view = H - 24 - 16;
+  int w = 400, x = W - w - 12 + sheet_off(), y = 12, rh = 54, view = H - 24 - 16; // (narrower: no empty middle)
   static float fs_scroll;
   float want = lsheet_sel * rh;
   if (want - fs_scroll > view - rh) fs_scroll = want - (view - rh);
@@ -808,7 +816,7 @@ static void draw_side(void) {
     int ry = top + (k - first) * rh;
     int dragging = in.touching && row_down == k && in.tx - in.down_x < -10 && abs(in.tx - in.down_x) > abs(in.ty - in.down_y);
     int off = dragging ? in.tx - in.down_x : 0;
-    if (off < 0) { rrect(x + 10, ry + 3, pw - 20, rh - 6, 14, RGBA(150, 60, 70, (int)fminf(255, -off * 2.5f))); text(x + pw - 110, ry + 31, TEXT, 14, "leave out"); }
+    off = 0; dragging = 0; // (no leaving out: a row isn't swiped aside)
     if (k == side_sel && !dragging) rrect(x + 10, ry + 3, pw - 20, rh - 6, 14, SURF2);
     char t[100];
     snprintf(t, sizeof t, "%.*s", tcounts[k].len > 90 ? 90 : tcounts[k].len, tcounts[k].t);
@@ -824,7 +832,7 @@ static void draw_side(void) {
   if (in.pressed & SCE_CTRL_DOWN) { if (side_sel + 1 < ntcounts) { side_sel++; sfx(SFX_TICK); } }
   if (in.pressed & SCE_CTRL_UP) { if (side_sel > 0) { side_sel--; sfx(SFX_TICK); } }
   if (in.pressed & SCE_CTRL_CROSS) side_add(side_sel, 0);
-  else if (in.pressed & SCE_CTRL_SQUARE) side_add(side_sel, 1);
+  // (leaving a tag out: no longer offered, by swipe or by □)
   if (closing || (in.pressed & SCE_CTRL_CIRCLE) || (in.tap && in.tap_x < x)) side_set(0);
   in.pressed = 0; in.tap = 0;
 }
@@ -835,7 +843,7 @@ static void draw_tags_sheet(void) {
   counted_at = frame_no;
   sheet_frame(12, 12, W - 24, H - 24);
   text(32, 44, TEXT, 20, "Tags of what's shown");
-  text(W - 32 - text_w(13, "✕ add   □ leave out   ○ back"), 44, FAINT, 13, "✕ add   □ leave out   ○ back");
+  text(W - 32 - text_w(13, "✕ add   ○ back"), 44, FAINT, 13, "✕ add   ○ back");
   float x = 32, y = 62;
   for (int k = 0; k < ntcounts; k++) {
     char t[96];
@@ -852,7 +860,7 @@ static void draw_tags_sheet(void) {
   if (in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_UP)) { sfx(SFX_TICK); lsheet_sel = (lsheet_sel + (ntcounts ? ntcounts : 1) - 1) % (ntcounts ? ntcounts : 1); }
   if ((in.pressed & (SCE_CTRL_CROSS | SCE_CTRL_SQUARE)) && lsheet_sel < ntcounts) {
     char add[100];
-    snprintf(add, sizeof add, "%s%.*s", (in.pressed & SCE_CTRL_SQUARE) ? "-" : "", tcounts[lsheet_sel].len > 90 ? 90 : tcounts[lsheet_sel].len, tcounts[lsheet_sel].t);
+    snprintf(add, sizeof add, "%s%.*s", "", tcounts[lsheet_sel].len > 90 ? 90 : tcounts[lsheet_sel].len, tcounts[lsheet_sel].t);
     size_t ql = strlen(query);
     if (ql + strlen(add) + 2 < sizeof query) { if (ql) strcat(query, " "); strcat(query, add); }
     sfx(SFX_TOGGLE);

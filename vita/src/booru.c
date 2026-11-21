@@ -17,7 +17,7 @@ LvSite LV_SITES[LV_MAX_SITES] = {
   {"Xbooru", BK_GELBOORU, "https://xbooru.com", NULL, 0, 0, "xbooru", "Hentai", NULL, 1},
   // (TBIB and Rule34: much western and 3D: not offered, the app being about anime and hentai)
   {"TBIB", BK_GELBOORU, "https://tbib.org", NULL, 0, 0, "tbib", "The big imageboard", NULL, 1},
-  {"Hypnohub", BK_GELBOORU, "https://hypnohub.net", NULL, 0, 0, "hypnohub", "Hypnosis art"},
+  {"Hypnohub", BK_GELBOORU, "https://hypnohub.net", NULL, 0, 0, "hypnohub", "Hypnosis art", NULL, 1}, // (hidden: off the list)
   // (AIBooru, AI-made pictures, isn't offered: its place is kept, saved settings count sites by place)
   {"AIBooru", BK_DANBOORU, "https://aibooru.online", NULL, 1, 0, "aibooru", "AI-made anime art", NULL, 1},
   {"Safebooru", BK_GELBOORU, "https://safebooru.org", NULL, 0, 0, "safebooru", "Anime art, all ages"},

@@ -606,6 +606,7 @@ static struct {
   int nodecor; // the little anime girls (decor.c) hidden
   int notags;  // a save doesn't ask for your own tags
 } cfg = {"", 0, 0, 5, 0, 100, 1, 15, 2, "", "", 0, 0, 70, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
+static int glow_v2; // (the config had glowv: its glow is the new one's)
 static void cfg_load(void) {
   cfg.sndpack = 3; // (Bubbly, from the start)
   FILE *f = fopen(DATA "/config.txt", "r");
@@ -634,6 +635,7 @@ static void cfg_load(void) {
     else if (!strcmp(line, "sounds")) cfg.sounds = atoi(eq);
     else if (!strcmp(line, "dbltap")) cfg.dbltap = atoi(eq) != 0;
     else if (!strcmp(line, "glow")) { cfg.glow = atoi(eq); if (cfg.glow < 0 || cfg.glow > 3) cfg.glow = 0; }
+    else if (!strcmp(line, "glowv")) glow_v2 = 1; // (saved since the backgrounds' four choices: kept as it is)
     else if (!strcmp(line, "wspan")) cfg.wspan = atoi(eq);
     else if (!strcmp(line, "wfull")) cfg.wfull = atoi(eq) != 0;
     else if (!strcmp(line, "hide")) cfg.hide = atoi(eq) != 0;
@@ -660,6 +662,7 @@ static void cfg_load(void) {
     else if (!strcmp(line, "comic")) sscanf(eq, "%d,%d,%d,%d,%d,%d,%d", &cfg.cmode, &cfg.corient, &cfg.canim, &cfg.cdir, &cfg.ctap, &cfg.cdbl, &cfg.cback);
   }
   fclose(f);
+  if (!glow_v2) cfg.glow = 0; // (from before the four backgrounds: black now, the default)
   if (cfg.interval < 2 || cfg.interval > 60) cfg.interval = 5;
   if (cfg.volume < 0 || cfg.volume > 150) cfg.volume = 100;
   if (cfg.site < 0 || cfg.site >= 64) cfg.site = 0;
@@ -693,7 +696,7 @@ static void cfg_write(void) {
   cfg_dirty_at = 0;
   FILE *f = fopen(DATA "/config.txt.part", "w");
   if (!f) return;
-  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\nview=%d,%d,%d,%d\ntscale=%d\naccpic=%d\nsndv=2\nwsize=%d\nrear=%d,%d\nautorot=%d\nnodecor=%d\nnotags=%d\n",
+  fprintf(f, "vault=%s\nsort=%d\nkind=%d\ninterval=%d\nshuffle=%d\nvolume=%d\nsite=%d\nratings=%d\nwsort=%d\nwquery=%s\nsave_cat=%s\nwpages=%d\nwsel=%d\nsounds=%d\ndbltap=%d\nglow=%d\nwspan=%d\nwfull=%d\nhide=%d\ntlock=%d\nlocal_vault=%s\nlmode=%d\ntheme=%d\nbgstyle=%d\nsndpack=%d\nconv=%d\nacc_h=%d\nacc_s=%d\nacc_v=%d\nonboarded=%d\ncomic=%d,%d,%d,%d,%d,%d,%d\nview=%d,%d,%d,%d\ntscale=%d\naccpic=%d\nsndv=2\nwsize=%d\nrear=%d,%d\nautorot=%d\nnodecor=%d\nnotags=%d\nglowv=2\n",
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
           cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v, cfg.onboarded,
           cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback, cfg.ifit, cfg.iorient, cfg.vfit, cfg.vorient, cfg.tscale, cfg.accpic, cfg.wsize, cfg.rear_l, cfg.rear_r, cfg.autorot, cfg.nodecor, cfg.notags);
@@ -3202,7 +3205,7 @@ static void show_item(int k) {
     char clip[800];
     int can = is_video(it) && it->path && (ext_is(it->path, "mp4", "m4v", "mov") || ext_is(it->path, "webm", "mkv", NULL));
     int has_clip = lv_clip_path(&vault, it, clip, sizeof clip);
-    if (can || has_clip) video_open_async(can ? it->path : NULL, has_clip ? clip : NULL, slideshow);
+    if (can || has_clip) video_open_async(can ? it->path : NULL, has_clip ? clip : NULL, slideshow || (it->duration > 0 && it->duration < 60)); // (short ones, under a minute, go round and round)
   }
   ask_big(shown[vk]);
 }
@@ -3294,7 +3297,8 @@ static void res_badge(int w, int h, int a) {
   }
 }
 static void fmt_time(uint64_t ms, char *o, size_t n);
-static unsigned resumed_at; // (a video carried on from where it was stopped: when)
+static unsigned resumed_at; static char resumed_msg[48]; // (a video carried on from where it was stopped: when, and from where)
+static unsigned beat_at; // (a heart just given: the screen's pink beat, since)
 // "Similar to this": the two tags of these that say most what it is: specific ones (a character, a
 // series: long, with underscores or brackets) before generic ones, never the generic ones of a list,
 // never one already searched for (exclude). out: "a b", or "" when there's none.
@@ -3369,14 +3373,25 @@ static void vctl_draw(const LvVideo *v, int a, float have) {
   grad(0, 0, W, 70, RGBA(0, 0, 0, 255), 90 * a / 240, 0, 0);
   unsigned ink = with_alpha(TEXT, a);
   // the middle: back ten, play/pause, on ten (bare, white, as the reference: no discs behind)
-  if (lv_video_paused(v)) vc_tri(W / 2 + 6, VC_BTN_Y, 26, ink);
-  else { rrect(W / 2 - 16, VC_BTN_Y - 22, 11, 44, 3, ink); rrect(W / 2 + 5, VC_BTN_Y - 22, 11, 44, 3, ink); }
+  // (a soft dark shadow under each, so they read on a light picture too)
+  unsigned sh = RGBA(0, 0, 0, 110 * a / 240);
+  for (int k = -1; k <= 1; k++) { circle(W / 2 + k * 140, VC_BTN_Y + 2, k ? 30 : 40, RGBA(0, 0, 0, 55 * a / 240)); circle(W / 2 + k * 140, VC_BTN_Y + 2, k ? 22 : 30, RGBA(0, 0, 0, 45 * a / 240)); }
+  if (lv_video_paused(v)) { vc_tri(W / 2 + 8, VC_BTN_Y + 2, 26, sh); vc_tri(W / 2 + 6, VC_BTN_Y, 26, ink); }
+  else { rrect(W / 2 - 15, VC_BTN_Y - 20, 11, 44, 3, sh); rrect(W / 2 + 6, VC_BTN_Y - 20, 11, 44, 3, sh); rrect(W / 2 - 16, VC_BTN_Y - 22, 11, 44, 3, ink); rrect(W / 2 + 5, VC_BTN_Y - 22, 11, 44, 3, ink); }
+  vc_skip_icon(W / 2 - 139, VC_BTN_Y + 2, -1, sh); vc_skip_icon(W / 2 + 141, VC_BTN_Y + 2, 1, sh);
   vc_skip_icon(W / 2 - 140, VC_BTN_Y, -1, ink);
   vc_skip_icon(W / 2 + 140, VC_BTN_Y, 1, ink);
   // the volume, top right: a bar and a speaker
   { float vx = W - 200, vy = 88, vw = 140, fv = fminf(1, cfg.volume / 100.0f);
-    rrect(vx, vy - 3, vw, 6, 3, with_alpha(TEXT, a / 3));
-    rrect(vx, vy - 3, vw * fv, 6, 3, ink);
+    static float vgrow;
+    int vtouch = in.touching && in.down_y > 66 && in.down_y < 110 && in.down_x > W - 230;
+    if (vtouch) { fv = fminf(1, fmaxf(0, (in.tx - vx) / vw)); cfg.volume = (int)(fv * 100 + 0.5f); lv_video_set_volume((LvVideo *)v, cfg.volume * 32768 / 100); }
+    vgrow += ((vtouch ? 1.0f : 0.0f) - vgrow) * ease(0.3f);
+    float vt = 6 + vgrow * 8;
+    unsigned heat = mix_col(mix_col(ACC, TEXT, 0.35f), RGBA(255, 150, 60, 255), fv * fv); // (louder: warmer, towards orange)
+    rrect(vx, vy - vt / 2, vw, vt, vt / 2, with_alpha(TEXT, a / 3));
+    rrect(vx, vy - vt / 2, fmaxf(vt, vw * fv), vt, vt / 2, with_alpha(heat, a));
+    if (vgrow > 0.05f) circle(vx + vw * fv, vy, 6 + vgrow * 4, with_alpha(TEXT, a));
     float sx = vx + vw + 22; // (the speaker: its box, its cone, two waves)
     rrect(sx - 8, vy - 4, 5, 8, 1, ink);
     for (int k = 0; k < 6; k++) vita2d_draw_rectangle(sx - 3 + k, vy - 4 - k, 1, 8 + k * 2, ink);
@@ -3396,8 +3411,9 @@ static void vctl_draw(const LvVideo *v, int a, float have) {
   float shown_f = vc_scrub ? vc_scrub_f : f;
   rrect(bx, by, bw, th, th / 2, with_alpha(TEXT, a / 4));
   if (have >= 0) rrect(bx, by, bw * fminf(1, have), th, th / 2, with_alpha(TEXT, a * 2 / 5));
-  rrect(bx, by, fmaxf(th, bw * shown_f), th, th / 2, ink);
-  if (vc_scrub) circle(bx + bw * shown_f, VC_BAR_Y, 11, ink);
+  rrect(bx, by, fmaxf(th, bw * shown_f), th, th / 2, with_alpha(mix_col(ACC, TEXT, 0.25f), a)); // (played: a touch of pink)
+  rrect(bx + 2, by + 1, fmaxf(th, bw * shown_f) - 4, th * 0.4f, th * 0.2f, with_alpha(TEXT, a / 4));
+  circle(bx + bw * shown_f, VC_BAR_Y, vc_scrub ? 11 : 6, ink);
   char t1[16], t2[20];
   uint64_t at = vc_scrub ? (uint64_t)(d * vc_scrub_f) : q;
   fmt_time(at, t1, sizeof t1);
@@ -3408,6 +3424,11 @@ static void vctl_draw(const LvVideo *v, int a, float have) {
   // (dragging the bar: the place follows the finger; let go, it plays from there)
   if (in.touching && in.down_y > VC_BAR_Y - 26 && in.down_y < VC_BAR_Y + 30 && d) { vc_scrub = 1; vc_scrub_f = fminf(1, fmaxf(0, (in.tx - bx) / bw)); }
   else if (vc_scrub) { vc_scrub = 0; lv_video_seek((LvVideo *)v, (int64_t)(d * vc_scrub_f)); }
+}
+// (a touch that began on the bar or the volume while the controls show: theirs, nothing else moves)
+static int vctl_owns_touch(int shown) {
+  if (!in.touching || !shown) return 0;
+  return (in.down_y > VC_BAR_Y - 26 && in.down_y < VC_BAR_Y + 30) || (in.down_y > 66 && in.down_y < 110 && in.down_x > W - 230);
 }
 // A tap while the controls show: 1 if it was theirs (play/pause, a skip, the bar, the volume, download)
 static int vctl_tap(LvVideo *v, int x, int y, int64_t *seek_to) {
@@ -3668,18 +3689,23 @@ static void draw_viewer(void) {
     lv_video_seek(vid, resume_to);
     char a1[16], m[64];
     fmt_time((uint64_t)resume_to, a1, sizeof a1);
-    snprintf(m, sizeof m, "Carrying on from %s", a1);
-    say(m);
+    snprintf(resumed_msg, sizeof resumed_msg, "Carrying on from %s", a1);
+    (void)m;
     resume_to = -1;
     resumed_at = frame_no ? frame_no : 1;
   }
-  // (just carried on: a button to start from the beginning instead, for five seconds)
+  // (just carried on: one glass box saying from where, its right part starting from the beginning)
   if (vid && resumed_at && frame_no - resumed_at < 300) {
-    const char *l = "\u21ba  From the start";
-    int bw = text_w(15, l) + 32, bx = W / 2 - bw / 2, by = H - 130;
-    glass(bx, by, bw, 40, 0);
-    text_center(W / 2, by + 26, TEXT, 15, l);
-    if (hit(bx, by, bw, 40)) { lv_video_seek(vid, 0); resumed_at = 0; sfx(SFX_SELECT); in.tap = 0; }
+    const char *l2 = "\u21ba From the start";
+    int w1 = text_w(15, resumed_msg) + 28, w2 = text_w(15, l2) + 28, bw = w1 + w2, bx = W / 2 - bw / 2, by = H - 150;
+    float u = fminf(1, (frame_no - resumed_at) / 12.0f), fade = frame_no - resumed_at > 270 ? (300 - (frame_no - resumed_at)) / 30.0f : 1;
+    by += (int)((1 - u) * 20);
+    glass(bx, by, bw, 42, 0);
+    text(bx + 14, by + 27, with_alpha(TEXT, (int)(255 * fade)), 15, resumed_msg);
+    vita2d_draw_rectangle(bx + w1, by + 8, 1, 26, with_alpha(TEXT, 60));
+    rrect(bx + w1 + 4, by + 4, w2 - 8, 34, 17, with_alpha(ACC, (int)(150 * fade)));
+    text(bx + w1 + 14, by + 27, with_alpha(TEXT, (int)(255 * fade)), 15, l2);
+    if (hit(bx + w1, by, w2, 42)) { lv_video_seek(vid, 0); resumed_at = 0; sfx(SFX_SELECT); in.tap = 0; }
   } else resumed_at = 0;
   if (vid && !vid_clip && ab_a >= 0 && ab_b > ab_a && (int64_t)lv_video_pos(vid) >= ab_b) lv_video_seek(vid, ab_a);
   if (vid && vid_clip && is_video(it)) text_center(W / 2, 30, with_alpha(TEXT, 200), 15, "Preview clip: the Vita can't play this video's own file");
@@ -3688,7 +3714,9 @@ static void draw_viewer(void) {
   if (zoom * lv_mag > 1.25f && big_item == shown[vk] && big_hi_item != shown[vk] && !vid) { make_room(16u << 20); big_hi = 1; big_hi_item = shown[vk]; ask_big(shown[vk]); big_hi = 0; }
   if (vo_open) { draw_view_options(); return; } // (Viewing: its panel over the picture)
   // --- touch: swipe for the next one, pinch to zoom, drag when zoomed, tap for the controls ---
-  if (in.touching && details_y < 0.5f) {
+  // (a finger that went down on the video's bar or its volume: theirs alone, the picture stays put)
+  if (vid && !vid_clip && vctl_owns_touch(frame_no < chrome_until || lv_video_paused(vid))) { swipe_x = 0; }
+  else if (in.touching && details_y < 0.5f) {
     if (in.tcount >= 2) {
       static float pmx, pmy;
       view_pinch(lv_por, lv_aw, lv_ah, &zoom, &pan_x, &pan_y, &pinch_d0, &zoom0, &pmx, &pmy);
@@ -3717,7 +3745,7 @@ static void draw_viewer(void) {
     vseek = (int64_t)lv_video_pos(vid) + s * 10000;
     vflash(s);
   }
-  else if (in.dbl && cfg.dbltap && details_y < 0.5f) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); heart_at = frame_no ? frame_no : 1; }
+  else if (in.dbl && cfg.dbltap && details_y < 0.5f) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); beat_at = frame_no ? frame_no : 1; heart_at = frame_no ? frame_no : 1; }
   else if (in.dbl) { zoom = zoom > 1.5f ? 1 : 2.5f; float ox, oy; view_tap_off(lv_por, lv_aw, lv_ah, &ox, &oy); pan_x = ox * (zoom - 1); pan_y = oy * (zoom - 1); }
   else if (in.tap && details_y < 0.5f) {
     int chrome_on = frame_no < chrome_until || (vid && !vid_clip && lv_video_paused(vid));
@@ -3726,7 +3754,7 @@ static void draw_viewer(void) {
     else if (frame_no < chrome_until && fv_back_hit()) { sfx(SFX_BACK); close_viewer(); return; }
     else if (frame_no < chrome_until && in.tap_x > W - 70 && in.tap_y < 60) { details = 1; }
     else if (frame_no < chrome_until && view_btn_hit(is_video(it), W - 140)) { view_options_open(is_video(it)); return; }
-    else if (frame_no < chrome_until && in.tap_x > W - 140 && in.tap_x < W - 70 && in.tap_y < 60) { char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); }
+    else if (frame_no < chrome_until && hypotf(in.tap_x - (W - 112), in.tap_y - 36) < 34) { char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); beat_at = frame_no ? frame_no : 1; sfx(SFX_DONE); }
     else if (frame_no < chrome_until && in.tap_y > H - 90 && !(vid && !vid_clip) && !slideshow && nshown > 1) {} // (the filmstrip's)
     else chrome_until = frame_no < chrome_until ? frame_no : frame_no + 240;
   }
@@ -3745,7 +3773,7 @@ static void draw_viewer(void) {
   if ((in.pressed & prev_b) && !(in.now & SCE_CTRL_RTRIGGER)) { sfx(SFX_TICK); show_item(vk - 1); return; }
   if (in.pressed & SCE_CTRL_CIRCLE) { if (details) details = 0; else { close_viewer(); return; } }
   if (in.pressed & SCE_CTRL_TRIANGLE) { sfx(details ? SFX_CLOSE : SFX_OPEN); details = !details; }
-  if (in.pressed & SCE_CTRL_SQUARE) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); chrome_until = frame_no + 120; }
+  if (in.pressed & SCE_CTRL_SQUARE) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); beat_at = frame_no ? frame_no : 1; chrome_until = frame_no + 120; }
   if (in.pressed & SCE_CTRL_START) {
     // (a slideshow goes through its own list: from here, if this one's in it, else from its start)
     if (!slideshow && !show_pool) { int was = shown[vk], k = show_pool_on(was); if (!nshown) { show_pool = 0; refilter(); say("No pictures, GIFs or short clips to show"); return; } if (shown[k] != was) { show_item(k); } else vk = k; }
@@ -3829,7 +3857,7 @@ static void draw_viewer(void) {
     grad(0, 0, W, 64, RGBA(0, 0, 0, 255), 64 * a / 400, 0, 0);
     // back
     fv_back_draw(a);
-    res_rel = 1; res_badge(it->width, it->height, a); res_rel = 0; // (its resolution's rank, against the vault's biggest)
+    res_rel = !cfg.wfull; res_badge(it->width, it->height, a); res_rel = 0; // (its rank: by its resolution when saves are originals; else against the vault's biggest)
     char pos[48];
     snprintf(pos, sizeof pos, "%d of %d", vk + 1, nshown);
     text_center(W / 2, 36, with_alpha(TEXT, a), 17, pos);
@@ -3838,13 +3866,18 @@ static void draw_viewer(void) {
     { // (the heart: how many times, and a pop with a +1 rising when it's given another)
       static int last_n = -1, last_it = -1; static unsigned pop_at;
       int nl = lv_likes_of(&vault, it);
-      if (last_it == vk && nl > last_n && last_n >= 0) pop_at = frame_no ? frame_no : 1;
+      if (last_it == vk && nl > last_n && last_n >= 0) { pop_at = frame_no ? frame_no : 1; beat_at = pop_at; }
       last_it = vk; last_n = nl;
       float pu = pop_at ? (frame_no - pop_at) / 30.0f : 1, sc = 1;
       if (pu < 1) sc = 1 + 0.6f * sinf(pu * 3.14159f) * (1 - pu); else pop_at = 0;
-      heart(W - 104, 30, 8 * sc, nl ? with_alpha(ACC, a) : with_alpha(TEXT, a / 2));
-      if (nl > 0) { char nb[12]; snprintf(nb, sizeof nb, "%d", nl); text(W - 92, 44, with_alpha(TEXT, a), 11, nb); }
-      if (pu < 1) text_center(W - 104, (int)(16 - pu * 22), with_alpha(ACC, (int)(255 * (1 - pu))), 14, "+1");
+      // (a big round glass button of its own: rose when it has hearts, its count in a little pill)
+      float hx = W - 112, hy = 36, hr = 25 * (1 + (sc - 1) * 0.4f);
+      circle(hx, hy + 3, hr + 1, RGBA(0, 0, 0, a / 3));
+      circle(hx, hy, hr, nl ? with_alpha(mix_col(ACC, RGBA(255, 90, 140, 255), 0.5f), a) : with_alpha(mix_col(SURF2, ACC, 0.2f), a * 200 / 255));
+      circle(hx, hy - hr * 0.32f, hr * 0.64f, RGBA(255, 255, 255, a / 6));
+      heart(hx, hy + 1, 11 * sc, nl ? RGBA(255, 255, 255, a) : with_alpha(TEXT, a));
+      if (nl > 0) { char nb[12]; snprintf(nb, sizeof nb, "%d", nl); int pw = text_w(11, nb) + 12; rrect(hx + 12, hy + 10, pw, 18, 9, RGBA(0, 0, 0, a * 2 / 3)); text(hx + 18, hy + 23, with_alpha(TEXT, a), 11, nb); }
+      if (pu < 1) text_center((int)hx, (int)(hy - 30 - pu * 22), with_alpha(ACC, (int)(255 * (1 - pu))), 16, "+1");
     }
     circle(W - 38, 30, 13, with_alpha(TEXT, a));
     circle(W - 38, 30, 11, RGBA(0, 0, 0, a));
@@ -5454,6 +5487,15 @@ int main(void) {
     }
     ev_watch();
     sheet_cover_draw();
+    if (beat_at && frame_no - beat_at < 64) { // (a heart given: the screen beats pink twice, lub-dub)
+      float u = (frame_no - beat_at) / 64.0f, b = 0;
+      float p1 = u / 0.18f, p2 = (u - 0.28f) / 0.18f;
+      if (p1 >= 0 && p1 < 1) b = sinf(p1 * 3.14159f);
+      if (p2 >= 0 && p2 < 1) b = fmaxf(b, 0.8f * sinf(p2 * 3.14159f));
+      b *= 1 - u * 0.5f;
+      vita2d_draw_rectangle(0, 0, W, H, RGBA(255, 70, 140, (int)(95 * b)));
+      heart(W / 2, H / 2, 40 + 30 * b, RGBA(255, 120, 170, (int)(170 * b)));
+    } else beat_at = 0;
     // (Your stats opened from the Library's corner: the corner's circle grows over the screen, then
     //  thins away to show the page)
     if (screen == S_STATS && stats_open_at && frame_no - stats_open_at < 26) {

@@ -2224,7 +2224,13 @@ static void draw_filter_sheet(void) {
   int needs_key = LV_SITES[cfg.site].needs_key;
   enum { R_SEARCH, R_G, R_S, R_Q, R_E, R_SPAN, R_CAT, R_FULL, R_HIDDEN, R_KEY, R_N };
   int nrows = needs_key ? R_N : R_N - 1;
-  int w = 440, x = W - w - 12, y = 46, rh = 46;
+  // (sliding in from the screen's side as it opens; narrower than before)
+  static unsigned f_last, f_open;
+  if (frame_no - f_last > 2) f_open = frame_no;
+  f_last = frame_no;
+  float fu = fminf(1, (frame_no - f_open) / 13.0f);
+  int w = 380, x = W - w - 12 + (int)((1 - fu) * (1 - fu) * (1 - fu) * 400), y = 46, rh = 46;
+  rrect(x, y + 3, w, nrows * rh + 18, 16, RGBA(0, 0, 0, 90));
   rrect(x, y, w, nrows * rh + 18, 16, SURF);
   for (int k = 0; k < nrows; k++) {
     int ry = y + 9 + k * rh;
@@ -3509,7 +3515,8 @@ static void draw_webview(void) {
   if (vo_open) { draw_view_options(); return; } // (Viewing: its panel over it)
   // --- touch: swipe, pinch, drag when zoomed, tap for the controls ---
   static float pd0, z0;
-  if (in.touching && wdetails_y < 0.5f) {
+  if (wv_vid && vctl_owns_touch(frame_no < wchrome_until || lv_video_paused(wv_vid))) {} // (the bar or the volume: theirs alone)
+  else if (in.touching && wdetails_y < 0.5f) {
     if (in.tcount >= 2) {
       static float pmx, pmy;
       view_pinch(wv_por, wv_aw, wv_ah, &wzoom, &wpan_x, &wpan_y, &pd0, &z0, &pmx, &pmy);

@@ -627,7 +627,7 @@ static void mg_drop_textures(void) {
   release_tex(mg.big_cover);
   mg.big_cover = NULL;
 }
-static int mg_english; // (the Filter: English only, the word added to what's searched)
+static int mg_english = 1; // (the Filter: English only, the word added to what's searched; on to begin with)
 static void mg_list_more(void) {
   if (mg.loading || !mg.more) return;
   char url[1600];
@@ -849,7 +849,14 @@ static void mg_take(void) {
           if (nb) mg.books = nb;
           if (nc) mg.cstate = nc;
           if (nb && nc) {
-            for (int i = 0; i < d->n && mg.nbooks < MG_MAX; i++) { mg.books[mg.nbooks] = d->books[i]; mg.cstate[mg.nbooks++] = 0; }
+            int fresh = 0;
+            for (int i = 0; i < d->n && mg.nbooks < MG_MAX; i++) {
+              int dup = 0; // (already in the list: a site that hands its last page out again past the end)
+              for (int j = mg.nbooks - 1; j >= 0 && j >= mg.nbooks - 400 && !dup; j--) dup = !strcmp(mg.books[j].id, d->books[i].id);
+              if (dup) continue;
+              mg.books[mg.nbooks] = d->books[i]; mg.cstate[mg.nbooks++] = 0; fresh++;
+            }
+            if (!fresh) d->n = 0; // (nothing new: treated as the end below)
             if (mg.src == MS_MANGADEX) mg.more = d->n > 0 && mg.nbooks < d->total && mg.nbooks < MG_MAX;
             else {
               mg.total++;

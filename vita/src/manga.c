@@ -295,13 +295,13 @@ void lv_strings_free(char **s, int n) {
 // ======================= the other sites =======================
 const char *const LV_MK_NAME[MK_N] = {"MANGA", "H MANGA", "H WEBTOON", "SHORT COMICS"};
 const LvMSrc LV_MSRC[MS_N] = {
-  {"E-Hentai", "ehentai", "Doujinshi, hentai manga, CG", MF_EHENTAI, MK_HMANGA}, // (first: the default)
+  {"HentaiZap", "hentaizap", "Hentai manga, short and long", MF_GALLERY, MK_HMANGA, "https://hentaizap.com", "/?page=%d", "/search/?key=%s&page=%d", "/gallery/"}, // (first: the default)
+  {"E-Hentai", "ehentai", "Doujinshi, hentai manga, CG", MF_EHENTAI, MK_HMANGA},
   {"MangaDex", "mangadex", "Manga of all kinds, 18+ included", MF_MANGADEX, MK_MANGA},
   {"HentaiFox", "hentaifox", "Hentai manga and doujinshi", MF_GALLERY, MK_HMANGA, "https://hentaifox.com", "/?page=%d", "/search/?q=%s&page=%d", "/gallery/"},
   {"AsmHentai", "asmhentai", "Doujinshi, many in English", MF_GALLERY, MK_HMANGA, "https://asmhentai.com", "/?page=%d", "/search/?q=%s&page=%d", "/g/"},
   {"HentaiEra", "hentaiera", "Hentai manga, new every day", MF_GALLERY, MK_HMANGA, "https://hentaiera.com", "/?page=%d", "/search/?key=%s&page=%d", "/gallery/"},
   {"nhentai.xxx", "nhentaixxx", "Doujinshi and hentai manga", MF_GALLERY, MK_HMANGA, "https://nhentai.xxx", "/?page=%d", "/search/?key=%s&page=%d", "/g/"},
-  {"HentaiZap", "hentaizap", "Hentai manga, short and long", MF_GALLERY, MK_HMANGA, "https://hentaizap.com", "/?page=%d", "/search/?key=%s&page=%d", "/gallery/"},
   {"HentaiEnvy", "hentaienvy", "Hentai manga and artist CG", MF_GALLERY, MK_HMANGA, "https://hentaienvy.com", "/?page=%d", "/search/?key=%s&page=%d", "/gallery/"},
   {"3Hentai", "3hentai", "Doujinshi, lots in English", MF_GALLERY, MK_HMANGA, "https://3hentai.net", "/%d", "/search?q=%s&page=%d", "/d/"},
   {"HentaiHand", "hentaihand", "Hentai manga, a huge library", MF_HHAND, MK_HMANGA, "https://hentaihand.com", "/api/comics?page=%d", "/api/comics?q=%s&page=%d"},
