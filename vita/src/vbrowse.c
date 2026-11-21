@@ -476,6 +476,7 @@ static void vb_play(int r, int k) {
   // (more of the same come as the grid scrolls, like any search)
   cfg.site = site;
   vrow_tags(vb_src, r, cfg.wquery, sizeof cfg.wquery);
+  wq_hidden = 1; // (the row's own search: not shown in the Browser's search bar)
   cfg.wsort = VROWS[r].sort;
   cfg.wspan = VROWS[r].span;
   job_q.site = site; job_q.ratings = cfg.ratings; job_q.sort = cfg.wsort; job_q.span = cfg.wspan;
@@ -667,6 +668,8 @@ static void draw_videos(void) {
   if (si) vita2d_draw_texture_scale(si, 24, 14, 32 / 112.0f, 32 / 112.0f);
   text(64, 37, TEXT, 17, sl);
   if (hit(16, 10, sw, 40)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
+  kind_buttons(16 + sw + 10, 11, 1);
+  if (screen != S_VIDEOS) return;
   text(W - 20 - text_w(13, "✕ play  ·  ○ Library  ·  START sources"), 36, FAINT, 13, "✕ play  ·  ○ Library  ·  START sources");
   // ---- the buttons ----
   int last_row = nup ? VB_ROWS : VB_ROWS - 1, cur_n;

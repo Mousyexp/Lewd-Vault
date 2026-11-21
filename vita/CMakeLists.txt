@@ -195,6 +195,7 @@ vita_create_vpk(${LV_VPK_NAME}.vpk ${VITA_TITLEID} eboot.bin
   FILE ui/sliders.png ui/sliders.png
   FILE ui/sort.png ui/sort.png
   FILE ui/xmark.png ui/xmark.png
+  FILE ui/check.png ui/check.png
   FILE sites/danbooru.png sites/danbooru.png
   FILE sites/yandere.png sites/yandere.png
   FILE sites/konachan.png sites/konachan.png

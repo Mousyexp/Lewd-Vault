@@ -707,6 +707,8 @@ static LvVault vault;
 static int loaded_vault;
 static int *shown, nshown;     // indices into vault.items
 static float scroll, scroll_v; // (the Library's)
+static int locate_item = -1; static unsigned locate_at; // (a saved item asked for from the Browser; when it was found)
+static void lib_locate(const char *page);
 static int cat = -1;           // -1: every category
 static char query[128];
 // (their numbers are kept in config.txt: new ones only ever go on the end)
@@ -2286,6 +2288,7 @@ static void draw_bar(void) {
     // (the whole quarter of the pill, and a little round it, is the tab's)
     if (in.tap && in.tap_x >= px + k * tw - (k == 0 ? 20 : 0) && in.tap_x < px + (k + 1) * tw + (k == 3 ? 20 : 0) && in.tap_y >= py - 10) {
       sfx(SFX_TAB);
+      if (k == sel_tab) { tab_prev = k; tab_at = frame_no; } // (the one already chosen, pressed again: its animation plays again)
       if (k == 0) { screen = S_LIBRARY; if (query[0]) { query[0] = 0; refilter(); } }
       if (k == 1) screen = browser_screen;
       if (k == 2) { screen = S_SHOW; plan_sel = 0; }
@@ -2740,8 +2743,12 @@ static void draw_library(void) {
   if (sel < 0) sel = 0;
   if (in.pressed & SCE_CTRL_DOWN) sel = grid_move(&lgrid, sel, 1);
   if (in.pressed & SCE_CTRL_UP) sel = grid_move(&lgrid, sel, -1);
+  if (locate_item >= 0) { // (asked from the Browser: the saved one found, chosen and scrolled to)
+    for (int k = 0; k < nshown; k++) if (shown[k] == locate_item) { sel = k; before = -1; locate_at = frame_no ? frame_no : 1; break; }
+    locate_item = -1;
+  }
   if (sel != before && sel >= 0 && sel < lgrid.n) {
-    sfx(SFX_TICK);
+    if (before >= 0) sfx(SFX_TICK);
     Rect r = lgrid.r[sel];
     if (r.y < scroll) scroll += (r.y - scroll) * 0.6f + (r.y < scroll - 1 ? -1 : 0);
     else if (r.y + r.h > scroll + view_h) scroll += (r.y + r.h - view_h + 10 - scroll) * ease(0.6f);
@@ -4618,6 +4625,15 @@ static void library_grew(int before) {
 
 #include "gifplay.c"
 #include "web.c"
+// The Browser's saved picture, shown in the Library: everything shown again (no search, All), it chosen
+static void lib_locate(const char *page) {
+  if (!page || !page[0]) return;
+  int it = -1;
+  for (int i = 0; i < vault.n && it < 0; i++) if (vault.items[i].source && !strcmp(vault.items[i].source, page)) it = i;
+  if (it < 0) { say("It's in your vault (not found here: another vault?)"); return; }
+  query[0] = 0; cfg.lmode = 0; refilter();
+  locate_item = it; screen = S_LIBRARY; sfx(SFX_OPEN); say("Here it is in your Library");
+}
 #include "rear.c"
 // ----- your own tags, asked for after a save -----
 // The tags you've given before (newest first, DATA/own_tags.txt) as chips to pick, + New to type one,

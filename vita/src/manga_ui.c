@@ -1142,6 +1142,8 @@ static void draw_manga(void) {
   rrect(16, 8, sw, 36, 18, ACC);
   text(34, 32, RGBA(20, 12, 16, 255), 17, sl);
   if (hit(16, 8, sw, 36) || (in.pressed & SCE_CTRL_START)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 2; sheet_sel = mg.src; sites_scroll = 0; return; }
+  kind_buttons(16 + sw + 10, 7, 2);
+  if (screen != S_MANGA) return;
   int rx = W - 16, hb;
   if (mg.src == MS_MANGADEX) {
     rx -= head_button(rx, "sort", MD_ORDER[mg.order], SURF2, &hb) + 10;

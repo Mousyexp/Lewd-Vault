@@ -1171,6 +1171,7 @@ static void wv_save(void) {
 }
 
 static void library_grew(int before); // (main.c: the Library's per-item arrays follow the vault)
+static void lib_locate(const char *page);
 static void draw_bar(void);
 
 static const char *save_category(void) {
@@ -1329,6 +1330,64 @@ static void ask_previews(const int *list, int n) {
   pthread_mutex_unlock(&wmx);
 }
 
+// ---------- the three kinds: pictures, videos, comics ----------
+// Three small glass squares by the source button: the kind showing looks pressed in; another opens
+// that kind's first source. Returns the room they took. active: 0 pictures, 1 videos, 2 comics.
+static void vb_open(int k);
+static int vb_src;
+static void manga_open(int src);
+static int mg_src_now(void);
+static int sites_visible(int *vis);
+static void web_search(void);
+// "Taking long: try <next>?" with a countdown; ✕ or a tap switches now, it switches by itself at 0
+static void src_next_offer(int y) {
+  static unsigned shown_at; static int for_gen = -1;
+  if (for_gen != (int)wgen) { for_gen = (int)wgen; shown_at = frame_no; }
+  int vis[LV_MAX_SITES], nv = sites_visible(vis), at = 0;
+  for (int k = 0; k < nv; k++) if (vis[k] == cfg.site) at = k;
+  if (nv < 2) return;
+  int next = vis[(at + 1) % nv];
+  int left = 5 - (int)((frame_no - shown_at) / 60);
+  char l[120];
+  snprintf(l, sizeof l, "Try %s instead?  (%d)", LV_SITES[next].name, left < 0 ? 0 : left);
+  int bw = text_w(16, l) + 48, bx = W / 2 - bw / 2;
+  glass(bx, y, bw, 44, 0);
+  text_center(W / 2, y + 28, TEXT, 16, l);
+  float f = fminf(1, (frame_no - shown_at) / 300.0f);
+  rrect(bx + 16, y + 38, (bw - 32) * f, 3, 1, ACC); // (the countdown, filling)
+  if (hit(bx, y, bw, 44) || (in.pressed & SCE_CTRL_CROSS) || left <= 0) {
+    in.pressed = 0; sfx(SFX_OPEN); cfg.site = next; for_gen = -1;
+    if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST;
+    web_search();
+  }
+}
+static int wq_hidden; // (the search the video browser put there for a row: not shown, gone when the source changes)
+static void wq_unhide(void) { if (wq_hidden) { wq_hidden = 0; cfg.wquery[0] = 0; } }
+static int kind_buttons(int x, int y, int active) {
+  static const char *ic[3] = {"image", "film", "book"};
+  const int s = 38, gap = 6;
+  for (int k = 0; k < 3; k++) {
+    int bx = x + k * (s + gap), on = k == active;
+    if (on) { // (pressed in: dark inside, its shadow at the top)
+      rrect(bx, y, s, s, 11, mix_col(SURF2, RGBA(0, 0, 0, 255), 0.45f));
+      rrect(bx + 1, y + 1, s - 2, s * 0.4f, 9, RGBA(0, 0, 0, 70));
+      rrect(bx + 6, y + s - 3, s - 12, 1.5f, 0.75f, with_alpha(ACC, 160));
+    } else {
+      rrect(bx, y + 2, s, s, 11, RGBA(0, 0, 0, 70));
+      rrect(bx, y, s, s, 11, SURF2);
+      rrect(bx + 2, y + 2, s - 4, s * 0.42f, 9, with_alpha(TEXT, 14));
+    }
+    icon(ic[k], bx + s / 2, y + s / 2 + (on ? 1 : 0), on ? ACC : DIM);
+    if (!on && hit(bx, y - 4, s, s + 8)) {
+      sfx(SFX_TAB); in.tap = 0;
+      if (k == 0) { screen = S_WEB; if (wq_hidden) { wq_unhide(); web_search(); } }
+      else if (k == 1) { screen = S_VIDEOS; if (vb_src < 0) vb_open(0); }
+      else manga_open(mg_src_now());
+    }
+  }
+  return 3 * s + 2 * gap;
+}
+
 // ---------- sheets: the sites, and the filter ----------
 
 enum { SH_NONE, SH_SITES, SH_FILTER, SH_SEARCH, SH_FIND };
@@ -1383,7 +1442,7 @@ static void custom_sites_load(void) {
     lv_booru_add_site(ln, atoi(a + 1), b + 1);
   }
   if (f) fclose(f);
-  if (cfg.site >= LV_NSITES || LV_SITES[cfg.site].hidden) cfg.site = 0;
+  if (cfg.site >= LV_NSITES || LV_SITES[cfg.site].hidden) cfg.site = 1; // (Yande.re: the default)
 }
 static void custom_sites_save(void) {
   FILE *f = fopen(DATA "/web_sites.txt", "w");
@@ -1980,6 +2039,11 @@ static void check_sources(int tab) {
 }
 
 static void draw_sites_sheet(void) {
+  // (a new tab: its tiles slide in from the side it lies on)
+  static int seen_tab = -1, dir; static unsigned tab_at;
+  if (seen_tab != sites_tab) { dir = seen_tab < 0 ? 0 : sites_tab > seen_tab ? 1 : -1; seen_tab = sites_tab; tab_at = frame_no; }
+  float tu = fminf(1, (frame_no - tab_at) / 14.0f);
+  int tab_slide = (int)((1 - (1 - (1 - tu) * (1 - tu) * (1 - tu))) * 90 * dir);
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 170));
   const int cols = 6, tw = 142, th = 136, gap = 10;
   int vis[LV_MAX_SITES], nvis = sites_visible(vis);
@@ -2045,7 +2109,7 @@ static void draw_sites_sheet(void) {
   for (int k = 0; k < n; k++) {
     int r = k / cols - (int)sites_scroll;
     if (r < 0 || r >= vis_rows) continue;
-    int x = wx + 18 + (k % cols) * (tw + gap), y = top + r * (th + gap);
+    int x = wx + 18 + (k % cols) * (tw + gap) + tab_slide, y = top + r * (th + gap);
     int on = k == sheet_sel;
     const char *name, *about, *ic;
     int cur, blocked = 0, add = k == n - 1, slot;
@@ -2124,7 +2188,7 @@ static void draw_sites_sheet(void) {
     else if (sites_tab) {
       if (vsource_blocked(pick)) { sfx(SFX_ERROR); say("This site only answers after a browser check (Cloudflare), so the Vita can't reach it"); }
       else { sfx(SFX_SELECT); sheet = SH_NONE; vb_open(pick); }
-    } else { int st = vis[pick]; sfx(SFX_SELECT); sheet = SH_NONE; if (st != cfg.site) { cfg.site = st; if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST; web_search(); } }
+    } else { int st = vis[pick]; sfx(SFX_SELECT); sheet = SH_NONE; if (st != cfg.site || wq_hidden) { wq_unhide(); cfg.site = st; if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST; web_search(); } }
   }
   // □ on a site added by hand: removed
   else if ((in.pressed & SCE_CTRL_SQUARE) && !sites_tab && pick < nvis && vis[pick] >= LV_NBUILTIN) {
@@ -2580,7 +2644,17 @@ static void draw_web(void) {
       rrect(x + cw - tw - 16, y + ch - 26, tw + 12, 20, 10, RGBA(0, 0, 0, 150));
       text(x + cw - tw - 10, y + ch - 11, TEXT, 12, badge);
     }
-    if (is_saved(p)) { circle(x + 17, y + 17, 11, ACC); text_center(x + 17, y + 23, RGBA(20, 12, 16, 255), 14, "\u2713"); }
+    if (is_saved(p)) { // (saved: the card dimmed a touch, a glass "Saved" pill with a check in its corner)
+      rrect(x, y, cw, ch, 10, RGBA(0, 0, 0, 70));
+      int pw = text_w(12, "Saved") + 38;
+      rrect(x + 7, y + 9, pw, 26, 13, RGBA(0, 0, 0, 110));
+      rrect(x + 6, y + 7, pw, 26, 13, with_alpha(mix_col(SURF2, ACC, 0.35f), 225));
+      rrect(x + 8, y + 8, pw - 4, 11, 6, with_alpha(TEXT, 26)); // (light on its top)
+      circle(x + 19, y + 20, 9, ACC);
+      icon("check", x + 19, y + 20, RGBA(20, 12, 16, 255));
+      text(x + 32, y + 25, TEXT, 12, "Saved");
+    }
+    if (!sheet_open && !qm_open && hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR && is_saved(&posts[k]) && !lv_post_is_video(&posts[k])) { wsel = k; lib_locate(posts[k].page); return; } // (saved already: shown in the Library)
     if (!sheet_open && !qm_open && hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR) { wsel = k; sfx(SFX_SELECT); wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; wv_back = S_WEB; screen = S_WEBVIEW; wv_show(k); return; }
   }
   if (fr_x >= 0) focus_ring(fr_x, fr_y, fr_w, fr_h);
@@ -2631,9 +2705,19 @@ static void draw_web(void) {
     if (!lv_net_online()) text_center(W / 2, TOP + 150, DIM, 20, "Not connected: turn on Wi-Fi in the Vita's settings");
     else if (wloading) {
       spinner(W / 2, TOP + 150, 22);
+      // (still nothing after 15 s: the next source offered)
+      static unsigned load_at; static int load_gen = -1;
+      if (load_gen != (int)wgen) { load_gen = (int)wgen; load_at = frame_no; }
+      if (frame_no - load_at > 900) src_next_offer(TOP + 236);
     } else {
       decor_draw(DEC_CROPTOP, W - 150, H - BAR + 6, 240, 255);
-      text_center(W / 2, TOP + 150, DIM, 18, werr[0] ? werr : "Nothing found: try other tags or ratings");
+      if (!werr[0]) { // (no results: a magnifying glass)
+        circle(W / 2, TOP + 96, 34, with_alpha(ACC, 40));
+        circle(W / 2 - 4, TOP + 92, 15, with_alpha(ACC, 220)); circle(W / 2 - 4, TOP + 92, 11, with_alpha(BG, 255));
+        for (int j = 0; j < 9; j++) circle(W / 2 + 7 + j * 1.1f, TOP + 103 + j * 1.1f, 3, with_alpha(ACC, 220));
+        text_center(W / 2, TOP + 160, TEXT, 20, "No results");
+        text_center(W / 2, TOP + 186, DIM, 14, "Try other tags or ratings");
+      } else text_center(W / 2, TOP + 150, DIM, 18, werr);
       // (the site answered with an error: a button to ask again, and once by itself after 5 s)
       if (werr[0] && strstr(werr, "answered")) {
         static unsigned err_at; static int auto_done, last_gen = -1;
@@ -2642,10 +2726,11 @@ static void draw_web(void) {
         rrect_round(bx, by, bw, 44, 22, ACC);
         icon("refresh", bx + 26, by + 22, RGBA(20, 12, 16, 255));
         text(bx + 44, by + 28, RGBA(20, 12, 16, 255), 16, "Try again");
-        int again = hit(bx, by, bw, 44) || (in.pressed & SCE_CTRL_CROSS);
-        if (!auto_done && frame_no - err_at > 300) { auto_done = 1; again = 1; }
+        int again = hit(bx, by, bw, 44) || (in.pressed & SCE_CTRL_SQUARE);
         if (again) { sfx(SFX_OPEN); web_search(); in.pressed = 0; }
       }
+      // (an error of any kind: the next source of pictures offered, and taken by itself after 5 s)
+      if (werr[0]) src_next_offer(TOP + 236);
     }
   } else if (wloading && last >= nposts) text_center(W / 2, H - BAR - 14, FAINT, 14, "Loading more…");
   else if (wend && werr[0] && last >= nposts) text_center(W / 2, H - BAR - 14, FAINT, 14, werr);
@@ -2684,13 +2769,16 @@ static void draw_web(void) {
   }
   rx -= head_button(rx, "sliders", filt, nr == 4 ? SURF2 : with_alpha(ACC, 110), &hb) + 8;
   if (!sheet_open && (hb || (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); sheet = SH_FILTER; sheet_sel = 0; in.pressed &= ~SCE_CTRL_SQUARE; }
+  int kx = 10 + ws + 8;
+  if (!sheet_open) kx += kind_buttons(kx, hy + 9, 0) + 8; else kx += 3 * 38 + 12 + 8;
   // the search field: the room between
-  int qx = 10 + ws + 8, wq = rx - qx - (cfg.wquery[0] ? 48 : 0);
+  int qx = kx, wq = rx - qx - (cfg.wquery[0] && !wq_hidden ? 48 : 0);
   rrect(qx, hy + 8, wq, 40, 20, SURF2);
-  icon("search", qx + 22, hy + 28, cfg.wquery[0] ? TEXT : FAINT);
-  text_fit(qx + 40, hy + 34, cfg.wquery[0] ? TEXT : FAINT, 16, cfg.wquery[0] ? cfg.wquery : "Search tags", wq - 50);
-  if (!sheet_open && hit(qx, hy + 4, wq, 48) && !ime_open) open_search_sheet();
-  if (cfg.wquery[0]) {
+  int qshow = cfg.wquery[0] && !wq_hidden;
+  icon("search", qx + 22, hy + 28, qshow ? TEXT : FAINT);
+  text_fit(qx + 40, hy + 34, qshow ? TEXT : FAINT, 16, qshow ? cfg.wquery : "Search tags", wq - 50);
+  if (!sheet_open && hit(qx, hy + 4, wq, 48) && !ime_open) { sfx(SFX_OPEN); ime_start(3, "Search tags", cfg.wquery, 0); } // (typed at once; the tag list is under Filter)
+  if (qshow) {
     int cx = qx + wq + 6;
     rrect(cx, hy + 8, 40, 40, 20, SURF2);
     icon("xmark", cx + 20, hy + 28, DIM);
@@ -2707,6 +2795,7 @@ static void draw_web(void) {
       { // (in the sites window's order: the boorus, then the image sites)
         int vis[LV_MAX_SITES], nv = sites_visible(vis), at = 0;
         for (int k = 0; k < nv; k++) if (vis[k] == cfg.site) at = k;
+        wq_unhide();
         if (nv) cfg.site = vis[(at + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : nv - 1)) % nv];
       }
       if (!LV_SITES[cfg.site].hot && cfg.wsort == LV_SORT_HOT) cfg.wsort = LV_SORT_LATEST;
@@ -3239,7 +3328,8 @@ static int mp4_moov_first(const char *path, int64_t have) {
 static int wv_save_pill(int *x, int *y, int *w, int *h) {
   if (wv >= nposts || wv_is_long() || lv_post_is_video(&posts[wv]) || sw_on || wdetails) return 0;
   const char *l = is_saved(&posts[wv]) ? "Saved" : saving ? "Saving\u2026" : "Save";
-  *h = 52; *w = text_w(19, l) + 74; *x = W - 18 - *w; *y = H - 18 - *h;
+  (void)l;
+  *h = 76; *w = 76; *x = W - 22 - *w; *y = H - 22 - *h; // (a big round button)
   return 1;
 }
 static int wv_save_pill_hit(void) {
@@ -3249,18 +3339,20 @@ static int wv_save_pill_hit(void) {
 static void wv_save_pill_draw(int chrome) {
   int x, y, w, h;
   if (!wv_save_pill(&x, &y, &w, &h)) return;
-  int saved = is_saved(&posts[wv]), a = chrome ? 255 : 170;
-  const char *l = saved ? "Saved" : saving ? "Saving\u2026" : "Save";
-  rrect_round(x - 1, y + 2, w + 2, h, h / 2.0f, RGBA(0, 0, 0, a / 3));
-  if (saved) glass(x, y, w, h, 1);
-  else {
-    rrect_round(x, y, w, h, h / 2.0f, with_alpha(ACC, a));
-    rrect_round(x + 3, y + 2, w - 6, h * 0.45f, h * 0.22f, with_alpha(TEXT, a / 7)); // (a sheen on top)
-  }
+  int saved = is_saved(&posts[wv]), a = chrome ? 255 : 190;
+  float cx = x + w / 2.0f, cy = y + h / 2.0f, r = w / 2.0f;
+  int pressed = in.touching && hypotf(in.tx - cx, in.ty - cy) < r + 8;
+  if (pressed) r *= 0.92f;
+  // (round glass: a shadow, its colour (the accent; saved: glass with a check), light from above, a rim)
+  circle(cx, cy + 3, r + 1, RGBA(0, 0, 0, a / 3));
+  circle(cx, cy, r, saved ? with_alpha(mix_col(SURF2, ACC, 0.25f), a * 220 / 255) : with_alpha(ACC, a));
+  circle(cx, cy - r * 0.32f, r * 0.68f, with_alpha(RGBA(255, 255, 255, 255), a / 6));
   unsigned ink = saved ? with_alpha(TEXT, a) : RGBA(20, 12, 16, a);
-  if (saving) spinner(x + 30, y + h / 2, 9);
-  else icon(saved ? "save" : "save", x + 30, y + h / 2, ink);
-  text(x + 50, y + h / 2 + 7, ink, 19, l);
+  if (saving) spinner((int)cx, (int)cy - 6, 11);
+  else if (saved) { icon("check", cx, cy - 7, with_alpha(ACC, a)); }
+  else icon("save", cx, cy - 7, ink);
+  // (its button: △, under the icon)
+  text_center((int)cx, (int)(cy + 22), ink, 13, saved ? "Saved" : "\u25b3 Save");
 }
 static void draw_webview(void) {
   if (!nposts) { screen = wv_back; return; }
@@ -3449,9 +3541,9 @@ static void draw_webview(void) {
   if (in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER)) { sfx(SFX_TICK); wv_show(wv - 1); return; }
   if ((in.pressed & SCE_CTRL_UP) && !wv_vid && !wdetails && !lv_post_is_video(p) && wzoom < 1.01f) { view_options_open(0); return; } // (↑ on a picture: Viewing)
   if (in.pressed & SCE_CTRL_CIRCLE) { if (wdetails) { sfx(SFX_CLOSE); wdetails = 0; } else { sfx(SFX_BACK); wv_drop(); wsel = wv; screen = wv_back; return; } }
-  if (in.pressed & SCE_CTRL_TRIANGLE) { sfx(wdetails ? SFX_CLOSE : SFX_OPEN); wdetails = !wdetails; }
-  // □: Save (an episode: ♥ Favorite); START: an episode's Offline
-  if (in.pressed & SCE_CTRL_SQUARE) { if (wv_is_long()) fav_toggle_video(&posts[wv], wv_site()); else sw_open(); wchrome_until = frame_no + 120; }
+  // △: Save (an episode: ♥ Favorite); □: the details; START: an episode's Offline
+  if (in.pressed & SCE_CTRL_SQUARE) { sfx(wdetails ? SFX_CLOSE : SFX_OPEN); wdetails = !wdetails; }
+  if (in.pressed & SCE_CTRL_TRIANGLE) { if (wv_is_long()) fav_toggle_video(&posts[wv], wv_site()); else sw_open(); wchrome_until = frame_no + 120; }
   if ((in.pressed & SCE_CTRL_START) && wv_is_long()) { wv_offline(); wchrome_until = frame_no + 120; }
   if ((in.pressed & SCE_CTRL_CROSS) && wdetails) { if (wv_similar(p)) return; }
   else if (in.pressed & SCE_CTRL_CROSS) {
