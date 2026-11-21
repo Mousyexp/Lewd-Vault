@@ -605,7 +605,7 @@ static struct {
   int autorot; // portrait pictures turned to fill the screen held on its side
   int nodecor; // the little anime girls (decor.c) hidden
   int notags;  // a save doesn't ask for your own tags
-} cfg = {"", 0, 0, 5, 0, 100, 0, 15, 0, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
+} cfg = {"", 0, 0, 5, 0, 100, 1, 15, 2, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
 static void cfg_load(void) {
   cfg.sndpack = 3; // (Bubbly, from the start)
   FILE *f = fopen(DATA "/config.txt", "r");
@@ -711,8 +711,56 @@ static int cat = -1;           // -1: every category
 static char query[128];
 // (their numbers are kept in config.txt: new ones only ever go on the end)
 static const char *SORTS[] = {"Newest", "Oldest", "Most viewed", "Top rated", "Most appreciated", "Shuffle", "For you",
-                              "Least viewed", "Recently viewed", "Most time spent"};
-#define NSORTS 10
+                              "Least viewed", "Recently viewed", "Most time spent", "Largest files"};
+#define NSORTS 11
+// ----- storage: what the app takes on the card (the vault's files, and its own data: caches, offline
+// comics, the video being played), measured on a thread; each item's size kept for "Largest files" -----
+static int64_t *item_bytes; static int item_bytes_n;
+static volatile int store_state; // 0 not measured, 1 measuring, 2 done
+static volatile int64_t store_vault, store_data;
+static int64_t dir_bytes(const char *dir, int depth) {
+  DIR *d = opendir(dir);
+  if (!d) return 0;
+  int64_t t = 0;
+  struct dirent *e;
+  char p[600];
+  while ((e = readdir(d))) {
+    if (e->d_name[0] == '.') continue;
+    snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+    struct stat st;
+    if (stat(p, &st) != 0) continue;
+    if (S_ISDIR(st.st_mode)) { if (depth < 6) t += dir_bytes(p, depth + 1); }
+    else t += st.st_size;
+  }
+  closedir(d);
+  return t;
+}
+static void *store_main(void *arg) {
+  (void)arg;
+  int n = vault.n;
+  int64_t *b = calloc(n + 1, sizeof *b);
+  int64_t sum = 0;
+  for (int i = 0; b && i < n && i < vault.n; i++) {
+    struct stat st;
+    if (vault.items[i].path && stat(vault.items[i].path, &st) == 0) { b[i] = st.st_size; sum += st.st_size; }
+  }
+  store_data = dir_bytes(DATA, 0);
+  store_vault = sum + (vault.root[0] ? 0 : 0);
+  static pthread_mutex_t sm = PTHREAD_MUTEX_INITIALIZER;
+  pthread_mutex_lock(&sm);
+  int64_t *old = item_bytes; item_bytes = b; item_bytes_n = b ? n : 0;
+  pthread_mutex_unlock(&sm);
+  (void)old; // (the old table left: a sort may be reading it this moment; small, measured rarely)
+  store_state = 2;
+  return NULL;
+}
+static void store_measure(void) {
+  if (store_state == 1) return;
+  store_state = 1;
+  pthread_t t; pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, 256 * 1024);
+  if (pthread_create(&t, &at, store_main, NULL) == 0) pthread_detach(t); else store_state = 0;
+}
+static int64_t bytes_of(int i) { return item_bytes && i >= 0 && i < item_bytes_n ? item_bytes[i] : 0; }
 static int lib_pass(int i);
 static void lib_prepare(void);
 static int mode_pass(int i);
@@ -750,6 +798,7 @@ static int cmp_items(const void *a, const void *b) {
       if (c) return c;
       break;
     }
+    case 10: { int64_t bx = bytes_of(*(const int *)a), by = bytes_of(*(const int *)b); d = by > bx ? 1 : by < bx ? -1 : 0; break; } // (largest first)
     case 9: { double sx = x->view >= 0 ? vault.views[x->view].seconds : 0, sy = y->view >= 0 ? vault.views[y->view].seconds : 0; d = sy > sx ? 1 : sy < sx ? -1 : 0; break; }
   }
   if (d) return d > 0 ? 1 : -1;
@@ -2116,6 +2165,7 @@ static void ac_build(const char *q); // (web.c)
 static void draw_onboarding(void);
 static int tab_prev = -1; static unsigned tab_at; // (the tab switched from, and when: the slide)
 static int stats_back = S_SETTINGS; // (where ○ goes from Your stats: the Library's corner, or Settings)
+static int browser_screen = S_WEB; // (the Browser tab: back to whichever of its screens was last open)
 static int tab_of_screen(void) {
   switch (screen) {
     case S_LIBRARY: case S_FAVS: return 0;
@@ -2192,7 +2242,7 @@ static void draw_bar(void) {
     int k = (sel_tab + in.r_flick + 4) % 4;
     sfx(SFX_TAB);
     if (k == 0) screen = S_LIBRARY;
-    if (k == 1) screen = S_WEB;
+    if (k == 1) screen = browser_screen;
     if (k == 2) { screen = S_SHOW; plan_sel = 0; }
     if (k == 3) screen = S_SETTINGS;
     in.r_flick = 0;
@@ -2237,7 +2287,7 @@ static void draw_bar(void) {
     if (in.tap && in.tap_x >= px + k * tw - (k == 0 ? 20 : 0) && in.tap_x < px + (k + 1) * tw + (k == 3 ? 20 : 0) && in.tap_y >= py - 10) {
       sfx(SFX_TAB);
       if (k == 0) { screen = S_LIBRARY; if (query[0]) { query[0] = 0; refilter(); } }
-      if (k == 1) screen = S_WEB;
+      if (k == 1) screen = browser_screen;
       if (k == 2) { screen = S_SHOW; plan_sel = 0; }
       if (k == 3) screen = S_SETTINGS;
       in.tap = 0;
@@ -3201,6 +3251,7 @@ static void res_badge(int w, int h, int a) {
   }
 }
 static void fmt_time(uint64_t ms, char *o, size_t n);
+static unsigned resumed_at; // (a video carried on from where it was stopped: when)
 // "Similar to this": the two tags of these that say most what it is: specific ones (a character, a
 // series: long, with underscores or brackets) before generic ones, never the generic ones of a list,
 // never one already searched for (exclude). out: "a b", or "" when there's none.
@@ -3536,7 +3587,16 @@ static void draw_viewer(void) {
     snprintf(m, sizeof m, "Carrying on from %s", a1);
     say(m);
     resume_to = -1;
+    resumed_at = frame_no ? frame_no : 1;
   }
+  // (just carried on: a button to start from the beginning instead, for five seconds)
+  if (vid && resumed_at && frame_no - resumed_at < 300) {
+    const char *l = "\u21ba  From the start";
+    int bw = text_w(15, l) + 32, bx = W / 2 - bw / 2, by = H - 130;
+    glass(bx, by, bw, 40, 0);
+    text_center(W / 2, by + 26, TEXT, 15, l);
+    if (hit(bx, by, bw, 40)) { lv_video_seek(vid, 0); resumed_at = 0; sfx(SFX_SELECT); in.tap = 0; }
+  } else resumed_at = 0;
   if (vid && !vid_clip && ab_a >= 0 && ab_b > ab_a && (int64_t)lv_video_pos(vid) >= ab_b) lv_video_seek(vid, ab_a);
   if (vid && vid_clip && is_video(it)) text_center(W / 2, 30, with_alpha(TEXT, 200), 15, "Preview clip: the Vita can't play this video's own file");
 
@@ -4025,6 +4085,10 @@ static void draw_settings(void) {
   if (vo_open) { draw_view_options(); return; } // (Viewing: the full views' own panel)
   char vtext[16];
   snprintf(vtext, sizeof vtext, "%d%%", text_pct);
+  char vstore[48];
+  if (store_state == 0) store_measure();
+  if (store_state != 2) snprintf(vstore, sizeof vstore, "Measuring\u2026");
+  else { double mb = (store_vault + store_data) / 1048576.0; if (mb >= 1024) snprintf(vstore, sizeof vstore, "%.2f GB", mb / 1024); else snprintf(vstore, sizeof vstore, "%.0f MB", mb); }
   char vrear[64];
   snprintf(vrear, sizeof vrear, "L: %s \u00b7 R: %s", REAR_SHORT[rear_of(0)], REAR_SHORT[rear_of(1)]);
   char vview[48];
@@ -4035,7 +4099,7 @@ static void draw_settings(void) {
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_REAR, ST_AUTOROT, ST_DECOR, ST_OTAGS, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_REAR, ST_AUTOROT, ST_DECOR, ST_OTAGS, ST_STORAGE, ST_SAVEQ, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change; past 100% it's made louder than the video itself"},
@@ -4066,6 +4130,8 @@ static void draw_settings(void) {
     {"Turn portrait pictures", cfg.autorot ? "On" : "Off", "A tall picture turned to fill the screen, for the Vita held on its side"},
     {"Decorations", cfg.nodecor ? "Off" : "On", "The little anime girls by empty screens and in corners, in the accent's colour (tap one)"},
     {"Your tags when saving", cfg.notags ? "Off" : "On", "After a save: pick tags you've given before or type new ones (yours come first)"},
+    {"Save quality", cfg.wfull ? "Original" : "Vita-sized", "Saves kept as the original file, or made Vita-sized (smaller, quicker)"},
+    {"Storage used", vstore, "What the app takes on the card \u00b7 \u2715 the Library, largest files first"},
   };
   // (which rows have been changed from how the app starts: their value in the accent, a touch bolder;
   //  the others' in grey, just saying what it is)
@@ -4078,7 +4144,7 @@ static void draw_settings(void) {
   changed[ST_COMICS] = cfg.cmode || cfg.corient || cfg.canim || cfg.cdir || cfg.ctap || cfg.cdbl || cfg.cback;
   changed[ST_VIEW] = cfg.ifit || cfg.iorient || cfg.vfit || cfg.vorient; changed[ST_TEXT] = text_pct != 100;
   changed[ST_ACCPIC] = cfg.accpic != 0; changed[ST_REAR] = cfg.rear_l || cfg.rear_r; changed[ST_AUTOROT] = cfg.autorot != 0;
-  changed[ST_DECOR] = cfg.nodecor != 0; changed[ST_OTAGS] = cfg.notags != 0;
+  changed[ST_DECOR] = cfg.nodecor != 0; changed[ST_OTAGS] = cfg.notags != 0; changed[ST_SAVEQ] = cfg.wfull != 0;
   // In sections, each with a header: the rows in the order shown (set_sel stays a row's ST_ id)
   static const signed char ORDER[] = {
     -1, ST_THEME, ST_ACCPIC, ST_BGS, ST_DECOR, ST_TEXT, ST_SNDPACK, ST_SOUNDS, ST_GLOW, ST_DBL,
@@ -4086,7 +4152,7 @@ static void draw_settings(void) {
     -6, ST_COMICS,
     -3, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK,
     -4, ST_DRIVE, ST_WIFI, ST_CONV,
-    -5, ST_SEARCH, ST_OTAGS, ST_STATS, ST_CLEAN, ST_DUPES, ST_HEALTH, ST_VAULT, ST_CACHE,
+    -5, ST_SEARCH, ST_OTAGS, ST_SAVEQ, ST_STORAGE, ST_STATS, ST_CLEAN, ST_DUPES, ST_HEALTH, ST_VAULT, ST_CACHE,
   };
   static int set_init;
   if (!set_init) { set_init = 1; set_sel = ST_THEME; } // (the first row shown)
@@ -4314,6 +4380,10 @@ static void draw_settings(void) {
       case ST_AUTOROT: if (cross || d) { cfg.autorot = !cfg.autorot; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_DECOR: if (cross || d) { cfg.nodecor = !cfg.nodecor; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_OTAGS: if (cross || d) { cfg.notags = !cfg.notags; sfx(SFX_TOGGLE); cfg_save(); } break;
+      case ST_SAVEQ: if (cross || d) { cfg.wfull = !cfg.wfull; sfx(SFX_TOGGLE); cfg_save(); } break;
+      case ST_STORAGE: if (cross) { // (the Library, its largest files first; measured again for it)
+        sfx(SFX_OPEN); store_state = 0; store_measure(); cfg.sort = 10; cfg_save(); refilter(); screen = S_LIBRARY; say("Largest files first");
+      } break;
       case ST_ACCPIC: if (cross || d) { cfg.accpic = !cfg.accpic; if (!cfg.accpic) apply_theme(); cfg_save(); sfx(SFX_TOGGLE); } break;
       case ST_CACHE:
         if (cross) {
@@ -5063,13 +5133,13 @@ int main(void) {
         dl_post >= 0 || msave_on || conv_on) { // (and while a video downloads or a chapter is saved: sleep would cut the Wi-Fi)
       // (once a second: the dimming and sleep timers are minutes long, a call every frame is wasted)
       static unsigned tick_at;
-      if (frame_no - tick_at >= 60) { tick_at = frame_no; sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND); }
+      if (frame_no - tick_at >= 60) { tick_at = frame_no; sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DEFAULT); }
     }
     // (an offline copy being saved, a chapter, a conversion: the PS button is held until it's done,
     //  since leaving suspends the app and cuts the download; it works again as soon as it finishes)
     {
       static int locked, events;
-      int want = saving || msave_on || conv_on;
+      int want = 0; // (never held: leaving the app is always allowed; what was downloading is stopped)
       if (want != locked) {
         if (!events) { sceShellUtilInitEvents(0); events = 1; }
         if (want) sceShellUtilLock(SCE_SHELL_UTIL_LOCK_TYPE_PS_BTN);
@@ -5096,6 +5166,8 @@ int main(void) {
       if (vk >= nshown) vk = nshown ? nshown - 1 : 0;
       if (sel >= nshown) sel = nshown ? nshown - 1 : 0;
     }
+    if (screen == S_WEB || screen == S_VIDEOS || screen == S_MANGA) browser_screen = screen;
+    { static int was_store; if (store_state == 2 && was_store != 2 && cfg.sort == 10) refilter(); was_store = store_state; }
     // (the header and the tab bar: tucked only while the Library or the Browser scrolls down)
     if (screen != S_LIBRARY && screen != S_WEB && screen != S_SETTINGS) chrome_target = 0;
     chrome_hide += (chrome_target - chrome_hide) * ease(0.25f);
@@ -5124,7 +5196,8 @@ int main(void) {
       if (r == 1 && ime_for == 16 && got[0]) { for (char *c = got; *c; c++) if (*c == ',' || *c == '"') *c = ' '; snprintf(sw_cat, sizeof sw_cat, "%.63s", got); sw_catsel = sw_ncats() - 1; }
       if (r == 1 && ime_for == 9) { snprintf(whidden, sizeof whidden, "%s", got); hidden_save(); web_search(); }
       if (r == 1 && ime_for == 10 && got[0]) { snprintf(wkey_user, sizeof wkey_user, "%s", got); wkey_ask = 1; }
-      if (r == 1 && ime_for == 11 && got[0]) { snprintf(wkeys[cfg.site], sizeof wkeys[cfg.site], "%s %s", wkey_user, got); wkeys_save(); sfx(SFX_DONE); web_search(); }
+      if (r == 1 && ime_for == 11 && got[0]) { snprintf(wkeys[cfg.site], sizeof wkeys[cfg.site], "%s %s", wkey_user, got); wkeys_save(); sfx(SFX_DONE); if (vb_key_src >= 0) { int k = vb_key_src; vb_key_src = -1; screen = S_VIDEOS; vb_open(k); } else web_search(); }
+      if (r != 0 && ime_for == 11 && !got[0]) vb_key_src = -1;
       if (r == 1 && (ime_for == 12 || ime_for == 13)) {
         int ok = strlen(got) >= 4 && strlen(got) <= 6 && strspn(got, "0123456789") == strlen(got);
         if (!ok) { sfx(SFX_ERROR); say("A PIN is 4 to 6 digits"); }

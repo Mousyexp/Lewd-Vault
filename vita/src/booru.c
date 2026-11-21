@@ -14,7 +14,7 @@ LvSite LV_SITES[LV_MAX_SITES] = {
   {"Yande.re", BK_MOEBOORU, "https://yande.re", NULL, 0, 0, "yandere", "High-resolution anime scans"},
   {"Konachan", BK_MOEBOORU, "https://konachan.com", NULL, 0, 0, "konachan", "Anime wallpapers"},
   {"Xbooru Comics", BK_GELBOORU, "https://xbooru.com", NULL, 0, 0, "xcomics", "Hentai comic pages", "comic"},
-  {"Xbooru", BK_GELBOORU, "https://xbooru.com", NULL, 0, 0, "xbooru", "Hentai"},
+  {"Xbooru", BK_GELBOORU, "https://xbooru.com", NULL, 0, 0, "xbooru", "Hentai", NULL, 1},
   // (TBIB and Rule34: much western and 3D: not offered, the app being about anime and hentai)
   {"TBIB", BK_GELBOORU, "https://tbib.org", NULL, 0, 0, "tbib", "The big imageboard", NULL, 1},
   {"Hypnohub", BK_GELBOORU, "https://hypnohub.net", NULL, 0, 0, "hypnohub", "Hypnosis art"},
@@ -24,7 +24,7 @@ LvSite LV_SITES[LV_MAX_SITES] = {
   {"Danbooru Comics", BK_DANBOORU, "https://danbooru.donmai.us", NULL, 1, 0, "dancomics", "Manga-style comic pages", "comic"},
   {"Gelbooru", BK_GELBOORU, "https://gelbooru.com", NULL, 0, 1, "gelbooru", "Anime and hentai (API key)"},
   {"Rule34", BK_GELBOORU, "https://api.rule34.xxx", "https://rule34.xxx", 0, 1, "rule34", "Rule 34, games and anime (API key)", NULL, 1},
-  {"Sakugabooru", BK_MOEBOORU, "https://www.sakugabooru.com", NULL, 0, 0, "sakugabooru", "Anime animation clips (videos)"},
+  {"Sakugabooru", BK_MOEBOORU, "https://www.sakugabooru.com", NULL, 0, 0, "sakugabooru", "Anime animation clips (videos)", NULL, 1},
   // (video sites: only in the video browser)
   {"Rule34Video", BK_KVS, "https://rule34video.com", NULL, 1, 0, "rule34video", "Hentai and game animations", "hentai", 1},
   // (image sites, not boorus)
@@ -181,7 +181,8 @@ void lv_booru_url_ex(const LvSite *s, const char *tags, int ratings, int sort, i
   switch (sort) {
     case LV_SORT_HOT: order = s->kind == BK_DANBOORU ? " order:rank" : s->kind == BK_E621 ? " order:hot" : ""; break;
     case LV_SORT_TOP: order = s->kind == BK_GELBOORU ? " sort:score" : " order:score"; break;
-    case LV_SORT_RANDOM: order = s->kind == BK_GELBOORU ? " sort:random" : " order:random"; break;
+    // (Danbooru's random over everything times out (500): random among the last two months)
+    case LV_SORT_RANDOM: order = s->kind == BK_GELBOORU ? " sort:random" : s->kind == BK_DANBOORU ? " order:random age:<2mo" : " order:random"; break;
   }
   strncat(q, order, sizeof q - strlen(q) - 1);
   // Top's span: Danbooru's age, e621's date, Moebooru's date from (Gelbooru's kind has none)
@@ -784,7 +785,7 @@ static LvPost *image_site_parse(const LvSite *s, const char *text, size_t len, i
       if (!fn[0] || !ext[0]) continue;
       snprintf(a, sizeof a, "https://cdn.e-shuushuu.net/thumbs/%s.webp", fn);
       // (the medium copy, made for screens, where there is one; else the picture)
-      snprintf(c, sizeof c, "%s/images/%s.%s", s->base, fn, ext);
+      snprintf(c, sizeof c, "https://cdn.e-shuushuu.net/fullsize/%s.%s", fn, ext); // (the picture itself: where its old address now leads)
       if (json_gn(&j, k, "medium") >= 1) snprintf(b, sizeof b, "https://cdn.e-shuushuu.net/medium/%s.jpg", fn);
       else snprintf(b, sizeof b, "%s", c);
       snprintf(page, sizeof page, "%s/images/%lld", s->base, p.id);

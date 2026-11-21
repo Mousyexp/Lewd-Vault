@@ -295,8 +295,8 @@ void lv_strings_free(char **s, int n) {
 // ======================= the other sites =======================
 const char *const LV_MK_NAME[MK_N] = {"MANGA", "H MANGA", "H WEBTOON", "SHORT COMICS"};
 const LvMSrc LV_MSRC[MS_N] = {
+  {"E-Hentai", "ehentai", "Doujinshi, hentai manga, CG", MF_EHENTAI, MK_HMANGA}, // (first: the default)
   {"MangaDex", "mangadex", "Manga of all kinds, 18+ included", MF_MANGADEX, MK_MANGA},
-  {"E-Hentai", "ehentai", "Doujinshi, hentai manga, CG", MF_EHENTAI, MK_HMANGA},
   {"HentaiFox", "hentaifox", "Hentai manga and doujinshi", MF_GALLERY, MK_HMANGA, "https://hentaifox.com", "/?page=%d", "/search/?q=%s&page=%d", "/gallery/"},
   {"AsmHentai", "asmhentai", "Doujinshi, many in English", MF_GALLERY, MK_HMANGA, "https://asmhentai.com", "/?page=%d", "/search/?q=%s&page=%d", "/g/"},
   {"HentaiEra", "hentaiera", "Hentai manga, new every day", MF_GALLERY, MK_HMANGA, "https://hentaiera.com", "/?page=%d", "/search/?key=%s&page=%d", "/gallery/"},
@@ -335,9 +335,11 @@ void lv_ms_list_url(int src, const char *query, int page, char *out, size_t cap)
     if (fd && fd < fs) snprintf(path, sizeof path, s->search, pg, e);
     else if (fd) snprintf(path, sizeof path, s->search, e, pg);
     else snprintf(path, sizeof path, s->search, e);
-  } else if (s->list) snprintf(path, sizeof path, s->list, pg);
+  } else if (s->list && page == 1 && !strcmp(s->list, "/page/%d/")) snprintf(path, sizeof path, "/"); // (its first page is its home: /page/1/ only redirects there)
+  else if (s->list) snprintf(path, sizeof path, s->list, pg);
   else snprintf(path, sizeof path, "%s", s->item);
-  snprintf(out, cap, "%s%s", s->base, path);
+  if (!strncmp(path, "http", 4)) snprintf(out, cap, "%s", path); // (a search on another host: JustManga's API)
+  else snprintf(out, cap, "%s%s", s->base, path);
 }
 
 // --- small helpers on HTML ---

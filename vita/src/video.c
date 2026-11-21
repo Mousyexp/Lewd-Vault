@@ -103,7 +103,8 @@ struct LvVideo {
   volatile int64_t clock_base_ms; // where the sound clock started (a seek moves it)
   volatile uint64_t played;        // samples out since then
   int64_t wall_start;              // (no sound: the wall clock, in microseconds)
-  volatile int64_t seek_to;        // -1: none
+  volatile int64_t seek_to;        // -1: none (the system player: a jump waiting for its first picture)
+  int av_shown;                    // (the system player: its first picture has come)
   volatile int ended;
   uint8_t *pix[2];
   int pix_w, pix_h;
@@ -252,8 +253,18 @@ static int av_sound_main(SceSize args, void *argp) {
         rate = r; ch = c;
         sceAudioOutSetConfig(port, GRAIN, rate, ch == 1 ? SCE_AUDIO_OUT_MODE_MONO : SCE_AUDIO_OUT_MODE_STEREO);
       }
-      if (port >= 0 && gbuf) { gain_into(gbuf, (const int16_t *)f.pData, GRAIN * ch, v->volume); sceAudioOutOutput(port, gbuf); }
-      else if (port >= 0) sceAudioOutOutput(port, f.pData);
+      // (a frame can hold more than one block, 2048 samples for HE-AAC: all of it played, a block at a
+      //  time; a short tail made whole with silence. Only its first block played before: the sound
+      //  stuttered and "echoed" on long videos)
+      int total = f.details.audio.size && ch ? (int)(f.details.audio.size / (2 * ch)) : GRAIN;
+      const int16_t *src = (const int16_t *)f.pData;
+      for (int off = 0; port >= 0 && gbuf && off < total; off += GRAIN) {
+        int nsm = total - off < GRAIN ? total - off : GRAIN;
+        gain_into(gbuf, src + off * ch, nsm * ch, v->volume);
+        if (nsm < GRAIN) memset(gbuf + nsm * ch, 0, (GRAIN - nsm) * ch * sizeof(int16_t));
+        sceAudioOutOutput(port, gbuf);
+      }
+      if (port >= 0 && !gbuf) sceAudioOutOutput(port, f.pData);
     } else if (port >= 0) {
       sceAudioOutOutput(port, silence); // (keeps the port's timing; also waits a block)
     } else {
@@ -308,6 +319,7 @@ static vita2d_texture *av_frame(LvVideo *v) {
       f.details.video.width >= 16 && f.details.video.height >= 16 && f.details.video.width <= 4096 && f.details.video.height <= 4096) {
     v->w = (int)f.details.video.width;
     v->h = (int)f.details.video.height;
+    if (!v->av_shown) { v->av_shown = 1; if (v->seek_to > 0) { sceAvPlayerJumpToTime(v->h_av, (uint64_t)v->seek_to); } v->seek_to = -1; }
     sceGxmTextureInitLinear(&v->tex.gxm_tex, f.pData, SCE_GXM_TEXTURE_FORMAT_YVU420P2_CSC1, v->w, v->h, 0);
     sceGxmTextureSetMinFilter(&v->tex.gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
     sceGxmTextureSetMagFilter(&v->tex.gxm_tex, SCE_GXM_TEXTURE_FILTER_LINEAR);
@@ -829,6 +841,7 @@ LvVideo *lv_video_open_growing(const char *path, const LvGrow *g) {
   v->speed = 100;
   v->add_thread = v->audio_thread = -1;
   v->run = 1;
+  v->seek_to = -1;
   if (av_open(v) != 0) { lv_video_close(v); return NULL; }
   return v;
 }
@@ -842,6 +855,7 @@ LvVideo *lv_video_open(const char *path, const uint8_t *key, int loop) {
   v->speed = 100;
   v->add_thread = v->audio_thread = -1;
   v->run = 1;
+  v->seek_to = -1;
   v->sw = ext(path, "webm") || ext(path, "mkv") || ext(path, "avi");
   if ((v->sw ? sw_open(v) : av_open(v)) != 0) { lv_video_close(v); return NULL; }
   return v;
@@ -876,7 +890,8 @@ void lv_video_seek(LvVideo *v, int64_t ms) {
   if (v->duration && ms > (int64_t)v->duration - 500) ms = (int64_t)v->duration - 500;
   if (ms < 0) ms = 0;
   if (v->sw) { v->seek_to = ms; pthread_mutex_lock(&v->mx); pthread_cond_broadcast(&v->cv); pthread_mutex_unlock(&v->mx); }
-  else if (v->ready) sceAvPlayerJumpToTime(v->h_av, (uint64_t)ms);
+  else if (v->ready && v->av_shown) sceAvPlayerJumpToTime(v->h_av, (uint64_t)ms);
+  else v->seek_to = ms; // (asked before the system player shows anything: done once its first picture is here)
 }
 void lv_video_set_volume(LvVideo *v, int vol) { if (v) v->volume = vol; }
 int lv_video_speed(const LvVideo *v) { return v ? v->speed : 100; }

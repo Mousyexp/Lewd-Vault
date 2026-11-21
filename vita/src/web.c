@@ -613,6 +613,10 @@ static void *sample_main(void *arg) {
         dl_post = -1;
       } else {
         st = lv_http_get(h, post.sample, &b, &n, 32u * 1024 * 1024, &big_cancel, &big_progress, &err);
+        // (that copy not there (404, 403, 410): the picture itself, then the preview, before an error)
+        const char *alts[2] = {post.file, post.preview};
+        for (int a2 = 0; a2 < 2 && st >= 400 && st < 500 && !big_cancel; a2++)
+          if (alts[a2] && alts[a2][0] && strcmp(alts[a2], post.sample ? post.sample : "")) { free(b); b = NULL; n = 0; st = lv_http_get(h, alts[a2], &b, &n, 32u * 1024 * 1024, &big_cancel, &big_progress, &err); }
       }
       if (st != 200) {
         snprintf(d.err, sizeof d.err, "%s", err && err[0] ? err : "It didn't download");
@@ -913,8 +917,14 @@ static void dl_end(int ok, const char *why) {
   else ev_notice("xmark", ACC2, "Download failed: %.40s", dls[0].name);
 }
 // (each frame: the one going, its bytes and speed)
+static void dlq_next(void);
+static void dl_cancel(void);
 static void dl_tick(void) {
-  if (!ndl || dls[0].state) return;
+  if (!ndl || dls[0].state) { dlq_next(); return; }
+  if (!saving) { dls[0].state = 2; dls[0].t1 = frame_no; return; } // (nothing behind it any more: ended)
+  { static int64_t seen; static unsigned moved_at; // (no new bytes for a minute: given up, the next one goes)
+    if (dls[0].have != seen) { seen = dls[0].have; moved_at = frame_no; }
+    else if (frame_no - moved_at > 3600) { dl_cancel(); snprintf(dls[0].why, sizeof dls[0].why, "It stopped coming"); return; } }
   int64_t now = 0, total = 0;
   lv_http_progress_bytes(&big_progress, &now, &total);
   static int64_t last;
@@ -933,6 +943,18 @@ static void fmt_bytes(int64_t b, char *o, size_t n) {
   else snprintf(o, n, "%d KB", (int)(b / 1024));
 }
 static int dl_going(void) { return ndl && !dls[0].state; }
+// (saves asked for while one is going: queued, each started when the one before ends)
+static int dlq[16], ndlq, dlq_gen;
+static void grid_save(int k);
+static void dlq_next(void) {
+  while (ndlq && !saving) { int k = dlq[0]; ndlq--; memmove(dlq, dlq + 1, ndlq * sizeof *dlq); if (dlq_gen == wgen) grid_save(k); }
+}
+static void dl_cancel(void) { // (the one going, stopped: ✕ in the pane)
+  if (!dl_going()) return;
+  pthread_mutex_lock(&wmx); big_cancel = 1; pthread_mutex_unlock(&wmx);
+  dls[0].state = 2; dls[0].t1 = frame_no; snprintf(dls[0].why, sizeof dls[0].why, "Cancelled");
+  saving = 0; sfx(SFX_CLOSE);
+}
 // (the edge tab: a download icon and the arrow, a dot when something's come since it was looked at)
 static void draw_dlp_tab(void) {
   if (dlp_t > 0.01f) return;
@@ -995,6 +1017,10 @@ static int draw_dlp(void) {
     if (d->state == 0) {
       char sp[32];
       fmt_bytes((int64_t)d->speed, sp, sizeof sp);
+      if (k == 0) { // (✕: stop it)
+        circle(x + pw - 36, y + 26, 14, with_alpha(ACC2, 160)); icon("xmark", x + pw - 36, y + 26, TEXT);
+        if (hit(x + pw - 56, y + 6, 40, 40)) { dl_cancel(); in.tap = 0; }
+      }
       if (d->total > 0) snprintf(line, sizeof line, "%s of %s  ·  %s/s", a, b, sp);
       else snprintf(line, sizeof line, "%s  ·  %s/s", a, sp);
       text_fit(x + 102, y + 48, DIM, 13, line, pw - 130);
@@ -1030,7 +1056,11 @@ static unsigned qm_at;
 static int wv_similar(const LvPost *p);
 // (a save from the grid: the same job as the full view's, the picture fetched by the save itself)
 static void grid_save(int k) {
-  if (saving || k < 0 || k >= nposts) return;
+  if (k < 0 || k >= nposts) return;
+  if (saving) { // (one going: this one waits its turn)
+    if (ndlq < 16 && !is_saved(&posts[k]) && !lv_post_is_video(&posts[k])) { if (!ndlq) dlq_gen = wgen; if (dlq_gen == wgen) { dlq[ndlq++] = k; sfx(SFX_TICK); say("Queued: it saves after the one going"); } }
+    return;
+  }
   const LvPost *pp = &posts[k];
   if (is_saved(pp)) { sfx(SFX_ERROR); say("Already in your vault"); return; }
   if (!loaded_vault) { say("Open a vault first"); return; }
@@ -1115,7 +1145,8 @@ static int draw_qm(float scroll) {
 // (the save page's choices; -1 level: from the post's rating; "" category: the usual one)
 // (the save page's choices: sw_nsfw, sw_stars, sw_notags, sw_cat, declared above)
 static void wv_save(void) {
-  if (saving || wv >= nposts) return;
+  if (wv >= nposts) return;
+  if (saving) { grid_save(wv); return; } // (one going: queued)
   if (is_saved(&posts[wv])) { sfx(SFX_ERROR); say("Already in your vault"); return; }
   if (!loaded_vault) { say("Open a vault first"); return; }
   int video = lv_post_is_video(&posts[wv]);
@@ -1330,8 +1361,10 @@ static int vb_cur = -1;
 static int sites_visible(int *vis) {
   int n = 0;
   // (the boorus first, then the image sites)
+  // (Yande.re first: the default)
+  for (int k = 0; k < LV_NSITES; k++) if (!LV_SITES[k].hidden && !strcmp(LV_SITES[k].name, "Yande.re")) vis[n++] = k;
   for (int pass = 0; pass < 2; pass++)
-    for (int k = 0; k < LV_NSITES; k++) if (!LV_SITES[k].hidden && lv_site_is_booru(&LV_SITES[k]) == !pass) vis[n++] = k;
+    for (int k = 0; k < LV_NSITES; k++) if (!LV_SITES[k].hidden && lv_site_is_booru(&LV_SITES[k]) == !pass && strcmp(LV_SITES[k].name, "Yande.re")) vis[n++] = k;
   return n;
 }
 static int site_tile_of(int site) {

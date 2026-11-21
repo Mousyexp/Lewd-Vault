@@ -10,8 +10,8 @@ static unsigned dec_acc[DEC_N];
 static unsigned dec_bounce_at[DEC_N];
 static int dec_failed[DEC_N];
 // (the accent's hue against rose's, 349°: how far to turn; grey: -1000)
-static float dec_turn(void) {
-  float r = (ACC & 255) / 255.f, g = ((ACC >> 8) & 255) / 255.f, b = ((ACC >> 16) & 255) / 255.f;
+static float dec_turn(unsigned acc) {
+  float r = (acc & 255) / 255.f, g = ((acc >> 8) & 255) / 255.f, b = ((acc >> 16) & 255) / 255.f;
   float mx = fmaxf(r, fmaxf(g, b)), mn = fminf(r, fminf(g, b)), d = mx - mn, h = 0;
   if (d > 0) h = mx == r ? fmodf((g - b) / d, 6) : mx == g ? (b - r) / d + 2 : (r - g) / d + 4;
   h = fmodf(h * 60 + 360, 360);
@@ -20,8 +20,8 @@ static float dec_turn(void) {
   float t = fmodf(h - 349 + 540, 360) - 180;
   return fabsf(t) < 6 ? 0 : t;
 }
-static void dec_tint(LvPixels *px) {
-  float t = dec_turn();
+static void dec_tint(LvPixels *px, unsigned acc) {
+  float t = dec_turn(acc);
   if (t == 0) return;
   float m[9];
   if (t <= -999) { // (grey, as CSS grayscale(1))
@@ -44,24 +44,53 @@ static void dec_tint(LvPixels *px) {
     p[2] = (uint8_t)(nb < 0 ? 0 : nb > 255 ? 255 : nb);
   }
 }
-static vita2d_texture *dec_get(int k) {
-  if (k < 0 || k >= DEC_N || dec_failed[k]) return NULL;
-  if (dec_tex[k] && dec_acc[k] == ACC) return dec_tex[k];
+// (made on a thread: the file read, decoded and turned to the accent there, only the upload here; the
+//  first frames go without her rather than the screen stopping for it)
+static pthread_mutex_t dec_mx = PTHREAD_MUTEX_INITIALIZER;
+static volatile int dec_busy;
+static int dec_job_k;
+static unsigned dec_job_acc;
+static LvPixels dec_done_px;
+static int dec_done_k = -1, dec_done_fail;
+static unsigned dec_done_acc;
+static void *dec_main(void *arg) {
+  (void)arg;
+  int k = dec_job_k; unsigned acc = dec_job_acc;
   char path[64];
   snprintf(path, sizeof path, "app0:decor/%s.webp", DEC_FILE[k]);
   size_t n = 0;
   uint8_t *b = lv_read_all(path, NULL, &n);
   LvPixels px;
   memset(&px, 0, sizeof px);
-  if (!b || lv_decode(b, n, k == DEC_PEACE ? 1024 : 400, k == DEC_PEACE ? 1024 : 400, &px) != 0 || !px.rgba) { free(b); dec_failed[k] = 1; return dec_tex[k]; }
+  int lim = k == DEC_PEACE ? 1024 : 400;
+  int fail = !b || lv_decode(b, n, lim, lim, &px) != 0 || !px.rgba;
   free(b);
-  dec_tint(&px);
-  vita2d_texture *t = upload(&px);
-  free(px.rgba);
-  if (dec_tex[k]) free_later(dec_tex[k]);
-  dec_tex[k] = t;
-  dec_acc[k] = ACC;
-  return t;
+  if (!fail) dec_tint(&px, acc);
+  pthread_mutex_lock(&dec_mx);
+  dec_done_px = px; dec_done_k = k; dec_done_acc = acc; dec_done_fail = fail;
+  pthread_mutex_unlock(&dec_mx);
+  dec_busy = 0;
+  return NULL;
+}
+static vita2d_texture *dec_get(int k) {
+  if (k < 0 || k >= DEC_N || dec_failed[k]) return NULL;
+  if (dec_tex[k] && dec_acc[k] == ACC) return dec_tex[k];
+  // (one finished: uploaded)
+  pthread_mutex_lock(&dec_mx);
+  if (dec_done_k >= 0) {
+    int dk = dec_done_k; dec_done_k = -1;
+    if (dec_done_fail) dec_failed[dk] = 1;
+    else { vita2d_texture *t = upload(&dec_done_px); if (dec_tex[dk]) free_later(dec_tex[dk]); dec_tex[dk] = t; dec_acc[dk] = dec_done_acc; }
+    free(dec_done_px.rgba); dec_done_px.rgba = NULL;
+  }
+  pthread_mutex_unlock(&dec_mx);
+  if (dec_tex[k] && dec_acc[k] == ACC) return dec_tex[k];
+  if (!dec_busy) {
+    dec_busy = 1; dec_job_k = k; dec_job_acc = ACC;
+    pthread_t th; pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, 128 * 1024);
+    if (pthread_create(&th, &at, dec_main, NULL) == 0) pthread_detach(th); else dec_busy = 0;
+  }
+  return dec_tex[k]; // (the one made for the accent before, meanwhile, if there is one)
 }
 // One standing with her feet at (cx, bottom): breathing, a bounce when tapped (a tap on her says 1).
 // h: how tall (her picture's height is 340); clip_y: nothing of her drawn below it (a peek: 0 none).

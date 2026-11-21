@@ -10,24 +10,18 @@ static pthread_mutex_t vbmx = PTHREAD_MUTEX_INITIALIZER; // (the video browser's
 static int vb_src = -1;
 typedef struct { const char *name, *site, *tags, *icon, *about; int blocked; } VSource;
 static const VSource VSRC_BUILTIN[] = {
-  // (whole episodes, 10 minutes and longer: kept as a favourite or made available offline)
-  {"HentaiWorld", "HentaiWorld", "", "hentaiworld", "Hentai episodes, new each week", 0},
-  {"HentaiCloud", "HentaiCloud", "", "hentaicloud", "Hentai episodes, English subs", 0},
+  // (whole episodes, 8-10 minutes and longer: kept as a favourite or made available offline.
+  //  HentaiCity first, the default; HentaiWorld, the XVideos episode lists, Sakugabooru, Xbooru,
+  //  hanime.tv and MissAV taken off the list, 2026-11)
   {"HentaiCity", "HentaiCity", "", "hentaicity", "Hentai episodes, 8 min+", 0},
-  {"Hentai Episodes", "XVideos Hentai", "", "xvideos", "Whole episodes, 10 min+", 0},
-  {"Uncensored Episodes", "XVideos Hentai", "uncensored", "xvideos", "Uncensored episodes, 10 min+", 0},
+  {"HentaiCloud", "HentaiCloud", "", "hentaicloud", "Hentai episodes, English subs", 0},
   {"R34V Longest", "Rule34Video", "longest", "rule34video", "The longest hentai videos", 0},
   {"Rule34Video", "Rule34Video", "hentai", "rule34video", "Hentai animations", 0},
   {"Genshin Impact", "Rule34Video", "genshin-impact", "r34anime", "Genshin animations (Rule34Video)", 0},
   {"Blue Archive", "Rule34Video", "blue-archive", "r34anime", "Blue Archive animations (Rule34Video)", 0},
-  {"Sakugabooru", "Sakugabooru", "", "sakugabooru", "Anime animation clips", 0},
-  {"Rule34", "Rule34", "video -furry -3d -real", "rule34", "Hentai videos (API key)", 0},
-  {"Xbooru", "Xbooru", "video", "xbooru", "Hentai clips", 0},
-  {"Gelbooru", "Gelbooru", "video", "gelbooru", "Anime and hentai clips (key)", 0},
+  {"Rule34", "Rule34", "video -furry -3d -real", "rule34", "Hentai videos (your API key)", 0},
+  {"Gelbooru", "Gelbooru", "video", "gelbooru", "Anime and hentai clips (your API key)", 0},
   {"Danbooru", "Danbooru", "filetype:mp4", "danbooru", "Anime clips", 0},
-  // (both only answer after a Cloudflare browser check, which an app can't pass)
-  {"hanime.tv", NULL, NULL, "hanime", "Hentai (browser check)", 1},
-  {"MissAV", NULL, NULL, "missav", "JAV (browser check)", 1},
 };
 #define NVSRC_BUILTIN ((int)(sizeof VSRC_BUILTIN / sizeof *VSRC_BUILTIN))
 // The sources offered: the built-in ones that answer, the ones added (the site finder, web.c: saved
@@ -165,7 +159,7 @@ static const VRowDef VROWS_ORDERS[] = {
 // (the long-form sources, whose orders mostly come back the same: their newest, then genres, each a
 //  search on the site itself. A genre the site has nothing for, or that repeats a row, isn't shown.)
 static const VRowDef VROWS_GENRES[] = {
-  {"New", LV_SORT_LATEST, 0, ""}, {"Uncensored", LV_SORT_LATEST, 0, "uncensored"}, {"MILF", LV_SORT_LATEST, 0, "milf"},
+  {"New", LV_SORT_LATEST, 0, ""}, {"MILF", LV_SORT_LATEST, 0, "milf"},
   {"Elf", LV_SORT_LATEST, 0, "elf"}, {"Maid", LV_SORT_LATEST, 0, "maid"}, {"Big breasts", LV_SORT_LATEST, 0, "big_breasts"},
   {"Harem", LV_SORT_LATEST, 0, "harem"}, {"Romance", LV_SORT_LATEST, 0, "romance"},
 };
@@ -348,7 +342,14 @@ static void vb_clear(void) {
   vb_row = 0;
   vb_y = 0;
 }
+static int vb_key_src = -1; // (a source that needs your API key, asked for: opened once it's typed)
 static void vb_open(int k) {
+  { int site = vsource_site(k);
+    if (site >= 0 && LV_SITES[site].needs_key && !wkeys[site][0] && !ime_open) { // (its key first: your user ID, then the key)
+      cfg.site = site; vb_key_src = k; sfx(SFX_OPEN);
+      ime_start(10, "User ID (a number) for your API key", "", 0);
+      return;
+    } }
   lv_net_warm(); // (on a thread of its own; the rest on the worker that fetches)
   wlists_load();
   pthread_mutex_lock(&vbmx);
