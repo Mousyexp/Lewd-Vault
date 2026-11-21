@@ -292,6 +292,14 @@ static void draw_pin(void) {
   // (all its digits: tried at once, once the last one's pop has shown; the decoy's length too)
   int tn = (int)strlen(pin_typed);
   if (tn && (tn == 6 || tn == pin.len || tn == pin.decoy_len) && frame_no - pin_dot_at[tn - 1] > 6) pin_try();
+  else if (tn >= 4 && frame_no - pin_dot_at[tn - 1] > 6 && pin.hash[0]) { // (a PIN whose length isn't known: in as soon as it's right)
+    static char last_tried[8];
+    if (strcmp(last_tried, pin_typed)) {
+      snprintf(last_tried, sizeof last_tried, "%s", pin_typed);
+      char h[65]; pin_hash(pin_typed, pin.salt, h);
+      if (!strcmp(h, pin.hash) || (pin.decoy_hash[0] && !strcmp(h, pin.decoy_hash))) pin_try();
+    }
+  }
 }
 
 // ---------- stats ----------

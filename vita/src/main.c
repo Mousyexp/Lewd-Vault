@@ -605,7 +605,7 @@ static struct {
   int autorot; // portrait pictures turned to fill the screen held on its side
   int nodecor; // the little anime girls (decor.c) hidden
   int notags;  // a save doesn't ask for your own tags
-} cfg = {"", 0, 0, 5, 0, 100, 1, 15, 2, "", "", 0, 0, 70, 0, 1, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
+} cfg = {"", 0, 0, 5, 0, 100, 1, 15, 2, "", "", 0, 0, 70, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
 static void cfg_load(void) {
   cfg.sndpack = 3; // (Bubbly, from the start)
   FILE *f = fopen(DATA "/config.txt", "r");
@@ -633,7 +633,7 @@ static void cfg_load(void) {
     else if (!strcmp(line, "wsel")) cfg.wsel = atoi(eq);
     else if (!strcmp(line, "sounds")) cfg.sounds = atoi(eq);
     else if (!strcmp(line, "dbltap")) cfg.dbltap = atoi(eq) != 0;
-    else if (!strcmp(line, "glow")) cfg.glow = atoi(eq) != 0;
+    else if (!strcmp(line, "glow")) { cfg.glow = atoi(eq); if (cfg.glow < 0 || cfg.glow > 3) cfg.glow = 0; }
     else if (!strcmp(line, "wspan")) cfg.wspan = atoi(eq);
     else if (!strcmp(line, "wfull")) cfg.wfull = atoi(eq) != 0;
     else if (!strcmp(line, "hide")) cfg.hide = atoi(eq) != 0;
@@ -1923,7 +1923,7 @@ static unsigned mix_col(unsigned a, unsigned b, float t);
 static void pill_progress(float x, float y, float w, float h, float f, int a);
 #define FL_W 280
 #define FL_H 270
-#define FL_T 12.0f   // (the outline's thickness)
+#define FL_T 8.0f    // (the outline's thickness: thin)
 #define FL_S 200.0f  // (the heart's size: its distance field's unit, in pixels)
 #define FL_TIP 246.0f // (the heart's point, in the texture)
 #define FL_ROUND 10.0f // (how much rounder than the bare shape: its corners and point softened)
@@ -1987,7 +1987,11 @@ static void fl_liquid(float ox, float oy, float level, float amp, float k, float
 static void draw_splash(const char *line, int alpha) {
   make_flask();
   float t = frame_no / 60.0f;
-  vita2d_draw_rectangle(0, 0, W, H, with_alpha(BG, alpha));
+  // (the launch picture's and the LiveArea poster's colours: a deep plum fading to near-black, the
+  //  liquid their rose, so moving from one to the other isn't a jump)
+  const unsigned SP_TOP = RGBA(64, 26, 50, 255), SP_BOT = RGBA(22, 12, 22, 255), SP_ROSE = RGBA(208, 104, 125, 255), SP_DEEP = RGBA(125, 48, 84, 255);
+  vita2d_draw_rectangle(0, 0, W, H, with_alpha(SP_BOT, alpha));
+  grad(0, 0, W, H, SP_TOP, alpha, 0, 0);
   // the heart comes in (rising, a little spring), then beats now and then, softly
   float in_t = fminf(1.0f, frame_no / 30.0f);
   float spring = 1.0f - expf(-5.0f * in_t) * cosf(7.0f * in_t);
@@ -1997,21 +2001,21 @@ static void draw_splash(const char *line, int alpha) {
   if (fl_tex) {
     // the liquid: a darker wave behind, the accent in front; both slosh, tilting against each other
     float tilt = 0.09f * sinf(t * 1.7f), level = FL_TIP - 112 + 4 * sinf(t * 1.1f);
-    fl_liquid(ox, oy, level - 7, 6, 0.040f, -t * 2.6f + 1.3f, tilt * 0.7f, with_alpha(mix_col(ACC, BG, 0.45f), fa));
-    fl_liquid(ox, oy, level, 7, 0.034f, t * 3.1f, -tilt, with_alpha(ACC, fa));
+    fl_liquid(ox, oy, level - 7, 6, 0.040f, -t * 2.6f + 1.3f, tilt * 0.7f, with_alpha(SP_DEEP, fa));
+    fl_liquid(ox, oy, level, 7, 0.034f, t * 3.1f, -tilt, with_alpha(SP_ROSE, fa));
     float cx = ox + FL_W / 2.0f;
     // bubbles: rising through the liquid (light) ...
     for (int k = 0; k < 7; k++) {
       float sp = 0.32f + 0.08f * k, ph = fmodf(t * sp + k * 0.37f, 1.0f);
       float bx = cx + sinf(k * 2.1f) * 40 + sinf(t * 2 + k) * 4, by = oy + FL_TIP - 40 - ph * 70;
-      circle(bx, by, 3.5f + (k % 3), with_alpha(mix_col(ACC, TEXT, 0.45f), (int)(fa * 0.55f * sinf(ph * 3.14159f))));
+      circle(bx, by, 3.5f + (k % 3), with_alpha(mix_col(SP_ROSE, TEXT, 0.45f), (int)(fa * 0.55f * sinf(ph * 3.14159f))));
     }
     // ... and from its top, drifting up inside the heart, fading before its top
     float rise = level - fl_top_y - 26;
     for (int k = 0; k < 5; k++) {
       float sp = 0.38f + 0.07f * k, ph = fmodf(t * sp + k * 0.23f, 1.0f);
       float bx = cx + (k - 2) * 26 + sinf(k * 1.7f + ph * 5) * 7, by = oy + level - 10 - ph * rise;
-      circle(bx, by, 5.0f - (k % 2) * 1.5f - ph * 2, with_alpha(ACC, (int)(fa * (1 - ph) * (1 - ph))));
+      circle(bx, by, 5.0f - (k % 2) * 1.5f - ph * 2, with_alpha(SP_ROSE, (int)(fa * (1 - ph) * (1 - ph))));
     }
     // the heart, beating gently: its outline drawn a touch bigger on each beat
     float beat = fmaxf(0, sinf(t * 2.4f)), bs = 1 + 0.015f * beat * beat * beat;
@@ -2267,7 +2271,10 @@ static void draw_bar(void) {
       float bx = cx + 6, by = iy - 24;
       rrect_round(bx - 4 - pulse * 3, by - 4 - pulse * 3, bw + 8 + pulse * 6, bh + 8 + pulse * 6, (bh + 8 + pulse * 6) / 2, with_alpha(ACC2, (int)(70 * (1 - pulse) + 30)));
       rrect_round(bx - 2, by - 2, bw + 4, bh + 4, (bh + 4) / 2.0f, SURF2);
-      rrect_round(bx, by, bw, bh, bh / 2.0f, ACC2);
+      // (rose glass: a deeper rose under, light along its top, a bright rim)
+      rrect_round(bx, by, bw, bh, bh / 2.0f, RGBA(196, 78, 112, 255));
+      rrect_round(bx + 1, by + 1, bw - 2, bh * 0.5f, bh * 0.25f, RGBA(255, 214, 226, 110));
+      rrect_round(bx + 3, by + bh - 4, bw - 6, 2, 1, RGBA(255, 255, 255, 60));
       text_center(bx + bw / 2, by + 16, RGBA(255, 255, 255, 255), 13, b);
     }
     // (the Browser: a ring round it while something's being saved or converted)
@@ -2469,7 +2476,6 @@ static int online_inset(int right) {
   rrect_round(x - 1, y - 1, d + 2, d + 2, d / 2 + 1, with_alpha(RGBA(0, 0, 0, 255), 80));
   rrect_round(x, y, d, d, d / 2, mix_col(SURF2, RGBA(0, 0, 0, 255), 0.45f));
   rrect_round(x + 1, y + 1, d - 2, d * 0.45f, d * 0.22f, RGBA(0, 0, 0, 70));       // (shadow inside its top)
-  rrect_round(x + 7, y + d - 3, d - 14, 1.5f, 0.75f, with_alpha(TEXT, 30));          // (the lip lit below)
   circle(x + d / 2, y + d / 2, 13, with_alpha(c, 34));                                 // (its colour glowing in it)
   wifi_mark(x + d / 2.0f, y + d / 2.0f, c);
   if (hit(x - 4, y - 6, d + 8, d + 12)) speed_tap(on);
@@ -2478,6 +2484,7 @@ static int online_inset(int right) {
 }
 // The Library's corner: a quarter circle in the screen's top right, Your stats behind it (its bars),
 // and the connection's light on it, green or red, so the corner does both in the room of one button
+static unsigned stats_open_at; // (Your stats opened from the corner: when, for its opening)
 static int stats_corner(void) {
   const float R = 58;
   int y0 = HDR_Y - 2; // (the header's top: tucked away with it)
@@ -2501,7 +2508,7 @@ static int stats_corner(void) {
   }
   // (its own touch: the corner, a little more than drawn)
   if (in.tap && in.tap_x >= W - R - 4 && in.tap_y < y0 + R + 4 && hypotf(W - in.tap_x, in.tap_y - y0) < R + 8) {
-    sfx(SFX_OPEN); stats_back = S_LIBRARY; screen = S_STATS; in.tap = 0;
+    sfx(SFX_OPEN); stats_back = S_LIBRARY; screen = S_STATS; in.tap = 0; stats_open_at = frame_no ? frame_no : 1;
   }
   return (int)R + 2;
 }
@@ -2802,7 +2809,8 @@ static void draw_library(void) {
       int pages = bp > 40 ? 4 : bp > 12 ? 3 : 2;
       for (int e = pages; e >= 1; e--) rrect(x - grow + e * 3, y - grow + e * 3, cw + 2 * grow, ch + 2 * grow, 6, e & 1 ? RGBA(238, 232, 224, 255) : RGBA(180, 172, 164, 255));
     }
-    if (t) draw_cover(t, x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, RGBA(255, 255, 255, 255));
+    // (the chosen one: its corners rounded to the outline's, so nothing of it shows outside the ring)
+    if (t) { if (on) draw_cover_round(t, x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, 9, RGBA(255, 255, 255, 255)); else draw_cover(t, x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, RGBA(255, 255, 255, 255)); }
     else {
       if (tstate[i] == 3) { rrect(x - grow, y - grow, cw + 2 * grow, ch + 2 * grow, 8, SURF); text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No picture"); }
       else {
@@ -2901,10 +2909,11 @@ static void draw_library(void) {
       text_center(W / 2, TOP + 140, TEXT, 22, "Your vault is empty");
       text_center(W / 2, TOP + 172, DIM, 16, "Find pictures and videos in the Browser and save them here,");
       text_center(W / 2, TOP + 196, DIM, 16, "or save comics from the Comics tab.");
-    } else
-    { decor_draw(query[0] ? DEC_CROPTOP : DEC_SONICO, W - 140, H - BAR + 6, 260, 255); }
-    text_center(W / 2, TOP + 150, DIM, 20, query[0] ? "Nothing matches that search" : "Nothing here");
-    if (query[0]) text_center(W / 2, TOP + 180, FAINT, 16, "Tap Library below to see everything again");
+    } else { // (only here: the cases above say their own, not this over them)
+      decor_draw(query[0] ? DEC_CROPTOP : DEC_SONICO, W - 140, H - BAR + 6, 260, 255);
+      text_center(W / 2, TOP + 150, DIM, 20, query[0] ? "Nothing matches that search" : "Nothing here");
+      if (query[0]) text_center(W / 2, TOP + 180, FAINT, 16, "Tap Library below to see everything again");
+    }
   }
   // the scroll bar
   if (max_scroll > 0) {
@@ -2964,6 +2973,16 @@ static void draw_library(void) {
   sx -= head_button(sx, "sliders", kl, nf ? with_alpha(ACC, 110) : SURF2, &hb) + 8;
   if (hb || (!selecting && (in.pressed & SCE_CTRL_SQUARE))) { sfx(SFX_OPEN); lsheet = LS_FILTERS; lsheet_sel = 0; }
   sx -= online_inset(sx) + 8; // (the connection, left of Filters: a small pressed-in button, green or red)
+  { // (the card size: the same pressed-in look, a grid; a tap goes round the three sizes)
+    int d = 36, x = sx - d, y = HDR_Y + 10;
+    rrect_round(x - 1, y - 1, d + 2, d + 2, d / 2 + 1, with_alpha(RGBA(0, 0, 0, 255), 80));
+    rrect_round(x, y, d, d, d / 2, mix_col(SURF2, RGBA(0, 0, 0, 255), 0.45f));
+    rrect_round(x + 1, y + 1, d - 2, d * 0.45f, d * 0.22f, RGBA(0, 0, 0, 70));
+    circle(x + d / 2, y + d / 2, 13, with_alpha(ACC, 30));
+    icon("grid", x + d / 2, y + d / 2, ACC);
+    if (hit(x - 4, y - 6, d + 8, d + 12) && !book_shelf) { lf.size = (lf.size + 1) % 3; relayout(); sfx(SFX_TOGGLE); say(SIZES[lf.size]); }
+    sx -= d + 8;
+  }
   if (query[0] && sx - title_end > 90) {
     char q[160];
     snprintf(q, sizeof q, "\u201c%.12s%s\u201d", query, strlen(query) > 12 ? "\u2026" : "");
@@ -3252,6 +3271,9 @@ static void res_badge(int w, int h, int a) {
   res_drawn_at = frame_no;
   unsigned info_at = res_info_at;
   if (!info_at) return;
+  static const struct { const char *r, *what; } RKREL[8] = {
+    {"S+", "your biggest"}, {"S", "near your biggest"}, {"A+", "over half of it"}, {"A", "about half"},
+    {"B+", "about a third"}, {"B", "about a fifth"}, {"C+", "a tenth or so"}, {"C", "smaller still"}};
   static const struct { const char *r, *what; } RK[8] = {
     {"S+", "4K and up"}, {"S", "1440p and up"}, {"A+", "about 1080p"}, {"A", "a little under 1080p"},
     {"B+", "about 720p"}, {"B", "under 720p"}, {"C+", "small"}, {"C", "very small"}};
@@ -3268,7 +3290,7 @@ static void res_badge(int w, int h, int a) {
     if (on) rrect(bx + 6, ry, bw2 - 12, 19, 6, with_alpha(TEXT, ba / 8));
     rrect(bx + 12, ry + 2, 30, 15, 5, with_alpha(kc, ba));
     text_center(bx + 27, ry + 14, with_alpha(RGBA(24, 16, 20, 255), ba), 11, RK[k].r);
-    text(bx + 52, ry + 14, with_alpha(TEXT, on ? ba : ba * 190 / 255), 12, RK[k].what);
+    text(bx + 52, ry + 14, with_alpha(TEXT, on ? ba : ba * 190 / 255), 12, res_rel ? RKREL[k].what : RK[k].what);
   }
 }
 static void fmt_time(uint64_t ms, char *o, size_t n);
@@ -3544,7 +3566,22 @@ static void draw_viewer(void) {
   }
   // --- the glow: the picture's own colours, dim, filling the screen around it ---
   vita2d_texture *th_now = thumb_of(shown[vk]);
-  if (cfg.glow && th_now && zoom < 1.01f && backdrop == 255) draw_cover(th_now, 0, 0, W, H, RGBA(255, 255, 255, 60));
+  // (behind the picture: black; or its colours glowing; or its main colour, flat or fading to black)
+  if (cfg.glow == 1 && th_now && zoom < 1.01f && backdrop == 255) draw_cover(th_now, 0, 0, W, H, RGBA(255, 255, 255, 60));
+  else if (cfg.glow >= 2 && th_now && zoom < 1.01f && backdrop == 255) {
+    static int at_item = -1; static unsigned main_col;
+    if (at_item != shown[vk]) { // (its main colour: the thumbnail's pixels averaged, a few of them)
+      at_item = shown[vk];
+      const uint8_t *d = vita2d_texture_get_datap(th_now);
+      unsigned st = vita2d_texture_get_stride(th_now), tw = vita2d_texture_get_width(th_now), thh = vita2d_texture_get_height(th_now);
+      unsigned long r = 0, g = 0, b = 0, n = 0;
+      for (unsigned y = 0; d && y < thh; y += 6) for (unsigned x = 0; x < tw; x += 6) { const uint8_t *p = d + y * st + x * 4; r += p[0]; g += p[1]; b += p[2]; n++; }
+      main_col = n ? RGBA(r / n, g / n, b / n, 255) : RGBA(0, 0, 0, 255);
+    }
+    unsigned dim = mix_col(main_col, RGBA(0, 0, 0, 255), 0.45f);
+    if (cfg.glow == 2) vita2d_draw_rectangle(0, 0, W, H, dim);
+    else { vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 255)); grad(0, 0, W, H, dim, 255, 0, 0); }
+  }
   // --- what's shown: the video's frame, else the picture (the thumbnail while it loads; in a
   //     fading slideshow, the one before until this one is ready) ---
   vita2d_texture *t = NULL;
@@ -4155,7 +4192,7 @@ static void draw_settings(void) {
     {"Video volume", v3, "← → to change; past 100% it's made louder than the video itself"},
     {"Interface sounds", v4, "The Vita's own clicks and chimes"},
     {"Double tap in the full view", cfg.dbltap ? "Heart" : "Zoom", "Zooms in, or gives it a heart"},
-    {"Glow behind pictures", cfg.glow ? "On" : "Off", "The picture's own colours fill the screen around it"},
+    {"Behind pictures", cfg.glow == 1 ? "Glow" : cfg.glow == 2 ? "Its colour" : cfg.glow == 3 ? "Its colour, fading" : "Black", "In the full view: black, the picture's colours glowing, or its main colour (\u2190\u2192)"},
     {"Google Drive", drive_signed_in() ? "Signed in" : "", "Keep this vault in step with your PC's, both ways"},
     {"Wi-Fi transfer", "", "Send pictures and videos from a phone or PC on the same Wi-Fi"},
     {"Lock with a PIN", !pin.on || decoy_session ? "Off" : pin.on_wake ? "On, and when it wakes" : "On, when it starts", pin.on ? "✕ a new PIN · ←→ when · □ turns it off" : "A PIN pad before anything shows"},
@@ -4187,7 +4224,7 @@ static void draw_settings(void) {
   //  the others' in grey, just saying what it is)
   int changed[ST_N] = {0};
   changed[ST_SEARCH] = query[0] != 0; changed[ST_VOL] = cfg.volume != 100; changed[ST_SOUNDS] = cfg.sounds != 70;
-  changed[ST_DBL] = cfg.dbltap != 0; changed[ST_GLOW] = cfg.glow != 1; changed[ST_DRIVE] = drive_signed_in();
+  changed[ST_DBL] = cfg.dbltap != 0; changed[ST_GLOW] = cfg.glow != 0; changed[ST_DRIVE] = drive_signed_in();
   changed[ST_PIN] = pin.on && !decoy_session; changed[ST_DECOY] = pin.decoy_hash[0] && !decoy_session; changed[ST_COVER] = cfg.hide != 0;
   changed[ST_TLOCK] = (cfg.tlock & 3) != 0; changed[ST_THEME] = cfg.theme != 0; changed[ST_BGS] = cfg.bgstyle != 0;
   changed[ST_SNDPACK] = cfg.sndpack != 0; changed[ST_CONV] = cfg.conv != 0;
@@ -4251,6 +4288,15 @@ static void draw_settings(void) {
     text_fit(54 + set_slide, y + 24, TEXT, 18, rows[r].name, RW - 48 - (vw ? 60 : 0));
     text_fit(54 + set_slide, y + 45, FAINT, 14, rows[r].hint, RW - 48 - vw); // (cut short of the value)
     if (rows[r].value[0]) {
+      // (a value just changed: a burst of the accent behind it, the words popping, a ring going out)
+      static char prevv[ST_N][24]; static unsigned tog_at[ST_N];
+      if (strncmp(prevv[r], rows[r].value, 23)) { if (prevv[r][0]) tog_at[r] = frame_no ? frame_no : 1; snprintf(prevv[r], sizeof prevv[r], "%s", rows[r].value); }
+      int vw0 = text_w(18, rows[r].value), vcx = 30 + set_slide + RW - 24 - vw0 / 2;
+      if (tog_at[r] && frame_no - tog_at[r] < 24) {
+        float u = (frame_no - tog_at[r]) / 24.0f;
+        rrect(vcx - vw0 / 2 - 12 - u * 10, y + 14 - u * 4, vw0 + 24 + u * 20, 32 + u * 8, 16, with_alpha(ACC, (int)(110 * (1 - u))));
+        for (int k = 0; k < 8; k++) { float an = k * 0.785f + u; circle(vcx + cosf(an) * (vw0 / 2 + 10 + u * 26), y + 30 + sinf(an) * (14 + u * 14), 2.5f * (1 - u), with_alpha(ACC, (int)(255 * (1 - u)))); }
+      } else tog_at[r] = 0;
       int vx = 30 + set_slide + RW - 24 - text_w(18, rows[r].value);
       if (changed[r]) { unsigned vc = mix_col(TEXT, ACC, 0.45f); text(vx + 1, y + 34, with_alpha(vc, 110), 18, rows[r].value); text(vx, y + 34, vc, 18, rows[r].value); }
       else text(vx, y + 34, DIM, 18, rows[r].value);
@@ -4283,7 +4329,7 @@ static void draw_settings(void) {
   //  settles on the nearest section)
   static int sb_drag, sb_last_sec = -1;
   if (total > room) {
-    const float tw2 = 25, x = W - 33, bt = top + 20, bh2 = H - 28 - bt; // (as long as it can be: the title row to the screen's foot, beside the tab bar; fixed whether that's tucked or not)
+    const float tw2 = sb_drag ? 26.25f : 25, x = W - 33 - (sb_drag ? 1.25f : 0), bt = top + 20, bh2 = H - 28 - bt; // (as long as it can be: the title row to the screen's foot, beside the tab bar; fixed whether that's tucked or not)
     float span = total - room;
     if (in.touching && !sb_drag && in.down_x > W - 42 && in.down_y > top && frame_no - in.down_frame < 2) { sb_drag = 1; sb_last_sec = -1; }
     int sec_k = -1; // (the section the bar is in)
@@ -4370,7 +4416,7 @@ static void draw_settings(void) {
       case ST_SEARCH: if (cross && !ime_open) ime_start(2, "Search tags, names, categories", query, 0); break;
       case ST_VOL: cfg.volume += d * 10; if (cfg.volume > 150) cfg.volume = 150; if (cfg.volume < 0) cfg.volume = 0; break;
       case ST_DBL: cfg.dbltap = !cfg.dbltap; sfx(SFX_TOGGLE); break;
-      case ST_GLOW: cfg.glow = !cfg.glow; sfx(SFX_TOGGLE); break;
+      case ST_GLOW: cfg.glow = (cfg.glow + (d < 0 ? 3 : 1)) % 4; sfx(SFX_TOGGLE); break;
       case ST_SOUNDS: cfg.sounds += d * 10; if (cfg.sounds > 100) cfg.sounds = 0; if (cfg.sounds < 0) cfg.sounds = 100; sfx_volume(cfg.sounds); sfx(SFX_TOGGLE); break;
       case ST_DRIVE: if (cross) { sfx(SFX_OPEN); open_drive(S_SETTINGS); return; } break;
       case ST_PIN:
@@ -4532,7 +4578,7 @@ static void onboard_art(int k, float x, float y, float w, float h) {
 static void draw_onboarding(void) {
   static int page;
   static float slide;
-  static const struct { const char *kicker, *title, *body; } CARDS[3] = {
+  static const struct { const char *kicker, *title, *body; } CARDS[4] = {
     {"WELCOME", "Your vault",
      "Pictures, videos and comics, kept in a folder on the memory card: the same vault as on the PC and the phones, so it moves between them as it is.\n"
      "Next, pick one or start a new one. A PIN can lock it, and a decoy PIN opens a harmless one."},
@@ -4540,6 +4586,7 @@ static void draw_onboarding(void) {
     {"FROM ANYWHERE", "Send from a phone or PC",
      "Settings · Wi-Fi transfer shows an address. Open it in a browser on the same Wi-Fi and drop pictures and videos in: they land in the vault.\n"
      "The Browser finds more on the sites you choose; Favourites keeps long videos as links."},
+    {"SET UP", "A few choices", NULL},
   };
   static const struct { const char *icon, *text; } MOVES[] = {
     {"chev_r", "Swipe across: the next one. Swipe down: close it"},
@@ -4553,18 +4600,18 @@ static void draw_onboarding(void) {
   else {
     if (was_touching) { if (in.flicked && fabsf(in.fvx) > 6) page += in.fvx < 0 ? 1 : -1; else page = (int)roundf(slide); }
     if (page < 0) page = 0;
-    if (page > 2) page = 2;
+    if (page > 3) page = 3;
     slide += (page - slide) * ease(0.2f);
   }
   was_touching = in.touching;
   int done = 0;
   if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_CROSS | SCE_CTRL_RTRIGGER)) {
-    if (page == 2 && (in.pressed & SCE_CTRL_CROSS)) done = 1;
-    else if (page < 2) { page++; sfx(SFX_TICK); }
+    if (page == 3 && (in.pressed & SCE_CTRL_CROSS)) done = 1;
+    else if (page < 3) { page++; sfx(SFX_TICK); }
   }
   if ((in.pressed & (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER | SCE_CTRL_CIRCLE)) && page > 0) { page--; sfx(SFX_TICK); }
   const int cw = W - 120, ch = 400, cy = 34;
-  for (int k = 0; k < 3; k++) {
+  for (int k = 0; k < 4; k++) {
     float x = W / 2 - cw / 2 + (k - slide) * (cw + 40);
     if (x > W || x + cw < 0) continue;
     rrect(x + 4, cy + 8, cw, ch, 28, RGBA(0, 0, 0, 70));
@@ -4576,7 +4623,30 @@ static void draw_onboarding(void) {
     text(tx, cy + 100, TEXT, 32, CARDS[k].title);
     rrect(tx, cy + 116, 40, 4, 2, ACC);
     if (CARDS[k].body) text_wrap(tx, cy + 152, DIM, 16, CARDS[k].body, tw, 25);
-    else
+    else if (k == 3) { // the choices: each a row, a tap changes it (all in Settings later too)
+      char v[4][40];
+      snprintf(v[0], 40, "%s", pin.on ? "On" : "Off \u2715 set one");
+      snprintf(v[1], 40, "%s", cfg.wfull ? "Original" : "Vita-sized");
+      snprintf(v[2], 40, "%s", rear_of(0) == 6 /* REAR_OFF (rear.c) */ && rear_of(1) == 6 /* REAR_OFF (rear.c) */ ? "Does nothing" : "Scrolls");
+      snprintf(v[3], 40, "%s", cfg.nodecor ? "Off" : "On");
+      static const char *const L[4] = {"PIN lock", "Saves kept as", "Rear touchpad", "Decorations"};
+      static const char *const IC[4] = {"info", "save", "touchpad", "sparkle"};
+      for (int m = 0; m < 4; m++) {
+        float ry = cy + 136 + m * 58;
+        glass(tx - 6, ry - 4, tw + 6, 48, 0);
+        icon(IC[m], tx + 14, ry + 20, ACC);
+        text(tx + 34, ry + 26, TEXT, 16, L[m]);
+        text(tx + tw - 14 - text_w(15, v[m]), ry + 26, ACC, 15, v[m]);
+        if (page == 3 && hit((int)tx - 6, (int)ry - 4, (int)tw + 6, 48)) {
+          sfx(SFX_TOGGLE); in.tap = 0;
+          if (m == 0 && !pin.on && !ime_open) { ime_number = 1; ime_start(12, "A new PIN (4 to 6 digits)", "", 1); }
+          if (m == 1) cfg.wfull = !cfg.wfull;
+          if (m == 2) { int off = rear_of(0) == 6 /* REAR_OFF (rear.c) */; cfg.rear_l = cfg.rear_r = off ? 2 /* REAR_SCROLL */ : 6 /* REAR_OFF (rear.c) */; }
+          if (m == 3) cfg.nodecor = !cfg.nodecor;
+          cfg_save();
+        }
+      }
+    } else
       for (int m = 0; m < 5; m++) {
         float ry = cy + 136 + m * 48;
         rrect(tx, ry, 34, 34, 11, with_alpha(ACC, 50));
@@ -4586,19 +4656,19 @@ static void draw_onboarding(void) {
   }
   // the dots, Skip, and the button
   int by = cy + ch + 22;
-  for (int k = 0; k < 3; k++) {
+  for (int k = 0; k < 4; k++) {
     float on = 1 - fminf(1, fabsf(slide - k));
     float w = 10 + 18 * on;
-    float x = W / 2 - 40 + k * 28 - (w - 10) / 2;
+    float x = W / 2 - 54 + k * 28 - (w - 10) / 2;
     rrect(x, by + 17, w, 10, 5, on > 0.5f ? ACC : with_alpha(TEXT, 60));
   }
-  const char *btn = page == 2 ? "Get started" : "Next";
+  const char *btn = page == 3 ? "Get started" : "Next";
   int bw = text_w(18, btn) + 64, bx = W - 60 - bw;
   rrect(bx, by, bw, 44, 22, ACC);
   text_center(bx + bw / 2 - 8, by + 29, RGBA(20, 12, 16, 255), 18, btn);
   text(bx + bw - 30, by + 29, RGBA(20, 12, 16, 255), 16, "✕");
-  if (hit(bx, by, bw, 44)) { if (page == 2) done = 1; else { page++; sfx(SFX_TICK); } }
-  if (page < 2) { text(64, by + 29, FAINT, 15, "Skip"); if (hit(44, by, 90, 44)) done = 1; }
+  if (hit(bx, by, bw, 44)) { if (page == 3) done = 1; else { page++; sfx(SFX_TICK); } }
+  if (page < 3) { text(64, by + 29, FAINT, 15, "Skip"); if (hit(44, by, 90, 44)) done = 1; }
   if (done) { sfx(SFX_DONE); cfg.onboarded = 1; cfg_save(); }
 }
 
@@ -5384,6 +5454,14 @@ int main(void) {
     }
     ev_watch();
     sheet_cover_draw();
+    // (Your stats opened from the Library's corner: the corner's circle grows over the screen, then
+    //  thins away to show the page)
+    if (screen == S_STATS && stats_open_at && frame_no - stats_open_at < 26) {
+      float u = (frame_no - stats_open_at) / 26.0f, e = 1 - (1 - u) * (1 - u) * (1 - u);
+      float rr = 58 + e * 1150;
+      int a = (int)(255 * (1 - u) * (1 - u));
+      circle(W, HDR_Y - 2, rr, with_alpha(mix_col(with_alpha(SURF2, 255), ACC, 0.18f), a));
+    } else if (screen != S_STATS) stats_open_at = 0;
     speed_poll();
     rear_sign_draw();
     ev_sign_draw();

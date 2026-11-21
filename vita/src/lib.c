@@ -791,11 +791,11 @@ static void draw_side(void) {
     if (!was_touch) row_down = (int)((in.down_y - top) / rh + side_scroll);
     if (abs(in.ty - in.down_y) > abs(in.tx - in.down_x)) side_scroll -= in.drag_dy / (float)rh;
   }
-  // (a finger let go: a swipe left on a row leaves its tag out; a swipe right on the panel closes it)
+  // (a finger let go: a swipe right on the panel closes it)
   if (!in.touching && was_touch) {
     int dx = in.tx - in.down_x, dy = in.ty - in.down_y;
-    if (dx < -70 && abs(dx) > 2 * abs(dy) && row_down >= 0 && row_down < ntcounts) { side_add(row_down, 1); }
-    else if (dx > 90 && abs(dx) > 2 * abs(dy) && in.down_x >= x) closing = 1;
+    // (a swipe on a tag no longer leaves it out: the swipe that opens the pane set it off. □ still does)
+    if (dx > 90 && abs(dx) > 2 * abs(dy) && in.down_x >= x) closing = 1;
     row_down = -1;
   }
   was_touch = in.touching;

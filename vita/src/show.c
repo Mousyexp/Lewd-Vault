@@ -499,8 +499,14 @@ static void draw_show_plan(void) {
   if (plan_sel == nf - 1) focus_ring(cx + 12, by, bw, 44);
   int start = hit(cx + 12, by, bw, 44);
   if (ss.on) {
-    rrect(cx + 22 + bw, by, bw, 44, 22, SURF2);
-    text_center(cx + 22 + bw + bw / 2, by + 29, TEXT, 16, "End session  □");
+    { // (pink liquid glass: rose under, a sheen on its top half, a soft rim)
+      int ex = cx + 22 + bw, pressed = in.touching && in.tx >= ex && in.tx < ex + bw && in.ty >= by && in.ty < by + 44;
+      rrect(ex, by + 3, bw, 44, 22, RGBA(0, 0, 0, 80));
+      rrect(ex, by + (pressed ? 2 : 0), bw, 44, 22, RGBA(214, 96, 136, 225));
+      rrect(ex + 3, by + 2 + (pressed ? 2 : 0), bw - 6, 19, 10, RGBA(255, 220, 232, pressed ? 50 : 95));
+      rrect(ex + 10, by + 38 + (pressed ? 2 : 0), bw - 20, 2, 1, RGBA(255, 255, 255, 70));
+      text_center(ex + bw / 2, by + 29 + (pressed ? 2 : 0), RGBA(255, 255, 255, 255), 16, "End session  \u25a1");
+    }
     if (hit(cx + 22 + bw, by, bw, 44)) { sfx(SFX_CLOSE); session_end("Session ended"); }
   }
 

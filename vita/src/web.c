@@ -1737,19 +1737,20 @@ static void draw_own_window(void) {
   const LvSite *st = ns ? &LV_SITES[sites[own_site_i]] : NULL;
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 170));
   float rise = 1 - fminf(1, (frame_no - own_at) / 12.0f);
-  const int ww = 600, wh = 330, wx = (W - ww) / 2, wy = (H - wh) / 2 + (int)(rise * rise * 40); // (it rises in)
+  const int ww = 600, wh = 362, wx = (W - ww) / 2, wy = (H - wh) / 2 + (int)(rise * rise * 40); // (it rises in)
   rrect(wx, wy + 4, ww, wh, 24, RGBA(0, 0, 0, 90));
   rrect(wx, wy, ww, wh, 24, SURF);
   rrect(wx + 2, wy + 2, ww - 4, 60, 22, with_alpha(TEXT, 8));
   icon("plus", wx + 32, wy + 32, ACC);
   text(wx + 54, wy + 40, TEXT, 21, "Your own video source");
-  const char *lab[3] = {"Site", "Tags", "Name"};
+  text(wx + 24, wy + 82, DIM, 14, "Three steps: a site, the tags to ask it for, a name. It joins the video sources.");
+  const char *lab[3] = {"1  Site", "2  Tags", "3  Name"};
   char val[3][96];
   snprintf(val[0], 96, "‹  %s  ›", st ? st->name : "(none)");
   snprintf(val[1], 96, "%s", own_tags[0] ? own_tags : "✕ to type (like overwatch, or milf uncensored)");
   snprintf(val[2], 96, "%s", own_title[0] ? own_title : "✕ to type (it's what the source is called)");
   for (int k = 0; k < 3; k++) {
-    int ry = wy + 74 + k * 58, on = k == own_sel;
+    int ry = wy + 98 + k * 58, on = k == own_sel;
     if (on) glass(wx + 16, ry, ww - 32, 50, 0); else rrect(wx + 16, ry, ww - 32, 50, 16, with_alpha(SURF2, 150));
     text(wx + 34, ry + 32, DIM, 15, lab[k]);
     text_fit(wx + 110, ry + 32, (k && !(k == 1 ? own_tags[0] : own_title[0])) ? FAINT : TEXT, 16, val[k], ww - 150);
@@ -1762,8 +1763,8 @@ static void draw_own_window(void) {
   int ok = st && own_tags[0];
   int bw = 160, bx = wx + ww - 16 - bw, by = wy + wh - 62;
   rrect_round(bx, by, bw, 46, 23, ok ? ACC : with_alpha(SURF2, 200));
-  text_center(bx + bw / 2, by + 30, ok ? RGBA(20, 12, 16, 255) : FAINT, 17, "Add");
-  text(wx + 24, by + 30, FAINT, 13, "↑↓ choose  ·  ←→ site  ·  ✕ type  ·  START add  ·  ○ close");
+  text_center(bx + bw / 2, by + 30, ok ? RGBA(20, 12, 16, 255) : FAINT, 17, "Save source");
+  text(wx + 24, by + 30, FAINT, 13, ok ? "Ready: Save source (START)" : !st ? "1: pick a site (\u2190\u2192)" : "2: tags to ask for (\u2715 to type)");
   int add = (hit(bx, by, bw, 46) || (in.pressed & SCE_CTRL_START)) && ok;
   if (in.pressed & SCE_CTRL_DOWN) { own_sel = (own_sel + 1) % 3; sfx(SFX_TICK); }
   if (in.pressed & SCE_CTRL_UP) { own_sel = (own_sel + 2) % 3; sfx(SFX_TICK); }
