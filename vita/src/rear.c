@@ -11,7 +11,7 @@ static const char *const REAR_ABOUT[REAR_N] = {"",
   "Up and down zoom the picture in the full view",
   "That half does nothing at all (no accidental touches)"};
 static const char *const REAR_ICON[REAR_N] = {"", "touchpad", "scroll", "swipe", "film", "zoom", "xmark"};
-static int rear_of(int right) { int v = right ? cfg.rear_r : cfg.rear_l; return v > 0 && v < REAR_N ? v : REAR_BOTH; }
+static int rear_of(int right) { int v = right ? cfg.rear_r : cfg.rear_l; return v > 0 && v < REAR_N ? v : REAR_OFF; } // (not chosen: nothing)
 static unsigned rear_seen_at, rear_first_at; // (the last frame a finger was on it; when this touch began)
 static int rear_half; // (the half the finger is on: 0 left, 1 right)
 static float rear_vol_acc;

@@ -590,7 +590,19 @@ static void *sample_main(void *arg) {
         // from there and copied into the vault from there by a save
         // (played as it comes: the drawing thread opens the player once the first part is here,
         //  stream_ready; two files in turn, so the one before can still be closing)
+        // (the one just before, swiped back to: still whole on the card in its slot, played from there)
+        static int slot_post[2] = {-1, -1}; static unsigned slot_gen[2];
+        int reuse = -1;
+        for (int s2 = 0; s2 < 2; s2++) if (slot_post[s2] == p && slot_gen[s2] == (unsigned)gen && dl_grow[s2].done && !dl_grow[s2].failed) reuse = s2;
+        if (reuse >= 0) {
+          snprintf(video_path, sizeof video_path, "%s", dl_path[reuse]);
+          dl_slot = reuse;
+          st = 200; n = (size_t)dl_grow[reuse].have;
+          snprintf(d.ext, sizeof d.ext, "%s", post.ext);
+          goto reused;
+        }
         int slot = dl_slot ^ 1;
+        slot_post[slot] = p; slot_gen[slot] = (unsigned)gen;
         LvGrow *g = &dl_grow[slot];
         g->have = 0; g->total = 0; g->done = 0; g->failed = 0;
         snprintf(dl_path[slot], sizeof dl_path[slot], DATA "/play%d.%s", slot, post.ext);
@@ -611,6 +623,7 @@ static void *sample_main(void *arg) {
         if (st == 200) g->done = 1; else g->failed = 1;
         n = (size_t)g->have;
         dl_post = -1;
+        reused:;
       } else {
         st = lv_http_get(h, post.sample, &b, &n, 32u * 1024 * 1024, &big_cancel, &big_progress, &err);
         // (that copy not there (404, 403, 410): the picture itself, then the preview, before an error)
@@ -3336,6 +3349,8 @@ static int wv_save_pill_hit(void) {
   int x, y, w, h;
   return wv_save_pill(&x, &y, &w, &h) && in.tap_x >= x - 8 && in.tap_x < x + w + 8 && in.tap_y >= y - 8 && in.tap_y < y + h + 8;
 }
+// (a video played as it comes: the head start it needs before it can start, 1 MB or 1% of it)
+static int64_t vstart_need(int64_t total) { return total > 0 && total / 100 > 1024 * 1024 ? total / 100 : 1024 * 1024; }
 static void wv_save_pill_draw(int chrome) {
   int x, y, w, h;
   if (!wv_save_pill(&x, &y, &w, &h)) return;
@@ -3366,8 +3381,8 @@ static void draw_webview(void) {
     //  it's big (short ones are all here in moments, and then play without waiting on the download) and
     //  its index (moov) comes before its pictures: one with it at the end can't start until it's all
     //  here, and a player waiting on reads stalls and jumps)
-    int64_t need = g->total > 0 && g->total / 50 > 2 * 1024 * 1024 ? g->total / 50 : 2 * 1024 * 1024;
-    int streamable = g->total > 24ll * 1024 * 1024 && g->have >= need && mp4_moov_first(dl_path[dl_slot], g->have) == 1;
+    int64_t need = vstart_need(g->total);
+    int streamable = g->total > 12ll * 1024 * 1024 && g->have >= need && mp4_moov_first(dl_path[dl_slot], g->have) == 1;
     if (streamable) {
       stream_tried = wv; stream_tried_gen = wgen;
       make_room(32u << 20); // (a player: room first)
@@ -3461,10 +3476,14 @@ static void draw_webview(void) {
     float f = big_progress;
     int64_t got = 0, all = 0;
     lv_http_progress_bytes(&big_progress, &got, &all);
+    // (a big video: the bar fills to the head start it plays from, not the whole file)
+    int big_vid = lv_post_is_video(p) && all > 12ll * 1024 * 1024;
+    if (big_vid) f = fminf(1, (float)got / (float)vstart_need(all));
     pill_progress(W / 2 - 160, H / 2 + 40, 320, 22, f > 0 ? f : -1, 255);
     char m[80], a1[24], a2[24];
     fmt_bytes(got, a1, sizeof a1); fmt_bytes(all, a2, sizeof a2);
-    if (all > 0) snprintf(m, sizeof m, "%s%s of %s", lv_post_is_video(p) ? "The video: " : "", a1, a2);
+    if (big_vid) snprintf(m, sizeof m, "Starting the video\u2026 %d%%", (int)(f * 100));
+    else if (all > 0) snprintf(m, sizeof m, "%s%s of %s", lv_post_is_video(p) ? "The video: " : "", a1, a2);
     else snprintf(m, sizeof m, "%s", lv_post_is_video(p) ? "Downloading the video\u2026" : "Loading\u2026");
     text_center(W / 2, H / 2 + 88, DIM, 16, m);
   }
@@ -3607,7 +3626,21 @@ static void draw_webview(void) {
     if (a > 240 || a < 0 || lv_video_paused(wv_vid)) a = 240;
     // (still downloading as it plays: how far along, the bar's lighter part)
     float have = wv_stream && !wv_stream->done && wv_stream->total > 0 ? (float)wv_stream->have / (float)wv_stream->total : -1;
-    if (!auto_paused) vctl_draw(wv_vid, a, have);
+    if (!auto_paused) {
+      // (its name from its page's address: "/videos/some-title-episode-1" as "Some title episode 1")
+      const LvPost *vp = &posts[wv];
+      const char *pg = vp->page ? vp->page : "";
+      size_t pl = strlen(pg); while (pl && pg[pl - 1] == '/') pl--;
+      size_t ps = pl; while (ps && pg[ps - 1] != '/') ps--;
+      size_t j = 0;
+      for (size_t i = ps; i < pl && j < sizeof vctl_title - 1 && pg[i] != '?'; i++) vctl_title[j++] = pg[i] == '-' || pg[i] == '_' ? ' ' : pg[i];
+      vctl_title[j] = 0;
+      if (vctl_title[0]) vctl_title[0] = (char)toupper((unsigned char)vctl_title[0]);
+      snprintf(vctl_sub, sizeof vctl_sub, "%s", LV_SITES[wv_site()].name);
+      vctl_can_save = 1; vctl_saved = is_saved(vp);
+      vctl_draw(wv_vid, a, have);
+      if (vctl_save_tapped) { vctl_save_tapped = 0; if (wv_is_long()) wv_offline(); else if (!vctl_saved) sw_open(); }
+    }
   }
   if (wv_vid) vctl_flash_draw();
 

@@ -3293,17 +3293,21 @@ static void vflash(int dir) { vflash_at = frame_no ? frame_no : 1; vflash_dir = 
 static void vc_tri(float cx, float cy, float s, unsigned c) { // (a play triangle, pointing right)
   for (int k = 0; k < (int)(s * 1.6f); k++) vita2d_draw_rectangle(cx - s * 0.55f + k, cy - s * 0.8f + k / 2.0f, 1, s * 1.6f - k, c);
 }
+// (a round arrow, open at the top, its head on the side it turns to, "10" inside: as the system players)
 static void vc_skip_icon(float cx, float cy, int dir, unsigned c) {
-  // a round arrow and "10"
-  for (int k = 0; k < 28; k++) {
-    float ang = (dir > 0 ? -2.6f : -0.54f) + k * 0.115f * (dir > 0 ? 1 : -1) * -1;
-    vita2d_draw_rectangle(cx + cosf(ang) * 15 - 1, cy + sinf(ang) * 15 - 1, 2.5f, 2.5f, c);
+  const float r = 15;
+  for (int k = 0; k <= 40; k++) { // (from the top, round the long way to just short of the top again)
+    float t = k / 40.0f, ang = -1.5708f + dir * (0.35f + t * 5.6f);
+    circle(cx + cosf(ang) * r, cy + sinf(ang) * r, 1.4f, c);
   }
-  float ax = dir > 0 ? cx + 13 : cx - 13, ay = cy - 9;
-  vita2d_draw_line(ax, ay, ax + (dir > 0 ? -7 : 7), ay - 4, c);
-  vita2d_draw_line(ax, ay, ax + (dir > 0 ? -5 : 5), ay + 6, c);
-  text_center(cx, cy + 6, c, 13, "10");
+  // (its head: at the top, pointing the way round)
+  float hx = cx + dir * 2.0f, hy = cy - r;
+  for (int k = 0; k < 6; k++) { circle(hx - dir * k * 0.9f, hy - k * 0.75f, 1.3f, c); circle(hx - dir * k * 0.9f, hy + k * 0.75f, 1.3f, c); }
+  text_center(cx, cy + 5, c, 12, "10");
 }
+// (what the controls say: set by the screen that plays before it draws them)
+static char vctl_title[160], vctl_sub[80];
+static int vctl_can_save, vctl_saved; static int vctl_save_tapped; // (a download button: shown, done, tapped)
 // the ripple of a skip, at its side
 static void vctl_flash_draw(void) {
   if (!vflash_at) return;
@@ -3315,50 +3319,72 @@ static void vctl_flash_draw(void) {
   circle(cx, H / 2, 48, RGBA(0, 0, 0, (int)(190 * a)));
   text_center(cx, H / 2 + 7, with_alpha(TEXT, (int)(255 * a)), 20, vflash_dir > 0 ? "+10 s" : "−10 s");
 }
-// The controls drawn at alpha a (0-240); have: the share downloaded (0-1), or a negative number for
-// all of it
+// The controls drawn at alpha a (0-240), laid out as a phone's player: the time bar across the foot,
+// thick, growing under a finger (dragged: the picture follows on letting go); the title over it at the
+// left, a download button at the right; back ten, play/pause, on ten in the middle; the volume at the
+// top right. have: the share downloaded (0-1), or negative for all of it.
+static int vc_scrub; static float vc_scrub_f;
+#define VC_BAR_Y (H - 44)
 static void vctl_draw(const LvVideo *v, int a, float have) {
   if (!v) return;
   uint64_t d = lv_video_duration(v), q = lv_video_pos(v);
   float f = d ? fminf(1, q / (float)d) : 0;
-  grad(0, H - 84, W, 84, RGBA(0, 0, 0, 255), 0, 90 * a / 240, 0);
-  // the middle: back, play/pause, on
-  circle(W / 2, VC_BTN_Y, 38, RGBA(0, 0, 0, 120 * a / 240));
-  circle(W / 2, VC_BTN_Y, 38, with_alpha(TEXT, 30 * a / 240));
-  circle(W / 2, VC_BTN_Y, 36, RGBA(0, 0, 0, 130 * a / 240));
-  if (lv_video_paused(v)) vc_tri(W / 2 + 4, VC_BTN_Y, 20, with_alpha(TEXT, a));
-  else { rrect(W / 2 - 13, VC_BTN_Y - 16, 9, 32, 3, with_alpha(TEXT, a)); rrect(W / 2 + 4, VC_BTN_Y - 16, 9, 32, 3, with_alpha(TEXT, a)); }
-  for (int s = -1; s <= 1; s += 2) {
-    float cx = W / 2 + s * 120;
-    circle(cx, VC_BTN_Y, 28, RGBA(0, 0, 0, 110 * a / 240));
-    vc_skip_icon(cx, VC_BTN_Y, s, with_alpha(TEXT, a));
+  grad(0, H - 150, W, 150, RGBA(0, 0, 0, 255), 0, 150 * a / 240, 0);
+  grad(0, 0, W, 70, RGBA(0, 0, 0, 255), 90 * a / 240, 0, 0);
+  unsigned ink = with_alpha(TEXT, a);
+  // the middle: back ten, play/pause, on ten (bare, white, as the reference: no discs behind)
+  if (lv_video_paused(v)) vc_tri(W / 2 + 6, VC_BTN_Y, 26, ink);
+  else { rrect(W / 2 - 16, VC_BTN_Y - 22, 11, 44, 3, ink); rrect(W / 2 + 5, VC_BTN_Y - 22, 11, 44, 3, ink); }
+  vc_skip_icon(W / 2 - 140, VC_BTN_Y, -1, ink);
+  vc_skip_icon(W / 2 + 140, VC_BTN_Y, 1, ink);
+  // the volume, top right: a bar and a speaker
+  { float vx = W - 200, vy = 88, vw = 140, fv = fminf(1, cfg.volume / 100.0f);
+    rrect(vx, vy - 3, vw, 6, 3, with_alpha(TEXT, a / 3));
+    rrect(vx, vy - 3, vw * fv, 6, 3, ink);
+    float sx = vx + vw + 22; // (the speaker: its box, its cone, two waves)
+    rrect(sx - 8, vy - 4, 5, 8, 1, ink);
+    for (int k = 0; k < 6; k++) vita2d_draw_rectangle(sx - 3 + k, vy - 4 - k, 1, 8 + k * 2, ink);
+    for (int w2 = 1; w2 <= 2; w2++) for (int j = -4; j <= 4; j++) { float an = j * 0.17f; circle(sx + 4 + cosf(an) * 5 * w2, vy + sinf(an) * 5 * w2, 0.9f, ink); } }
+  // the title over the bar, at the left: what it's from, small, then its name, bold, with ›
+  if (vctl_sub[0]) text_fit(28, VC_BAR_Y - 46, with_alpha(TEXT, a * 200 / 255), 14, vctl_sub, W / 2);
+  if (vctl_title[0]) { char t[180]; snprintf(t, sizeof t, "%s \u203a", vctl_title); text_fit(29, VC_BAR_Y - 18, ink, 22, t, W - 200); text_fit(28, VC_BAR_Y - 18, ink, 22, t, W - 200); }
+  // the download button at the right, over the bar
+  if (vctl_can_save) {
+    float dx = W - 52, dy = VC_BAR_Y - 28;
+    circle(dx, dy, 19, vctl_saved ? with_alpha(ACC, a) : with_alpha(TEXT, a / 5));
+    icon(vctl_saved ? "check" : "save", dx, dy, vctl_saved ? RGBA(20, 12, 16, a) : ink);
   }
-  // the bar: the whole, what's here, what's been played, the knob
-  const float bx = 40, bw = W - 80 - 92, by = H - 30;
-  rrect(bx, by, bw, 6, 3, with_alpha(TEXT, a / 5));
-  if (have >= 0) rrect(bx, by, bw * fminf(1, have), 6, 3, with_alpha(TEXT, a / 2));
-  else rrect(bx, by, bw, 6, 3, with_alpha(TEXT, a / 3));
-  rrect(bx, by, bw * f, 6, 3, with_alpha(ACC, a));
-  circle(bx + bw * f, by + 3, 8, with_alpha(TEXT, a));
+  // the bar: thick, the whole, what's here, what's played; under a finger it grows and follows it
+  const float bx = 28, bw = W - 56;
+  float th = vc_scrub ? 14 : 8, by = VC_BAR_Y - th / 2;
+  float shown_f = vc_scrub ? vc_scrub_f : f;
+  rrect(bx, by, bw, th, th / 2, with_alpha(TEXT, a / 4));
+  if (have >= 0) rrect(bx, by, bw * fminf(1, have), th, th / 2, with_alpha(TEXT, a * 2 / 5));
+  rrect(bx, by, fmaxf(th, bw * shown_f), th, th / 2, ink);
+  if (vc_scrub) circle(bx + bw * shown_f, VC_BAR_Y, 11, ink);
   char t1[16], t2[20];
-  fmt_time(q, t1, sizeof t1);
-  text(bx, by - 10, with_alpha(TEXT, a), 14, t1);
-  // the time left, in a pill
-  fmt_time(d > q ? d - q : 0, t2 + 1, sizeof t2 - 1);
+  uint64_t at = vc_scrub ? (uint64_t)(d * vc_scrub_f) : q;
+  fmt_time(at, t1, sizeof t1);
+  fmt_time(d > at ? d - at : 0, t2 + 1, sizeof t2 - 1);
   t2[0] = '-';
-  int pw = text_w(14, t2) + 20;
-  rrect(W - 40 - pw, by - 9, pw, 24, 12, with_alpha(SURF2, a));
-  text(W - 40 - pw + 10, by + 8, with_alpha(TEXT, a), 14, t2);
+  text(bx, VC_BAR_Y + 30, with_alpha(TEXT, a * 200 / 255), 14, t1);
+  text(bx + bw - text_w(14, t2), VC_BAR_Y + 30, with_alpha(TEXT, a * 200 / 255), 14, t2);
+  // (dragging the bar: the place follows the finger; let go, it plays from there)
+  if (in.touching && in.down_y > VC_BAR_Y - 26 && in.down_y < VC_BAR_Y + 30 && d) { vc_scrub = 1; vc_scrub_f = fminf(1, fmaxf(0, (in.tx - bx) / bw)); }
+  else if (vc_scrub) { vc_scrub = 0; lv_video_seek((LvVideo *)v, (int64_t)(d * vc_scrub_f)); }
 }
-// A tap while the controls show: 1 if it was theirs (the play button, a skip, the bar)
+// A tap while the controls show: 1 if it was theirs (play/pause, a skip, the bar, the volume, download)
 static int vctl_tap(LvVideo *v, int x, int y, int64_t *seek_to) {
   if (!v) return 0;
-  uint64_t d = lv_video_duration(v);
-  if (hypotf(x - W / 2, y - VC_BTN_Y) < 44) { lv_video_pause(v, !lv_video_paused(v)); sfx(SFX_TOGGLE); return 1; }
+  if (hypotf(x - W / 2, y - VC_BTN_Y) < 48) { lv_video_pause(v, !lv_video_paused(v)); sfx(SFX_TOGGLE); return 1; }
   for (int s = -1; s <= 1; s += 2)
-    if (hypotf(x - (W / 2 + s * 120), y - VC_BTN_Y) < 34) { *seek_to = (int64_t)lv_video_pos(v) + s * 10000; vflash(s); return 2; }
-  const float bx = 40, bw = W - 80 - 92;
-  if (y > H - 60 && x < bx + bw + 20 && d) { *seek_to = (int64_t)(d * fminf(1, fmaxf(0, (x - bx) / bw))); return 2; }
+    if (hypotf(x - (W / 2 + s * 140), y - VC_BTN_Y) < 38) { *seek_to = (int64_t)lv_video_pos(v) + s * 10000; vflash(s); return 2; }
+  if (y > VC_BAR_Y - 26 && y < VC_BAR_Y + 30) return 2; // (the bar: dragged, handled as it's drawn)
+  if (y > 66 && y < 110 && x > W - 220) { // (the volume: where it's tapped)
+    float fv = fminf(1, fmaxf(0, (x - (W - 200)) / 140.0f));
+    cfg.volume = (int)(fv * 100 + 0.5f); lv_video_set_volume(v, cfg.volume * 32768 / 100); sfx(SFX_TICK); return 1;
+  }
+  if (vctl_can_save && hypotf(x - (W - 52), y - (VC_BAR_Y - 28)) < 26) { vctl_save_tapped = 1; return 1; }
   return 0;
 }
 // A double tap on a video: at the left or right third, ten seconds back or on (1 / -1), else 0
@@ -3773,6 +3799,9 @@ static void draw_viewer(void) {
     circle(W - 38, 30, 11, RGBA(0, 0, 0, a));
     text_center(W - 38, 36, with_alpha(TEXT, a), 15, "i");
     if (vid && !vid_clip) {
+      snprintf(vctl_title, sizeof vctl_title, "%s", it->name[0] ? it->name : it->file);
+      snprintf(vctl_sub, sizeof vctl_sub, "%s", it->category ? it->category : "");
+      vctl_can_save = 0;
       vctl_draw(vid, a, -1);
       uint64_t d = lv_video_duration(vid);
       // the loop's ends, the speed, and what the buttons do
