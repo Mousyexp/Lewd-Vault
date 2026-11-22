@@ -598,7 +598,12 @@ static void draw_videos(void) {
       for (int r = 0; r < VB_ROWS; r++) if (vb_row_shown(r)) { float ry = HERO_H - 4 + k * (VB_CH + 52) + VB_CH / 2 - vb_y; float d = fabsf(ry - H / 2); if (d < bd) { bd = d; best = r; } k++; }
       if (vb_y < 60) best = 0;
       vb_row = best; }
-  } else vb_y += (target - vb_y) * ease(0.22f);
+  } else { // (to the chosen row on a spring: it carries on a touch past and settles back)
+    static float vb_sv;
+    vb_sv = (vb_sv + (target - vb_y) * 0.045f * ft) * decay(0.8f);
+    vb_y += vb_sv * ft;
+    if (fabsf(target - vb_y) < 0.3f && fabsf(vb_sv) < 0.2f) { vb_y = target; vb_sv = 0; }
+  }
   // (the banner stays at the top: as the rows go up it shrinks to HERO_MIN, then they pass under it)
   const float HERO_MIN = 196;
   float hh = HERO_H - fminf(fmaxf(vb_y, 0), HERO_H - HERO_MIN), shrink = HERO_H - hh;
@@ -714,7 +719,11 @@ static void draw_videos(void) {
     vita2d_draw_rectangle(0, 0, W, hh, RGBA(8, 6, 10, 255)); // (the rows pass under it)
     vita2d_texture *bt = hr == r0 && hk == 0 && vb_hero ? vb_hero : (hr->n && hk < VB_PER ? hr->tex[hk] : NULL);
     const float px0 = W * 0.42f, pw = W - px0;
-    if (bt) draw_cover(bt, px0, y0, pw, hh, RGBA(255, 255, 255, 255));
+    // (another one chosen: its picture fades in over the page, drifting in a little from the right)
+    static int h_row = -1, h_k = -1; static unsigned h_at;
+    if (h_row != hrow || h_k != hk) { h_row = hrow; h_k = hk; h_at = frame_no; }
+    float he = fminf(1, (frame_no - h_at) / 18.0f); he = 1 - (1 - he) * (1 - he);
+    if (bt) draw_cover(bt, px0 + (1 - he) * 24, y0, pw, hh, RGBA(255, 255, 255, (int)(255 * he)));
     else rrect(px0, y0, pw, hh, 0, RGBA(30, 20, 30, 255));
     grad(px0, y0, 220, hh, RGBA(8, 6, 10, 255), 255, 0, 1);       // (its left edge fading into the page)
     grad(0, y0 + hh - 60, W, 60, RGBA(8, 6, 10, 255), 0, 255, 0); // (and its foot)

@@ -891,7 +891,8 @@ static void now_iso(char *out, size_t cap) {
 // the ones about to scroll in) and hands back pixels; this thread turns them into textures.
 // Thumbnails are cached small as WebP in ux0:data/LWDV00001/cache (encrypted for an Untraceable
 // vault, with its key), so a card costs a few milliseconds after the first time.
-typedef struct { int item; vita2d_texture *tex; unsigned used; } Slot;
+typedef struct { int item; vita2d_texture *tex; unsigned used, at; } Slot; // (at: when its picture came, for its fade-in)
+static unsigned lib_fill_at, lib_sel_at, lib_pop_at; static int lib_pop_item = -1; // (the grid's animations: filling, the chosen one, one just saved)
 static Slot slots[SLOTS];
 static signed char *tstate; // per item: 0 nothing, 1 asked, 2 in a slot, 3 failed
 static pthread_mutex_t mx = PTHREAD_MUTEX_INITIALIZER;
@@ -1327,6 +1328,7 @@ static void take_results(void) {
       slots[best].item = d->item;
       slot_of[d->item] = (short)best;
       slots[best].used = frame_no;
+      slots[best].at = frame_no;
       tstate[d->item] = slots[best].tex ? 2 : 3;
     }
     free(d->px.rgba);
@@ -2871,6 +2873,15 @@ static void draw_library(void) {
   //  their loading rings; what's in view is asked for as it slows)
   int flinging = fabsf(scroll_v) > 30 || fast;
   float fr_x = -1, fr_y = 0, fr_w = 0, fr_h = 0;
+  { // (the grid filled anew: another mode, order, category or search, or another vault: its cards rise in in turn)
+    static int s_mode = -9, s_sort = -9, s_cat = -9, s_smart = -9, s_vgen = -9, s_book = -9; static char s_q[64];
+    if (s_mode != cfg.lmode || s_sort != cfg.sort || s_cat != cat || s_smart != smart || s_vgen != (int)vgen || s_book != book_inside || strncmp(s_q, query, sizeof s_q - 1)) {
+      s_mode = cfg.lmode; s_sort = cfg.sort; s_cat = cat; s_smart = smart; s_vgen = (int)vgen; s_book = book_inside; snprintf(s_q, sizeof s_q, "%s", query);
+      lib_fill_at = frame_no;
+    }
+    static int s_sel = -1;
+    if (sel != s_sel) { s_sel = sel; lib_sel_at = frame_no; }
+  }
   {
     int hn = lhero_draw(TOP + 6 - scroll, wanted, 16);
     if (hn < 0) { in = saved_in; return; }
@@ -2888,6 +2899,16 @@ static void draw_library(void) {
     vita2d_texture *t = thumb_of(i);
     int on = k == sel && !in.touching && !lhero_on && !sheet_up; // (a sheet open: the ring is the sheet's)
     float grow = on ? 3 : 0;
+    // (rising in, in turn, when the grid fills)
+    float ap = fminf(1, fmaxf(0, ((int)(frame_no - lib_fill_at) - (k - first) * 2) / 14.0f));
+    ap = 1 - (1 - ap) * (1 - ap) * (1 - ap);
+    y += (1 - ap) * 18;
+    // (the chosen one lifts a little, a soft shadow under it)
+    if (on) { float lu = fminf(1, (frame_no - lib_sel_at) / 10.0f); lu = 1 - (1 - lu) * (1 - lu); y -= 3 * lu; rrect_round(x - grow + 3, y - grow + 9, cw + 2 * grow - 6, ch + 2 * grow, 10, RGBA(0, 0, 0, (int)(110 * lu))); }
+    // (just saved: it pops in with a bounce)
+    if (i == lib_pop_item && !lib_pop_at) lib_pop_at = frame_no ? frame_no : 1; // (its bounce when it's first seen)
+    int popping = i == lib_pop_item && frame_no - lib_pop_at < 40;
+    if (popping) { float pp = (frame_no - lib_pop_at) / 40.0f, pop = sinf(pp * 3.14159f * 2.5f) * (1 - pp) * 0.12f, gx = cw * pop / 2, gy = ch * pop / 2; x -= gx; y -= gy; cw += 2 * gx; ch += 2 * gy; }
     if (on) { fr_x = x - grow; fr_y = y - grow; fr_w = cw + 2 * grow; fr_h = ch + 2 * grow; }
     // (in All a comic is a plain card like the rest: the book's look is the Comics shelf's)
     if (book_shelf) { // (the pages' edges behind it, a book's thickness)
@@ -2965,6 +2986,9 @@ static void draw_library(void) {
     if (!it->path) { rrect(x + 6, y + 6, 20, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 16, y + 21, ACC2, 14, "!"); }
     if (selecting && picked && picked[i]) { circle(x + cw - 16, y + 16, 11, ACC); text_center((int)(x + cw - 16), (int)y + 22, RGBA(20, 12, 16, 255), 14, "\u2713"); }
     else if (selecting) circle(x + cw - 16, y + 16, 10, with_alpha(TEXT, 90));
+    if (popping) { int pa = (int)(200 * (1 - (frame_no - lib_pop_at) / 40.0f)); for (int g = 1; g <= 3; g++) ring9(x - g * 3, y - g * 3, cw + g * 6, ch + g * 6, with_alpha(ACC, pa / g)); } // (and a pink glow)
+    { int sl = slot_of ? slot_of[i] : -1; if (t && sl >= 0 && sl < SLOTS && frame_no - slots[sl].at < 12) vita2d_draw_rectangle(x, y, cw, ch, with_alpha(SURF, (int)(255 * (1 - (frame_no - slots[sl].at) / 12.0f)))); } // (its picture just come: fading up from the loading card)
+    if (ap < 1) vita2d_draw_rectangle(x - 4, y - 4, cw + 8, ch + 8, with_alpha(BG, (int)(255 * (1 - ap))));
     if (in.touching && in.tx >= x && in.tx < x + cw && in.ty >= y && in.ty < y + ch && lib_long_press_card(k)) { sel = k; }
     if (hit((int)x, (int)y, (int)cw, (int)ch) && in.tap_y > TOP && in.tap_y < H - BAR) {
       sel = k;
@@ -2991,12 +3015,12 @@ static void draw_library(void) {
       text_center(W / 2, TOP + 180, FAINT, 16, "Save a chapter from the Comics tab, or give a collection the category Comics");
     } else if (vault.n == 0 && !query[0]) {
       // (a new vault: where things come from)
-      decor_draw(DEC_TEARJU, W - 150, H - 70, 300, -150); // (still, and fainter: a negative alpha) // (one of the girls, waiting by it)
+      decor_draw(DEC_TEARJU, W - 150, H - 70, 300 * (1 + 0.015f * sinf(frame_no * 0.035f)), -150); // (still, faint, breathing slowly) // (still, and fainter: a negative alpha) // (one of the girls, waiting by it)
       text_center(W / 2, TOP + 140, TEXT, 22, "Your vault is empty");
       text_center(W / 2, TOP + 172, DIM, 16, "Find pictures and videos in the Browser and save them here,");
       text_center(W / 2, TOP + 196, DIM, 16, "or save comics from the Comics tab.");
     } else { // (only here: the cases above say their own, not this over them)
-      decor_draw(query[0] ? DEC_CROPTOP : DEC_SONICO, W - 140, H - BAR + 6, 260, 255);
+      decor_draw(query[0] ? DEC_CROPTOP : DEC_SONICO, W - 140, H - BAR + 6, 260, 255); // (it breathes by itself)
       text_center(W / 2, TOP + 150, DIM, 20, query[0] ? "Nothing matches that search" : "Nothing here");
       if (query[0]) text_center(W / 2, TOP + 180, FAINT, 16, "Tap Library below to see everything again");
     }
@@ -3432,20 +3456,28 @@ static void vc_tri(float cx, float cy, float s, unsigned c) { // (a play triangl
   for (int k = 0; k < (int)(s * 1.6f); k++) vita2d_draw_rectangle(cx - s * 0.55f + k, cy - s * 0.8f + k / 2.0f, 1, s * 1.6f - k, c);
 }
 // (a round arrow, open at the top, its head on the side it turns to, "10" inside: as the system players)
+static float vc_spin(int dir); // (a skip just tapped: its arrow goes round once)
 static void vc_skip_icon(float cx, float cy, int dir, unsigned c) {
-  const float r = 15;
+  const float r = 15, rot = vc_spin(dir), cr = cosf(rot), sr = sinf(rot);
   for (int k = 0; k <= 40; k++) { // (from the top, round the long way to just short of the top again)
-    float t = k / 40.0f, ang = -1.5708f + dir * (0.35f + t * 5.6f);
+    float t = k / 40.0f, ang = -1.5708f + dir * (0.35f + t * 5.6f) + rot;
     circle(cx + cosf(ang) * r, cy + sinf(ang) * r, 1.4f, c);
   }
-  // (its head: at the top, pointing the way round)
-  float hx = cx + dir * 2.0f, hy = cy - r;
-  for (int k = 0; k < 6; k++) { circle(hx - dir * k * 0.9f, hy - k * 0.75f, 1.3f, c); circle(hx - dir * k * 0.9f, hy + k * 0.75f, 1.3f, c); }
+  // (its head: at the top, pointing the way round; turned with the arrow)
+  for (int k = 0; k < 6; k++) for (int sd = -1; sd <= 1; sd += 2) {
+    float px = dir * 2.0f - dir * k * 0.9f, py = -r + sd * k * 0.75f;
+    circle(cx + px * cr - py * sr, cy + px * sr + py * cr, 1.3f, c);
+  }
   text_center(cx, cy + 5, c, 12, "10");
 }
 // (what the controls say: set by the screen that plays before it draws them)
 static char vctl_title[160], vctl_sub[80];
 static int vctl_can_save, vctl_saved; static int vctl_save_tapped; // (a download button: shown, done, tapped)
+static float vc_spin(int dir) {
+  if (!vflash_at || vflash_dir != dir) return 0;
+  float p = fminf(1, (frame_no - vflash_at) / 20.0f); p = 1 - (1 - p) * (1 - p) * (1 - p);
+  return dir * p * 6.2832f;
+}
 // the ripple of a skip, at its side
 static void vctl_flash_draw(void) {
   if (!vflash_at) return;
@@ -3477,14 +3509,18 @@ static void vctl_draw(const LvVideo *v, int a, float have) {
   //  that follows its shape, not a disc behind it)
   static const float sho[][2] = {{-2, 1}, {2, 1}, {0, -1}, {0, 3}, {-1, 2}, {1, 2}};
   sh = RGBA(0, 0, 0, 40 * a / 240);
+  // (play and pause turn into each other: one shrinks and fades as the other grows in)
+  static float pz = 1;
+  pz += ((lv_video_paused(v) ? 0.0f : 1.0f) - pz) * ease(0.3f);
+  float tri_s = 26 * (0.55f + 0.45f * (1 - pz)), bar_h = 44 * (0.55f + 0.45f * pz);
   for (int o = 0; o < 6; o++) {
     float ox = sho[o][0], oy = sho[o][1];
-    if (lv_video_paused(v)) vc_tri(W / 2 - 4 + ox, VC_BTN_Y + oy, 26, sh);
-    else { rrect(W / 2 - 16 + ox, VC_BTN_Y - 22 + oy, 11, 44, 3, sh); rrect(W / 2 + 5 + ox, VC_BTN_Y - 22 + oy, 11, 44, 3, sh); }
+    if (pz < 0.5f) vc_tri(W / 2 - 4 + ox, VC_BTN_Y + oy, tri_s, sh);
+    else { rrect(W / 2 - 16 + ox, VC_BTN_Y - bar_h / 2 + oy, 11, bar_h, 3, sh); rrect(W / 2 + 5 + ox, VC_BTN_Y - bar_h / 2 + oy, 11, bar_h, 3, sh); }
     vc_skip_icon(W / 2 - 140 + ox, VC_BTN_Y + oy, -1, sh); vc_skip_icon(W / 2 + 140 + ox, VC_BTN_Y + oy, 1, sh);
   }
-  if (lv_video_paused(v)) vc_tri(W / 2 - 4, VC_BTN_Y, 26, ink); // (centred: the triangle's middle on the button's)
-  else { rrect(W / 2 - 16, VC_BTN_Y - 22, 11, 44, 3, ink); rrect(W / 2 + 5, VC_BTN_Y - 22, 11, 44, 3, ink); }
+  if (pz < 0.98f) vc_tri(W / 2 - 4, VC_BTN_Y, tri_s, with_alpha(TEXT, (int)(a * (1 - pz)))); // (centred: the triangle's middle on the button's)
+  if (pz > 0.02f) { unsigned bi = with_alpha(TEXT, (int)(a * pz)); rrect(W / 2 - 16, VC_BTN_Y - bar_h / 2, 11, bar_h, 3, bi); rrect(W / 2 + 5, VC_BTN_Y - bar_h / 2, 11, bar_h, 3, bi); }
   vc_skip_icon(W / 2 - 140, VC_BTN_Y, -1, ink);
   vc_skip_icon(W / 2 + 140, VC_BTN_Y, 1, ink);
   // the volume, top right: a bar and a speaker
@@ -3501,7 +3537,13 @@ static void vctl_draw(const LvVideo *v, int a, float have) {
     float sx = vx + vw + 22; // (the speaker: its box, its cone, two waves)
     rrect(sx - 8, vy - 4, 5, 8, 1, ink);
     for (int k = 0; k < 6; k++) vita2d_draw_rectangle(sx - 3 + k, vy - 4 - k, 1, 8 + k * 2, ink);
-    for (int w2 = 1; w2 <= 2; w2++) for (int j = -4; j <= 4; j++) { float an = j * 0.17f; circle(sx + 4 + cosf(an) * 5 * w2, vy + sinf(an) * 5 * w2, 0.9f, ink); } }
+    // (its waves: as many as it's loud, three at most; held, they pulse outwards)
+    for (int w2 = 1; w2 <= 3; w2++) {
+      float on_w = fminf(1, fmaxf(0, fv * 3 - (w2 - 1)));
+      if (on_w <= 0) break;
+      float rr = 5 * w2 + vgrow * 1.6f * sinf(frame_no * 0.25f - w2 * 0.9f);
+      for (int j = -4; j <= 4; j++) { float an = j * 0.17f; circle(sx + 4 + cosf(an) * rr, vy + sinf(an) * rr, 0.9f, with_alpha(TEXT, (int)(a * on_w))); }
+    } }
   // the title over the bar, at the left: what it's from, small, then its name, bold, with ›
   if (vctl_sub[0]) text_fit(28, VC_BAR_Y - 46, with_alpha(TEXT, a * 200 / 255), 14, vctl_sub, W / 2);
   if (vctl_title[0]) { char t[180]; snprintf(t, sizeof t, "%s \u203a", vctl_title); text_fit(29, VC_BAR_Y - 18, ink, 22, t, W - 200); text_fit(28, VC_BAR_Y - 18, ink, 22, t, W - 200); }
@@ -3518,6 +3560,11 @@ static void vctl_draw(const LvVideo *v, int a, float have) {
   float shown_f = vc_scrub ? vc_scrub_f : f;
   rrect(bx, by, bw, th, th / 2, with_alpha(TEXT, a / 4));
   if (have >= 0) rrect(bx, by, bw * fminf(1, have), th, th / 2, with_alpha(TEXT, a * 2 / 5));
+  if (have >= 0 && have < 0.995f) { // (still coming: a shimmer runs along the part not here yet)
+    float h0 = bx + bw * fmaxf(0, have), span = bx + bw - h0, ph = fmodf(frame_no / 70.0f, 1.0f), sw = fminf(60, span);
+    float sx0 = h0 + (span - sw) * ph;
+    for (int g = 0; g < 6; g++) rrect(sx0 + g * sw / 6, by, sw / 6 + 1, th, th / 3, with_alpha(TEXT, (int)(a / 5 * sinf((g + 0.5f) / 6 * 3.14159f))));
+  }
   rrect(bx, by, fmaxf(th, bw * shown_f), th, th / 2, with_alpha(mix_col(ACC, TEXT, 0.25f), a)); // (played: a touch of pink)
   rrect(bx + 2, by + 1, fmaxf(th, bw * shown_f) - 4, th * 0.4f, th * 0.2f, with_alpha(TEXT, a / 4));
   circle(bx + bw * shown_f, VC_BAR_Y, 9 + vc_grow * 10, ink);
@@ -3603,6 +3650,7 @@ static int hero_backdrop(const HeroClose *hc) {
 }
 
 static HeroClose vhero; // (the Library's full view, swiped down to close)
+static unsigned vopen_at; static Rect vopen_card; static int vopen_has; // (opened from a card: it grows out of it)
 static void vhero_reset(void) { if (!vhero.closing) memset(&vhero, 0, sizeof vhero); }
 // Where a card is in the Library's grid once the full view closes (it scrolls there if it's out of sight)
 static int lib_card_target(int k, Rect *o) {
@@ -3624,6 +3672,7 @@ static void open_viewer(int k, int show) {
   }
   slideshow = show;
   memset(&vhero, 0, sizeof vhero);
+  vopen_has = !show && lib_card_target(k, &vopen_card); vopen_at = frame_no ? frame_no : 1;
   details = 0;
   details_y = 0;
   swipe_x = 0;
@@ -3769,7 +3818,23 @@ static void draw_viewer(void) {
     pan_x = fminf(mx, fmaxf(-mx, pan_x));
     pan_y = fminf(my, fmaxf(-my, pan_y));
     float x = (W - dw) / 2 + pan_x + swipe_x + mdx, y = (avail_h - dh) / 2 + pan_y + mdy;
-    if (por) view_draw(t, 1, tw, th, pan_x + swipe_x + mdx, pan_y + mdy, sx, sy, avail_h, RGBA(255, 255, 255, fade < 1 ? (int)(255 * fade) : 255));
+    // (the way round changed: it turns a quarter, smoothly, growing or shrinking to its new fit)
+    static float por_anim; static int por_item = -1;
+    if (por_item != shown[vk]) { por_item = shown[vk]; por_anim = por; }
+    por_anim += ((por ? 1.0f : 0.0f) - por_anim) * ease(0.2f);
+    if (fabsf(por_anim - (por ? 1 : 0)) < 0.01f) por_anim = por;
+    if (por_anim > 0.0f && por_anim < 1.0f) {
+      float sL = fminf(W / tw, avail_h / th), sP = fminf(avail_h / tw, W / th), sc = sL + (sP - sL) * por_anim;
+      vita2d_draw_texture_tint_scale_rotate(t, W / 2.0f, avail_h / 2.0f, sc, sc, por_anim * 1.5707963f, RGBA(255, 255, 255, 255));
+    }
+    else if (por) view_draw(t, 1, tw, th, pan_x + swipe_x + mdx, pan_y + mdy, sx, sy, avail_h, RGBA(255, 255, 255, fade < 1 ? (int)(255 * fade) : 255));
+    else if (vopen_has && frame_no - vopen_at < 14 && !slideshow) {
+      // (just opened from its card: it grows out of the card to its place, uncropping as it goes)
+      float e = (frame_no - vopen_at) / 14.0f; e = 1 - (1 - e) * (1 - e) * (1 - e);
+      float rx = vopen_card.x + (x - vopen_card.x) * e, ry = vopen_card.y + (y - vopen_card.y) * e;
+      float rw = vopen_card.w + (dw - vopen_card.w) * e, rh = vopen_card.h + (dh - vopen_card.h) * e;
+      draw_in_rect(t, tw, th, rx, ry, rw, rh, 1 - e, RGBA(255, 255, 255, 255));
+    }
     else if (vhero.drag > 0 || vhero.closing) {
       // (swiped down: smaller, following the finger; let go, into its card)
       Rect card;
@@ -4293,6 +4358,15 @@ static void draw_wheel(void) {
   unsigned held = in.now;
   if (held & SCE_CTRL_RIGHT) { cfg.acc_h = (cfg.acc_h + 2) % 360; ch = 1; }
   if (held & SCE_CTRL_LEFT) { cfg.acc_h = (cfg.acc_h + 358) % 360; ch = 1; }
+  { // (a colour picked, the finger lifted: it ripples out over the screen from where it was picked)
+    static int dragging; static unsigned rip_at; static float rip_x, rip_y;
+    if (in.touching && ch) dragging = 1;
+    else if (dragging && !in.touching) { dragging = 0; rip_at = frame_no ? frame_no : 1; rip_x = cx + cosf(a) * rr; rip_y = cy + sinf(a) * rr; }
+    if (rip_at && frame_no - rip_at < 34) {
+      float p = (frame_no - rip_at) / 34.0f, e = 1 - (1 - p) * (1 - p);
+      for (int g = 0; g < 3; g++) circle(rip_x, rip_y, 20 + e * 1100 - g * 40, with_alpha(ACC, (int)(34 * (1 - p))));
+    } else rip_at = 0;
+  }
   if (held & SCE_CTRL_UP) { cfg.acc_s = cfg.acc_s < 100 ? cfg.acc_s + 1 : 100; ch = 1; }
   if (held & SCE_CTRL_DOWN) { cfg.acc_s = cfg.acc_s > 0 ? cfg.acc_s - 1 : 0; ch = 1; }
   if (held & SCE_CTRL_RTRIGGER) { cfg.acc_v = cfg.acc_v < 100 ? cfg.acc_v + 1 : 100; ch = 1; }
@@ -4459,7 +4533,22 @@ static void draw_settings(void) {
         for (int k = 0; k < 6; k++) { float sx = vcx + (k - 2.5f) * (vw0 / 5.0f + 4), sy = y + 30 - u * (18 + k % 3 * 7); circle(sx, sy, 2.2f * (1 - u), with_alpha(mix_col(ACC, TEXT, 0.5f), (int)(230 * (1 - u)))); }
       } else tog_at[r] = 0;
       int vx = 30 + set_slide + RW - 24 - text_w(18, rows[r].value);
-      if (changed[r]) { unsigned vc = mix_col(TEXT, ACC, 0.45f); text(vx + 1, y + 34, with_alpha(vc, 110), 18, rows[r].value); text(vx, y + 34, vc, 18, rows[r].value); }
+      int is_on = !strcmp(rows[r].value, "On"), is_off = !strcmp(rows[r].value, "Off");
+      if (is_on || is_off) {
+        // an on/off: a switch whose knob slides across on a spring, a little past and back
+        static float kp[ST_N], kv[ST_N]; static int kinit[ST_N];
+        if (!kinit[r]) { kinit[r] = 1; kp[r] = is_on; }
+        kv[r] = (kv[r] + ((is_on ? 1.0f : 0.0f) - kp[r]) * 0.09f * ft) * decay(0.74f);
+        kp[r] += kv[r] * ft;
+        const float sw = 50, shh = 28, sx0 = 30 + set_slide + RW - 24 - sw, sy0 = y + 13;
+        float kpos = fminf(1.12f, fmaxf(-0.12f, kp[r])), on_mix = fminf(1, fmaxf(0, kp[r]));
+        rrect_round(sx0, sy0, sw, shh, shh / 2, mix_col(SURF2, ACC, on_mix));
+        rrect_round(sx0 + 2, sy0 + 1, sw - 4, shh * 0.45f, shh * 0.22f, with_alpha(TEXT, 18));
+        float kx = sx0 + shh / 2 + kpos * (sw - shh);
+        circle(kx, sy0 + shh / 2 + 1.5f, shh / 2 - 3, RGBA(0, 0, 0, 80));
+        circle(kx, sy0 + shh / 2, shh / 2 - 3, RGBA(250, 246, 248, 255));
+      }
+      else if (changed[r]) { unsigned vc = mix_col(TEXT, ACC, 0.45f); text(vx + 1, y + 34, with_alpha(vc, 110), 18, rows[r].value); text(vx, y + 34, vc, 18, rows[r].value); }
       else text(vx, y + 34, DIM, 18, rows[r].value);
     }
     if (hit(30, y, RW, 54) && in.tap_y > top && in.tap_y < H - BAR && in.down_x <= W - 42) { set_sel = r; in.pressed |= SCE_CTRL_CROSS; }
@@ -4918,6 +5007,7 @@ static void library_grew(int before) {
   // (filtered and sorted again once at the next frame, not for each item: a chapter or a Wi-Fi
   //  batch adds dozens in a row)
   refilter_wanted = 1;
+  if (vault.n > before) { lib_pop_item = vault.n - 1; lib_pop_at = 0; } // (the newest: a bounce when it's next seen in the grid)
 }
 
 #include "gifplay.c"
@@ -5641,6 +5731,7 @@ int main(void) {
       case S_COVER: draw_cover_screen(); if (in.tap) { screen = cover_return; } break;
     }
     if (otag_open) { in = otag_keep; draw_otag(); } // (your tags for a save: over everything, its input its own)
+    fav_pop_draw(); // (a favourite just added: its hearts)
     // the loading screen at start, fading into whatever is behind it once the vault is open
     // (with a PIN the pad comes up as the loading screen ends: the heart fades into it, once)
     if (frame_no < splash_until + 24) {
@@ -5659,12 +5750,15 @@ int main(void) {
       in_t = 1 - (1 - in_t) * (1 - in_t);
       int ty = H - BAR - 58 + (int)((1 - in_t) * 18);
       a = (int)(a * in_t);
-      rrect_round(W / 2 - w / 2, ty + 3, w, 40, 20, RGBA(0, 0, 0, a / 3));
-      rrect_round(W / 2 - w / 2, ty, w, 40, 20, with_alpha(mix_col(SURF2, RGBA(0, 0, 0, 255), 0.35f), a * 235 / 255));
-      rrect_round(W / 2 - w / 2 + 1, ty, w - 2, 40, 20, with_alpha(TEXT, a / 9));
-      rrect_round(W / 2 - w / 2 + 2, ty + 1, w - 4, 38, 19, with_alpha(mix_col(SURF2, ACC, 0.2f), a * 235 / 255));
-      rrect_round(W / 2 - w / 2 + 8, ty + 2, w - 16, 15, 7.5f, with_alpha(TEXT, a / 16));
-      text_center(W / 2, ty + 26, with_alpha(TEXT, a), 16, message);
+      // (as it lands it squashes a little, wide and flat, then stretches back: soft, like a drop)
+      float st = fminf(1, (frame_no - (message_until - 150)) / 22.0f), wob = sinf(st * 3.14159f * 2) * (1 - st);
+      float pw = w * (1 + 0.08f * wob), ph = 40 * (1 - 0.12f * wob), px = W / 2 - pw / 2, py = ty + (40 - ph);
+      rrect_round(px, py + 3, pw, ph, ph / 2, RGBA(0, 0, 0, a / 3));
+      rrect_round(px, py, pw, ph, ph / 2, with_alpha(mix_col(SURF2, RGBA(0, 0, 0, 255), 0.35f), a * 235 / 255));
+      rrect_round(px + 1, py, pw - 2, ph, ph / 2, with_alpha(TEXT, a / 9));
+      rrect_round(px + 2, py + 1, pw - 4, ph - 2, ph / 2 - 1, with_alpha(mix_col(SURF2, ACC, 0.2f), a * 235 / 255));
+      rrect_round(px + 8, py + 2, pw - 16, ph * 0.37f, ph * 0.19f, with_alpha(TEXT, a / 16));
+      text_center(W / 2, (int)(py + ph / 2 + 6), with_alpha(TEXT, a), 16, message);
     }
     ev_watch();
     sheet_cover_draw();

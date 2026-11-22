@@ -112,7 +112,10 @@ static void draw_clean(void) {
     if (t) {
       float tw = vita2d_texture_get_width(t), th = vita2d_texture_get_height(t);
       float s = fminf((W - 160) / tw, (H - 130) / th);
-      vita2d_draw_texture_scale_rotate(t, W / 2 + cl_swipe, H / 2 - 20 + fminf(0, cl_swipe_y) + fabsf(cl_swipe) * 0.1f, s, s, f * 0.25f);
+      // (the one behind moves up into the gap as the last one flies off: from smaller and lower, to its place)
+      float up = cl_fly_item >= 0 && cl_fly_t < 1 ? cl_fly_t : 1; up = 1 - (1 - up) * (1 - up);
+      s *= 0.86f + 0.14f * up;
+      vita2d_draw_texture_scale_rotate(t, W / 2 + cl_swipe, H / 2 - 20 + fminf(0, cl_swipe_y) + fabsf(cl_swipe) * 0.1f + (1 - up) * 24, s, s, f * 0.25f);
     } else spinner(W / 2 + cl_swipe, H / 2, 22);
     if (cl_swipe < -20) { int a = (int)fminf(220, -cl_swipe * 1.4f); text_center(W / 2 - 300, H / 2, RGBA(240, 80, 90, a), 30, "LET GO"); }
     if (cl_swipe > 20) { int a = (int)fminf(220, cl_swipe * 1.4f); text_center(W / 2 + 300, H / 2, RGBA(90, 220, 140, a), 30, "KEEP"); }

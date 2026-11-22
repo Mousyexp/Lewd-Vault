@@ -83,11 +83,27 @@ static Fav *fav_add(void) {
   return &favs[0];
 }
 // A video of the Browser's: in or out of the favourites. 1 now in.
+// (a favourite added: a burst of small hearts from where it was tapped, a big one popping in the middle)
+static unsigned fav_pop_at; static float fav_pop_x, fav_pop_y;
+static void fav_pop_start(void) { fav_pop_at = frame_no ? frame_no : 1; fav_pop_x = in.tap ? in.tap_x : W / 2; fav_pop_y = in.tap ? in.tap_y : H / 2; }
+static void fav_pop_draw(void) {
+  if (!fav_pop_at) return;
+  float p = (frame_no - fav_pop_at) / 36.0f;
+  if (p >= 1) { fav_pop_at = 0; return; }
+  float e = 1 - (1 - p) * (1 - p), a = 1 - p;
+  float big = p < 0.3f ? p / 0.3f * 1.3f : 1.3f - (p - 0.3f) * 0.6f;
+  heart(fav_pop_x, fav_pop_y, 12 * big, with_alpha(ACC, (int)(255 * a)));
+  for (int k = 0; k < 8; k++) {
+    float an = k * 0.785f + 0.3f, d = 14 + e * 46;
+    heart(fav_pop_x + cosf(an) * d, fav_pop_y + sinf(an) * d - e * 10, 5 * (1 - p * 0.5f), with_alpha(mix_col(ACC, TEXT, (k & 1) * 0.4f), (int)(230 * a)));
+  }
+}
 static int fav_toggle_video(const LvPost *p, int site) {
   int k = fav_find(FAV_VIDEO, p->page);
   if (k >= 0) { fav_remove(k); sfx(SFX_CLOSE); say("Taken out of Favourites"); return 0; }
   Fav *v = fav_add();
   if (!v) return 0;
+  fav_pop_start();
   v->kind = FAV_VIDEO;
   snprintf(v->site, sizeof v->site, "%s", LV_SITES[site].name);
   // (a title: the site's words for it, else its tags)
@@ -107,6 +123,7 @@ static int fav_toggle_comic(const LvBook *b, int src) {
   if (k >= 0) { fav_remove(k); sfx(SFX_CLOSE); say("Taken out of Favourites"); return 0; }
   Fav *v = fav_add();
   if (!v) return 0;
+  fav_pop_start();
   v->kind = FAV_COMIC;
   snprintf(v->site, sizeof v->site, "%s", LV_MSRC[src >= 0 && src < MS_N ? src : 0].name);
   snprintf(v->title, sizeof v->title, "%s", b->title);

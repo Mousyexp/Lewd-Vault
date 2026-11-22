@@ -297,9 +297,16 @@ static int draw_modes(int x, int y) {
   for (int k = 0; k < 4; k++) { ws[k] = text_w(15, LMODES[k]) + 46; tot += ws[k]; }
   rrect(x, y, tot + 8, 40, 20, SURF2);
   x += 4;
+  { // (the glass under the chosen mode slides over to a new one, its width following)
+    static float gx = -1, gw = 0;
+    float tx = x, tw2 = ws[cfg.lmode < 0 || cfg.lmode > 3 ? 0 : cfg.lmode];
+    for (int k = 0; k < cfg.lmode && k < 4; k++) tx += ws[k];
+    if (gx < 0) { gx = tx; gw = tw2; }
+    gx += (tx - gx) * ease(0.25f); gw += (tw2 - gw) * ease(0.25f);
+    glass(gx, y + 4, gw, 32, 0);
+  }
   for (int k = 0; k < 4; k++) {
     int on = k == cfg.lmode;
-    if (on) glass(x, y + 4, ws[k], 32, 0);
     unsigned col = on ? TEXT : DIM;
     icon(LMODE_ICONS[k], x + 20, y + 20, col);
     text(x + 34, y + 26, col, 15, LMODES[k]);
@@ -987,8 +994,14 @@ static void level_dial(int i, float cx, float cy, float r, int focus) {
 }
 static void stars(int i, float x, float y, int focus) {
   int q = vault.items[i].quality;
+  // (a new rating: the stars wiggle, each a moment after the one before, and settle)
+  static int s_item = -1, s_q = -1; static unsigned s_at;
+  if (s_item != i) { s_item = i; s_q = q; s_at = 0; }
+  if (q != s_q) { s_q = q; s_at = frame_no ? frame_no : 1; }
   for (int k = 1; k <= 3; k++) {
-    text((int)x + (k - 1) * 30, (int)y, k <= q ? ACC : with_alpha(TEXT, focus ? 120 : 60), 26, "★");
+    float wy = 0, wx = 0;
+    if (s_at) { float t = (frame_no - s_at - (k - 1) * 3) / 24.0f; if (t > 0 && t < 1) { wy = -sinf(t * 3.14159f) * 8 * (1 - t); wx = sinf(t * 18.8f) * 2.5f * (1 - t); } }
+    text((int)(x + (k - 1) * 30 + wx), (int)(y + wy), k <= q ? ACC : with_alpha(TEXT, focus ? 120 : 60), 26, "★");
     if (hit((int)x + (k - 1) * 30 - 4, (int)y - 26, 30, 34)) { sfx(SFX_TOGGLE); set_int(i, "quality", k); }
   }
 }

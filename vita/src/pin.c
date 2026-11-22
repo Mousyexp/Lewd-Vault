@@ -254,6 +254,11 @@ static void draw_pin(void) {
   for (int k = 0; k < 12; k++) {
     float kin = pin_out((since - (k % 3) * 2 - (k / 3) * 3) / 18.0f);
     float kcx = cx + ((k % 3) - 1) * colx, kcy = top + (k / 3) * rowy + (1 - kin) * 36;
+    if (pin_ok_at) { // (right: the pad dissolves, each key drifting out from the middle and shrinking away, in turn)
+      float d = pin_out(pin_clamp01(ok_t * 1.6f - ((k * 7) % 12) * 0.04f));
+      kcx += ((k % 3) - 1) * 70 * d; kcy += ((k / 3) - 1.5f) * 50 * d;
+      kin *= 1 - d;
+    }
     int on = k == pin_sel && !pin_ok_at, digit = k != 9 && k != 11;
     float pr = pin_key_at[k] ? (frame_no - pin_key_at[k]) / 12.0f : 1; // (0 just pressed .. 1 done)
     float sq = pr < 1 ? 1 - 0.07f * sinf(pin_clamp01(pr) * 3.14159f) : 1;

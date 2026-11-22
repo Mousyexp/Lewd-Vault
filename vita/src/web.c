@@ -27,7 +27,7 @@ static LvPost *posts;
 static int nposts;
 static signed char *wstate; // per post: 0 nothing, 1 asked, 2 in a slot, 3 failed
 static short *wslot_of;
-typedef struct { int post; vita2d_texture *tex; unsigned used; } WSlot;
+typedef struct { int post; vita2d_texture *tex; unsigned used, at; } WSlot; // (at: when its picture came, for its fade-in)
 static WSlot wslots[WSLOTS];
 static pthread_mutex_t wmx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wcv = PTHREAD_COND_INITIALIZER;
@@ -1286,6 +1286,7 @@ static void web_take_results(void) {
       wslots[best].tex = put_cell(SLOTS + best, &d->px);
       wslots[best].post = d->post;
       wslots[best].used = frame_no;
+      wslots[best].at = frame_no;
       if (d->post < nposts) { wstate[d->post] = wslots[best].tex ? 2 : 3; wslot_of[d->post] = (short)best; }
     } else if (d->kind == WD_SAMPLE) {
       if (d->post == wv) {
@@ -2658,6 +2659,22 @@ static void draw_web(void) {
     }
     if (wscroll < 0 && !in.touching) { wscroll *= decay(0.7f); wscroll_v = 0; }
     if (wscroll > max_scroll && !in.touching) { wscroll = max_scroll + (wscroll - max_scroll) * 0.7f; wscroll_v = 0; }
+    { // pulled down past the top: a ring stretches as it's pulled, snaps round when far enough; let go, a fresh search
+      static int armed; static unsigned snap_at;
+      float pull = -wscroll;
+      if (in.touching && pull > 6 && !sheet_open) {
+        float f = fminf(1, pull / 90.0f);
+        if (f >= 1 && !armed) { armed = 1; snap_at = frame_no; sfx(SFX_TICK); }
+        if (f < 0.9f) armed = 0;
+        float rcx = W / 2, rcy = TOP + 14 + fminf(pull, 120) * 0.45f;
+        float sq = armed ? 1 + 0.25f * sinf(fminf(1, (frame_no - snap_at) / 10.0f) * 3.14159f) : 1; // (a snap when it's armed)
+        float rx = 13 * sq, ry = 13 * (2 - sq) + (1 - f) * 4; // (stretched long while pulled, round once armed)
+        circle(rcx, rcy, 20, with_alpha(SURF2, (int)(230 * f)));
+        int nd = (int)(24 * f);
+        for (int k = 0; k < nd; k++) { float an = -1.5708f + k / 24.0f * 6.2832f + (armed ? frame_no * 0.15f : 0); circle(rcx + cosf(an) * rx, rcy + sinf(an) * ry, 1.8f, with_alpha(armed ? ACC : TEXT, (int)(255 * f))); }
+      } else if (!in.touching && armed) { armed = 0; sfx(SFX_OPEN); say("Refreshing\u2026"); web_search(); }
+      else if (!in.touching) armed = 0;
+    }
   }
   {
     static float last;
@@ -2686,8 +2703,11 @@ static void draw_web(void) {
     int on = k == wsel && !in.touching && !sheet_open;
     float g = on ? 3 : 0;
     if (on) { fr_x = x - g; fr_y = y - g; fr_w = cw + 2 * g; fr_h = ch + 2 * g; }
-    if (t) draw_cover(t, x - g, y - g, cw + 2 * g, ch + 2 * g, RGBA(255, 255, 255, 255));
-    else {
+    if (t) {
+      draw_cover(t, x - g, y - g, cw + 2 * g, ch + 2 * g, RGBA(255, 255, 255, 255));
+      int sl = wslot_of ? wslot_of[k] : -1; // (its picture just come: fading up from the loading card)
+      if (sl >= 0 && sl < WSLOTS && frame_no - wslots[sl].at < 12) vita2d_draw_rectangle(x - g, y - g, cw + 2 * g, ch + 2 * g, with_alpha(SURF, (int)(255 * (1 - (frame_no - wslots[sl].at) / 12.0f))));
+    } else {
       if (wstate[k] == 3) { rrect(x - g, y - g, cw + 2 * g, ch + 2 * g, 8, SURF); text_center(x + cw / 2, y + ch / 2, FAINT, 14, "No preview"); }
       else {
         skeleton(x - g, y - g, cw + 2 * g, ch + 2 * g, 8);
