@@ -226,10 +226,38 @@ static void vb_publish(int row, int gen, LvPost *p, int n, const char *err, int 
   pthread_mutex_unlock(&vbmx);
 }
 
+// (a row's search answered in the last minute, kept: the rows of a source that answers every order
+//  with the same page (HentaiOcean's feed, 440 KB) fetch it once, not once a row)
+static struct { char url[1024]; uint8_t *b; size_t n; uint64_t at; } vbc[2];
+static pthread_mutex_t vbc_mx = PTHREAD_MUTEX_INITIALIZER;
+static int vb_cache_get(const char *u, uint8_t **b, size_t *n) {
+  int got = 0;
+  uint64_t now = sceKernelGetProcessTimeWide();
+  pthread_mutex_lock(&vbc_mx);
+  for (int k = 0; k < 2 && !got; k++)
+    if (vbc[k].b && now - vbc[k].at < 60000000ull && strlen(u) < sizeof vbc[k].url && !strcmp(vbc[k].url, u)) {
+      uint8_t *c = malloc(vbc[k].n + 1);
+      if (c) { memcpy(c, vbc[k].b, vbc[k].n + 1); *b = c; *n = vbc[k].n; got = 1; }
+    }
+  pthread_mutex_unlock(&vbc_mx);
+  return got;
+}
+static void vb_cache_put(const char *u, const uint8_t *b, size_t n) {
+  if (strlen(u) >= sizeof vbc[0].url || n > (2u << 20)) return;
+  uint8_t *c = malloc(n + 1);
+  if (!c) return;
+  memcpy(c, b, n); c[n] = 0;
+  pthread_mutex_lock(&vbc_mx);
+  int k = vbc[0].at <= vbc[1].at ? 0 : 1; // (the older one goes)
+  free(vbc[k].b);
+  snprintf(vbc[k].url, sizeof vbc[k].url, "%s", u); vbc[k].b = c; vbc[k].n = n; vbc[k].at = sceKernelGetProcessTimeWide();
+  pthread_mutex_unlock(&vbc_mx);
+}
 static void *vb_main(void *arg) {
   pin_to_core(2); // (off the drawing thread's core)
-  (void)arg;
+  int helper = arg != NULL; // (the second thread: rows two at a time, except an episode site's, whose page checks would be four connections at once)
   LvHttp *h = lv_http_new();
+  LvHttp *h2 = lv_http_new(); // (a second connection: episode pages checked two at a time)
   while (worker_run) {
     pthread_mutex_lock(&vbmx);
     int job = -1, card = -2, gen = vb_gen, src = vb_src;
@@ -245,7 +273,9 @@ static void *vb_main(void *arg) {
       if (nvb_want) { job = vb_want[nvb_want - 1].row; card = vb_want[nvb_want - 1].card; nvb_want--; break; }
       // (the other rows' lists only while the video browser is on screen: not fetched and checked
       //  in the background while something else is looked at, or a video from it streams)
-      for (int d = 0; d < vb_nrows && src >= 0 && !vb_list.ready && screen == S_VIDEOS; d++) {
+      int episodes = 0;
+      { int st2 = src >= 0 ? vsource_site(src) : -1; episodes = st2 >= 0 && lv_site_checks_items(&LV_SITES[st2]); }
+      for (int d = 0; d < vb_nrows && src >= 0 && !vb_list.ready && screen == S_VIDEOS && !(helper && episodes); d++) {
         int r = (vb_row < vb_nrows ? vb_row : 0) + d;
         if (r >= vb_nrows) r -= vb_nrows;
         if (vrows[r].state == 0) { job = r; vrows[r].state = 1; break; }
@@ -271,7 +301,8 @@ static void *vb_main(void *arg) {
       uint8_t *b = NULL;
       size_t n = 0;
       const char *err = NULL;
-      int st = lv_http_get(h, u, &b, &n, 8u << 20, NULL, NULL, &err);
+      int st = vb_cache_get(u, &b, &n) ? 200 : -1;
+      if (st != 200) { st = lv_http_get(h, u, &b, &n, 8u << 20, NULL, NULL, &err); if (st == 200 && b) vb_cache_put(u, b, n); }
       int count = 0;
       LvPost *got = st == 200 ? lv_booru_parse(&sc, (const char *)b, n, ratings, &count) : NULL;
       LOG("vb row %d: %s -> %d, %u bytes, %d posts\n", job, u, st, (unsigned)n, count);
@@ -289,7 +320,7 @@ static void *vb_main(void *arg) {
           LvPost *part = malloc(m * sizeof *part);
           if (!part) continue;
           memcpy(part, got + pos, m * sizeof *part);
-          int ok = check_items(h, &sc, part, m, &vb_gen, gen), kept = 0;
+          int ok = check_items2(h, h2, &sc, part, m, &vb_gen, gen), kept = 0;
           LOG("vb row %d: checked %d of %d\n", job, ok, m);
           for (int k = 0; k < ok; k++) {
             if (lv_post_is_video(&part[k]) && shown_n + kept < VB_PER) part[kept++] = part[k];
@@ -330,6 +361,7 @@ static void *vb_main(void *arg) {
     pthread_mutex_unlock(&vbmx);
   }
   lv_http_free(h);
+  if (h2) lv_http_free(h2);
   return NULL;
 }
 static void vb_clear(void) {
@@ -375,6 +407,7 @@ static void vb_open(int k) {
     pthread_attr_init(&at);
     pthread_attr_setstacksize(&at, 512 * 1024); // (it decodes previews)
     vb_thread_on = pthread_create(&t, &at, vb_main, NULL) == 0;
+    if (vb_thread_on) pthread_create(&t, &at, vb_main, (void *)1); // (a second: two rows at a time)
   }
   screen = S_VIDEOS;
 }

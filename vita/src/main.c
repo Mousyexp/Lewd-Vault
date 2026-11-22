@@ -4961,6 +4961,9 @@ static void draw_settings(void) {
           char p[900];
           while (dd && (e = readdir(dd))) { if (e->d_name[0] == '.') continue; snprintf(p, sizeof p, "%s/%s", cache_dir, e->d_name); sceIoRemove(p); }
           if (dd) closedir(dd);
+          dd = opendir(DATA "/cache/web"); // (and the Browser's previews)
+          while (dd && (e = readdir(dd))) { if (e->d_name[0] == '.') continue; snprintf(p, sizeof p, DATA "/cache/web/%s", e->d_name); sceIoRemove(p); }
+          if (dd) closedir(dd);
           say("Thumbnail cache cleared");
         }
         break;

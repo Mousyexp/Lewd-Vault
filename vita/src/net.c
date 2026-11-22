@@ -505,6 +505,9 @@ static int perform(LvHttp *h, const char *url, Sink *sp, const char **err, const
   curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
   curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 200L);
   curl_easy_setopt(c, CURLOPT_LOW_SPEED_TIME, 20L);
+  // (a page (an answer to read, not a file being downloaded with its progress shown): 45 seconds at
+  //  most in all. A server trickling bytes held a thread for minutes: "stuck loading")
+  if (!s->f && !s->progress && !s->have && s->max && s->max <= (8u << 20)) curl_easy_setopt(c, CURLOPT_TIMEOUT, 45L);
   curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 64L * 1024);
   curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, on_data);

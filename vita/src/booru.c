@@ -162,7 +162,7 @@ void lv_booru_url_ex(const LvSite *s, const char *tags, int ratings, int sort, i
   // the ratings: Danbooru takes a list (and it doesn't count towards its 2 free tags); the others
   // leave out the ones not wanted
   if ((ratings & LV_R_ALL) != LV_R_ALL) {
-    char r[64] = "";
+    char r[128] = ""; // (every rating left out on a Gelbooru-kind site is 76 characters: 64 overflowed)
     if (s->kind == BK_DANBOORU) {
       const char *c[] = {"g", "s", "q", "e"};
       strcat(r, " rating:");

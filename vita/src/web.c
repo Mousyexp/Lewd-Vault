@@ -32,7 +32,11 @@ static WSlot wslots[WSLOTS];
 static pthread_mutex_t wmx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wcv = PTHREAD_COND_INITIALIZER;
 static volatile int wgen = 1;
-static volatile int list_cancel; // (a new search: the page still being fetched for the old one is dropped at once)
+static volatile int list_cancel;
+static volatile int prev_cancel[2]; static int prev_ids;
+// (the full view's next picture, fetched ahead while it's looked at: its bytes, kept until it's shown)
+static uint8_t *pf_raw; static size_t pf_n; static int pf_post = -1, pf_gen, pf_want = -1, pf_busy = -1;
+static volatile int pf_cancel; // (each preview thread's: a new search drops the one it's fetching) // (a new search: the page still being fetched for the old one is dropped at once)
 static int wpage, wend, wloading, list_want;
 static char werr[160];
 static int wwant[48], nwwant;
@@ -237,41 +241,64 @@ static void saved_add(const char *src) {
 static struct { unsigned long long h; signed char ok; char *file; } icheck[ICHECK_N];
 static pthread_mutex_t icmx = PTHREAD_MUTEX_INITIALIZER;
 static unsigned long long page_hash(const char *s) { unsigned long long h = 1469598103934665603ull; while (*s) h = (h ^ (unsigned char)*s++) * 1099511628211ull; return h | 1; }
-static int check_items(LvHttp *h, const LvSite *s, LvPost *p, int n, volatile int *gen, int g) {
-  int kept = 0, k = 0;
-  for (; k < n && *gen == g; k++) {
-    unsigned long long ph = page_hash(p[k].page);
-    int slot = (int)(ph % ICHECK_N), ok = -1;
-    pthread_mutex_lock(&icmx);
-    if (icheck[slot].h == ph) {
-      ok = icheck[slot].ok;
-      if (ok && icheck[slot].file) { char *f = strdup(icheck[slot].file); if (f) { free(p[k].file); p[k].file = f; } else ok = -1; }
+// (one item's check: its page read and looked through, or the answer kept from before. 1 keep, 0 not)
+static int check_one(LvHttp *h, const LvSite *s, LvPost *q) {
+  unsigned long long ph = page_hash(q->page);
+  int slot = (int)(ph % ICHECK_N), ok = -1;
+  pthread_mutex_lock(&icmx);
+  if (icheck[slot].h == ph) {
+    ok = icheck[slot].ok;
+    if (ok && icheck[slot].file) { char *f = strdup(icheck[slot].file); if (f) { free(q->file); q->file = f; } else ok = -1; }
+  }
+  pthread_mutex_unlock(&icmx);
+  if (ok < 0) {
+    uint8_t *b = NULL;
+    size_t bn = 0;
+    int st = lv_http_get(h, q->page, &b, &bn, 2u << 20, NULL, NULL, NULL);
+    ok = st == 200 && b && lv_item_check(s, q, (char *)b);
+    free(b);
+    // (kept only when the page answered: one that didn't may answer next time)
+    if (st == 200) {
+      pthread_mutex_lock(&icmx);
+      free(icheck[slot].file);
+      icheck[slot].h = ph; icheck[slot].ok = (signed char)ok; icheck[slot].file = ok ? strdup(q->file) : NULL;
+      pthread_mutex_unlock(&icmx);
     }
-    pthread_mutex_unlock(&icmx);
-    if (ok < 0) {
-      uint8_t *b = NULL;
-      size_t bn = 0;
-      int st = lv_http_get(h, p[k].page, &b, &bn, 2u << 20, NULL, NULL, NULL);
-      ok = st == 200 && b && lv_item_check(s, &p[k], (char *)b);
-      free(b);
-      // (kept only when the page answered: one that didn't may answer next time)
-      if (st == 200) {
-        pthread_mutex_lock(&icmx);
-        free(icheck[slot].file);
-        icheck[slot].h = ph; icheck[slot].ok = (signed char)ok; icheck[slot].file = ok ? strdup(p[k].file) : NULL;
-        pthread_mutex_unlock(&icmx);
-      }
-    }
-    if (ok) p[kept++] = p[k];
+  }
+  return ok;
+}
+typedef struct { LvHttp *h; const LvSite *s; LvPost *p; int n; volatile int *gen; int g; signed char *ok; } CheckHalf;
+static void *check_half(void *a) { // (the odd ones, on a second connection, beside the caller's even ones)
+  CheckHalf *c = a;
+  for (int k = 1; k < c->n && *c->gen == c->g; k += 2) c->ok[k] = (signed char)check_one(c->h, c->s, &c->p[k]);
+  return NULL;
+}
+// The posts whose pages pass (each episode's own page read), kept in order at the front; the rest
+// freed. Two at a time when there's a second connection (h2): about half the wait.
+static int check_items2(LvHttp *h, LvHttp *h2, const LvSite *s, LvPost *p, int n, volatile int *gen, int g) {
+  signed char *ok = calloc(n + 1, 1);
+  if (!ok) return 0;
+  pthread_t t; int helper = 0;
+  CheckHalf ch = {h2, s, p, n, gen, g, ok};
+  if (h2 && n > 1) {
+    pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, 256 * 1024);
+    helper = pthread_create(&t, &at, check_half, &ch) == 0;
+  }
+  for (int k = 0; k < n && *gen == g; k += helper ? 2 : 1) ok[k] = (signed char)check_one(h, s, &p[k]);
+  if (helper) pthread_join(t, NULL);
+  int kept = 0;
+  for (int k = 0; k < n; k++) {
+    if (ok[k] == 1 && *gen == g) p[kept++] = p[k];
     else { LvPost *q = &p[k]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); }
   }
-  for (; k < n; k++) { LvPost *q = &p[k]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); }
+  free(ok);
   return kept;
 }
 
 static void *list_main(void *arg) {
   pin_to_core(2); // (off the drawing thread's core)
   LvHttp *h = lv_http_new();
+  LvHttp *h2 = lv_http_new(); // (a second connection: episode pages checked two at a time)
   while (worker_run) {
     pthread_mutex_lock(&wmx);
     while (worker_run && !list_want) wait_work(&wcv, &wmx, h);
@@ -317,7 +344,7 @@ static void *list_main(void *arg) {
     if (!url[0]) { b = (uint8_t *)strdup(s->kind == BK_BOORUIO ? "{\"data\":[]}" : "[]"); n = b ? strlen((char *)b) : 0; }
     int count = 0;
     LvPost *got = st == 200 ? lv_booru_parse(s, (const char *)b, n, ratings, &count) : NULL;
-    if (got && lv_site_checks_items(s)) count = check_items(h, s, got, count, &wgen, gen);
+    if (got && lv_site_checks_items(s)) count = check_items2(h, h2, s, got, count, &wgen, gen);
     // (the hidden tags: those posts never reach the grid)
     if (got && hidden[0]) {
       int kept = 0;
@@ -348,12 +375,79 @@ static void *list_main(void *arg) {
     free(b);
   }
   lv_http_free(h);
+  if (h2) lv_http_free(h2);
   return NULL;
 }
 
+// ----- the previews' cache on the card: ux0:data/LWDV00001/cache/web, a file per address (its hash),
+//       up to about 48 MB (pruned when the Browser starts). Not for an Untraceable vault: nothing of
+//       what was browsed is left on the card plain -----
+#define PV_DIR DATA "/cache/web"
+static void pv_path(const char *url, char *out, size_t cap) {
+  unsigned long long h = 1469598103934665603ull;
+  for (const char *c = url; *c; c++) h = (h ^ (unsigned char)*c) * 1099511628211ull;
+  snprintf(out, cap, PV_DIR "/%016llx", h);
+}
+static int pv_cache_get(const char *url, uint8_t **b, size_t *n) {
+  if (vault.untraceable || !url[0]) return 0;
+  char p[200]; pv_path(url, p, sizeof p);
+  SceUID fd = sceIoOpen(p, SCE_O_RDONLY, 0);
+  if (fd < 0) return 0;
+  SceOff len = sceIoLseek(fd, 0, SCE_SEEK_END);
+  sceIoLseek(fd, 0, SCE_SEEK_SET);
+  uint8_t *d = len > 0 && len < (4 << 20) ? malloc((size_t)len + 1) : NULL;
+  int ok = d && sceIoRead(fd, d, (SceSize)len) == (int)len;
+  sceIoClose(fd);
+  if (!ok) { free(d); return 0; }
+  d[len] = 0; *b = d; *n = (size_t)len;
+  return 1;
+}
+static void pv_cache_put(const char *url, const uint8_t *b, size_t n) {
+  if (vault.untraceable || !url[0] || n < 64 || n > (1 << 20)) return;
+  char p[200], t[210]; pv_path(url, p, sizeof p);
+  snprintf(t, sizeof t, "%s.%u", p, (unsigned)sceKernelGetThreadId());
+  SceUID fd = sceIoOpen(t, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+  if (fd < 0) { sceIoMkdir(DATA "/cache", 0777); sceIoMkdir(PV_DIR, 0777); fd = sceIoOpen(t, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666); }
+  if (fd < 0) return;
+  int ok = sceIoWrite(fd, b, (SceSize)n) == (int)n;
+  sceIoClose(fd);
+  if (!ok || sceIoRename(t, p) < 0) sceIoRemove(t); // (written whole, then put in place: never half a file)
+}
+// (at start, on its own thread: kept under about 48 MB, the oldest first out)
+static void pv_cache_prune(void) {
+  DIR *d = opendir(PV_DIR);
+  if (!d) return;
+  typedef struct { char name[24]; long long size; long long when; } PvF;
+  int cap = 4096, nf = 0; PvF *fs = malloc(cap * sizeof *fs);
+  long long total = 0;
+  struct dirent *e;
+  while (fs && (e = readdir(d))) {
+    if (e->d_name[0] == '.' || nf >= cap) continue;
+    char p[200]; snprintf(p, sizeof p, PV_DIR "/%s", e->d_name);
+    SceIoStat st;
+    if (sceIoGetstat(p, &st) < 0) continue;
+    if (strchr(e->d_name, '.')) { sceIoRemove(p); continue; } // (a write cut short)
+    snprintf(fs[nf].name, sizeof fs[nf].name, "%s", e->d_name);
+    fs[nf].size = st.st_size; total += st.st_size;
+    fs[nf].when = ((long long)st.st_mtime.year * 400 + st.st_mtime.month * 32 + st.st_mtime.day) * 86400LL + st.st_mtime.hour * 3600 + st.st_mtime.minute * 60 + st.st_mtime.second;
+    nf++;
+  }
+  closedir(d);
+  const long long LIMIT = 48ll << 20, KEEP = 36ll << 20;
+  while (fs && total > LIMIT && nf > 0) {
+    int old = 0;
+    for (int k = 1; k < nf; k++) if (fs[k].when < fs[old].when) old = k;
+    char p[200]; snprintf(p, sizeof p, PV_DIR "/%s", fs[old].name);
+    sceIoRemove(p); total -= fs[old].size;
+    fs[old] = fs[--nf];
+    if (total <= KEEP) break;
+  }
+  free(fs);
+}
 static void *preview_main(void *arg) {
   pin_to_core(1); // (off the drawing thread's core)
   LvHttp *h = lv_http_new();
+  pthread_mutex_lock(&wmx); int me = prev_ids++ & 1; pthread_mutex_unlock(&wmx);
   while (worker_run) {
     pthread_mutex_lock(&wmx);
     // (asleep with nothing wanted, or while 20 finished ones wait to be taken: woken when they are)
@@ -361,11 +455,14 @@ static void *preview_main(void *arg) {
     if (!worker_run) { pthread_mutex_unlock(&wmx); break; }
     int p = wwant[0], gen = wgen;
     memmove(wwant, wwant + 1, --nwwant * sizeof *wwant);
-    char url[1024];
-    snprintf(url, sizeof url, "%s", p < nposts ? posts[p].preview : "");
+    // (the address copied whole: signed CDN links run past a fixed buffer, and cut short never loaded)
+    char *url = strdup(p < nposts && posts[p].preview ? posts[p].preview : "");
     int full = nwdone >= 20;
+    prev_cancel[me] = 0;
     pthread_mutex_unlock(&wmx);
+    if (!url) continue;
     if (full || !url[0]) {
+      free(url);
       pthread_mutex_lock(&wmx);
       if (gen == wgen && p < nposts) wstate[p] = full ? 0 : 3;
       pthread_mutex_unlock(&wmx);
@@ -374,7 +471,9 @@ static void *preview_main(void *arg) {
     }
     uint8_t *b = NULL;
     size_t n = 0;
-    int st = lv_http_get(h, url, &b, &n, 4 * 1024 * 1024, NULL, NULL, NULL);
+    int st = pv_cache_get(url, &b, &n) ? 200 : -1; // (seen before: from the card)
+    if (st != 200) { st = lv_http_get(h, url, &b, &n, 4 * 1024 * 1024, &prev_cancel[me], NULL, NULL); if (st == 200 && b) pv_cache_put(url, b, n); }
+    free(url);
     LvPixels px = {0};
     int cw = CARD_W, ch = CARD_H * 2;
     if (st == 200) cover_size(b, n, &cw, &ch);
@@ -508,8 +607,26 @@ static void *sample_main(void *arg) {
   LvHttp *h = lv_http_new();
   while (worker_run) {
     pthread_mutex_lock(&wmx);
-    while (worker_run && big_job.post < 0) wait_work(&wcv, &wmx, h);
+    while (worker_run && big_job.post < 0 && pf_want < 0) wait_work(&wcv, &wmx, h);
     if (!worker_run) { pthread_mutex_unlock(&wmx); break; }
+    if (big_job.post < 0) {
+      // nothing asked for: the next picture ahead of time (a picture's sample only; if memory is
+      // short, not at all: the one shown comes first)
+      int q = pf_want, qgen = wgen; pf_want = -1;
+      char *url = q >= 0 && q < nposts && posts[q].sample && !lv_post_is_video(&posts[q]) ? strdup(posts[q].sample) : NULL;
+      pf_busy = url ? q : -1; pf_cancel = 0;
+      pthread_mutex_unlock(&wmx);
+      if (!url) continue;
+      uint8_t *b = NULL; size_t n = 0;
+      int st = heap_room(40u << 20) ? lv_http_get(h, url, &b, &n, 16u * 1024 * 1024, &pf_cancel, NULL, NULL) : -1;
+      free(url);
+      pthread_mutex_lock(&wmx);
+      pf_busy = -1;
+      if (st == 200 && b && n && qgen == wgen) { free(pf_raw); pf_raw = b; pf_n = n; pf_post = q; pf_gen = qgen; b = NULL; }
+      pthread_mutex_unlock(&wmx);
+      free(b);
+      continue;
+    }
     int p = big_job.post, gen = big_job.gen, save = big_job.save, vgen_asked = big_job.vgen, full = big_job.full, hires = big_job.hires;
     big_job.hires = 0;
     char cat[64];
@@ -646,7 +763,12 @@ static void *sample_main(void *arg) {
         dl_post = -1;
         reused:;
       } else {
-        st = lv_http_get(h, post.sample, &b, &n, 32u * 1024 * 1024, &big_cancel, &big_progress, &err);
+        // (fetched ahead already: its bytes, at once)
+        pthread_mutex_lock(&wmx);
+        if (pf_raw && pf_post == p && pf_gen == gen) { b = pf_raw; n = pf_n; pf_raw = NULL; pf_post = -1; st = 200; }
+        else st = -1;
+        pthread_mutex_unlock(&wmx);
+        if (st != 200) st = lv_http_get(h, post.sample, &b, &n, 32u * 1024 * 1024, &big_cancel, &big_progress, &err);
         // (that copy not there (404, 403, 410): the picture itself, then the preview, before an error)
         const char *alts[2] = {post.file, post.preview};
         for (int a2 = 0; a2 < 2 && st >= 400 && st < 500 && !big_cancel; a2++)
@@ -659,6 +781,7 @@ static void *sample_main(void *arg) {
         snprintf(d.ext, sizeof d.ext, "%s", post.ext);
       } else {
         d.a = b; d.an = n;
+        if (hires && !heap_room(48u << 20)) hires = 0; // (memory short: the screen's size, not 1920)
         if (lv_decode(b, n, hires ? 1920 : W, hires ? 1920 : H, &d.px) != 0) {
           // (a GIF, or something else the Vita can't decode: the preview stands in)
           snprintf(d.err, sizeof d.err, "%s", !strcmp(post.ext, "gif") ? "GIF: the preview is shown" : "This picture can't be shown");
@@ -689,6 +812,7 @@ static void *web_spawn(void *arg) {
   if (pthread_create(&t, &at, preview_main, NULL) != 0) LOG("a preview thread didn't start\n");
   pthread_create(&t, &at, preview_main, NULL);
   if (pthread_create(&t, &at, sample_main, NULL) != 0) LOG("the sample thread didn't start\n");
+  pv_cache_prune(); // (here, on the helper: the card read off the drawing thread)
   return NULL;
 }
 static void web_start(void) {
@@ -729,6 +853,8 @@ static void web_search(void) {
   pthread_mutex_lock(&wmx);
   wgen++;
   list_cancel = 1;
+  prev_cancel[0] = prev_cancel[1] = 1; // (the previews being fetched for the old search: dropped)
+  free(pf_raw); pf_raw = NULL; pf_post = -1; pf_want = -1; pf_cancel = 1; // (and a picture fetched ahead)
   for (int k = 0; k < nwdone; k++) { free(wdone[k].px.rgba); free(wdone[k].a); free(wdone[k].b); }
   nwdone = 0;
   nwwant = 0;
@@ -910,6 +1036,8 @@ static void wv_show(int k) {
   wv_err[0] = 0;
   pthread_mutex_lock(&wmx);
   big_cancel = 1; // (the one before stops)
+  if (pf_busy != wv) pf_cancel = 1; // (a picture being fetched ahead gives way, unless it's this one: then it's waited for)
+  pf_want = -1;
   big_job.post = wv;
   big_job.gen = wgen;
   big_job.save = 0;
@@ -1241,7 +1369,7 @@ static void web_take_results(void) {
         free(got);
         got = NULL;
         wpage = page_ready.page;
-        if (nposts >= MAX_POSTS) wend = 1;
+        if (nposts >= MAX_POSTS) { wend = 1; say("The first 2,000 are shown: a narrower search finds the rest"); }
       } else wend = 1;
     }
     if (got) lv_posts_free(got, page_ready.count);
@@ -1291,6 +1419,8 @@ static void web_take_results(void) {
     } else if (d->kind == WD_SAMPLE) {
       if (d->post == wv) {
         wv_loading = 0;
+        // (shown: the next one fetched ahead, if it's a picture and isn't already)
+        { int nx = wv + 1; if (nx < nposts && !lv_post_is_video(&posts[nx]) && pf_post != nx && pf_busy != nx) { pf_want = nx; pthread_cond_broadcast(&wcv); } }
         if (d->err[0]) { snprintf(wv_err, sizeof wv_err, "%s", d->err); wv_failed = !(d->px.rgba); }
         if (d->px.rgba) { release_tex(wv_tex); wv_tex = screen_upload(1, &d->px); wv_tex_post = d->post; }
         free(wv_raw);
@@ -1357,6 +1487,16 @@ static void ask_previews(const int *list, int n) {
   }
   nlast = n < 48 ? n : 48; last_gen = wgen;
   memcpy(last, list, nlast * sizeof *list);
+  // (the ones nearest the middle of the screen asked for first: what's being looked at comes first)
+  int ord[48]; float dist[48]; int m = 0;
+  float mid = wscroll + (H - TOP - BAR) / 2.0f;
+  for (int k = 0; k < n && m < 48; k++) {
+    float dd = list[k] < wgrid.n ? fabsf(wgrid.r[list[k]].y + wgrid.r[list[k]].h / 2 - mid) : 1e9f;
+    int j = m++;
+    while (j > 0 && dist[j - 1] > dd) { dist[j] = dist[j - 1]; ord[j] = ord[j - 1]; j--; }
+    dist[j] = dd; ord[j] = list[k];
+  }
+  list = ord; n = m;
   pthread_mutex_lock(&wmx);
   for (int k = 0; k < nwwant; k++) if (wwant[k] < nposts && wstate[wwant[k]] == 1) wstate[wwant[k]] = 0;
   nwwant = 0;
@@ -2777,7 +2917,7 @@ static void draw_web(void) {
   }
   ask_previews(wanted, nw);
   // the next page, before the end is reached
-  if (last + 12 >= nposts) web_more();
+  if (last + (last - first + 1) * 2 + 12 >= nposts) web_more(); // (two screens before the end: rarely a wait at the bottom)
   if (!nposts) {
     if (!lv_net_online()) text_center(W / 2, TOP + 150, DIM, 20, "Not connected: turn on Wi-Fi in the Vita's settings");
     else if (wloading) {
@@ -3148,11 +3288,11 @@ static void *conv_main(void *arg) {
   ConvJob *j = arg;
   pin_to_core(1);
   LvHttp *h = lv_http_new();
-  char result[1500] = "";
+  char result[4096] = "";
   for (int s = 0; s < CV_N && h && !result[0]; s++) {
     if (!conv_keys[s][0]) continue;
     char url[300], hdr[3][300], id[200], m[200];
-    static char body[5000];
+    static char body[16384]; // (a long signed address fits)
     lv_conv_start(s, conv_keys[s], j->src, url, sizeof url, body, sizeof body, hdr);
     const char *hs[3] = {hdr[0], hdr[1], NULL};
     LvReq rq = {.method = "POST", .headers = hs, .body = body, .body_len = strlen(body)};
@@ -3162,6 +3302,12 @@ static void *conv_main(void *arg) {
     snprintf(m, sizeof m, "Making it 480p on %s\u2026", lv_conv_name(s));
     conv_say(m);
     int st = lv_http_req(h, url, &rq, &b, &n, 1u << 20, NULL, &err);
+    // (no answer, busy or too many: asked again twice, a few seconds apart, before the next service)
+    for (int tries = 0; tries < 2 && (st < 0 || st == 429 || (st >= 500 && st <= 599)) && worker_run; tries++) {
+      free(b); b = NULL; n = 0;
+      sceKernelDelayThread((tries + 1) * 3 * 1000 * 1000);
+      st = lv_http_req(h, url, &rq, &b, &n, 1u << 20, NULL, &err);
+    }
     int ok = (st == 200 || st == 201) && b && lv_conv_parse_start(s, (char *)b, n, id, sizeof id) == 0;
     free(b);
     if (!ok) { snprintf(m, sizeof m, "%s didn't take it (%d): trying the next", lv_conv_name(s), st); conv_say(m); continue; }

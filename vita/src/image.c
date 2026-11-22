@@ -101,7 +101,68 @@ static int jpeg(const uint8_t *d, size_t n, int max_w, int max_h, LvPixels *out)
   return 0;
 }
 
+// A big PNG made small (a preview, a thumbnail) a row at a time: never the whole picture in memory,
+// each small pixel the average of the big ones it covers. -2: not this way (interlaced, or no
+// shrinking needed): the whole-picture way below.
+typedef struct { const uint8_t *d; size_t n, at; } PngMem;
+static void png_mem_read(png_structp p, png_bytep o, png_size_t len) {
+  PngMem *m = png_get_io_ptr(p);
+  if (m->at + len > m->n) png_error(p, "short");
+  memcpy(o, m->d + m->at, len); m->at += len;
+}
+static int png_small(const uint8_t *d, size_t n, int max_w, int max_h, LvPixels *out) {
+  png_structp p = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+  png_infop info = p ? png_create_info_struct(p) : NULL;
+  if (!info) { if (p) png_destroy_read_struct(&p, NULL, NULL); return -1; }
+  uint8_t *volatile row = NULL, *volatile ob = NULL;
+  uint32_t *volatile acc = NULL;
+  if (setjmp(png_jmpbuf(p))) { free(row); free(acc); free(ob); png_destroy_read_struct(&p, &info, NULL); return -1; }
+  PngMem m = {d, n, 0};
+  png_set_read_fn(p, &m, png_mem_read);
+  png_read_info(p, info);
+  png_uint_32 w = png_get_image_width(p, info), h = png_get_image_height(p, info);
+  int ct = png_get_color_type(p, info), bd = png_get_bit_depth(p, info);
+  int ow, oh;
+  fit((int)w, (int)h, max_w, max_h, &ow, &oh);
+  if (png_get_interlace_type(p, info) != PNG_INTERLACE_NONE || ow >= (int)w || oh >= (int)h || w > 30000 || h > 30000) { png_destroy_read_struct(&p, &info, NULL); return -2; }
+  if (bd == 16) png_set_strip_16(p);
+  if (ct == PNG_COLOR_TYPE_PALETTE) png_set_palette_to_rgb(p);
+  if (ct == PNG_COLOR_TYPE_GRAY && bd < 8) png_set_expand_gray_1_2_4_to_8(p);
+  if (png_get_valid(p, info, PNG_INFO_tRNS)) png_set_tRNS_to_alpha(p);
+  if (ct == PNG_COLOR_TYPE_GRAY || ct == PNG_COLOR_TYPE_GRAY_ALPHA) png_set_gray_to_rgb(p);
+  png_set_filler(p, 0xFF, PNG_FILLER_AFTER);
+  png_read_update_info(p, info);
+  if (png_get_rowbytes(p, info) != (png_size_t)w * 4) png_error(p, "layout");
+  row = malloc((size_t)w * 4);
+  acc = calloc((size_t)ow * 4, sizeof *acc);
+  ob = malloc((size_t)ow * oh * 4);
+  if (!row || !acc || !ob) png_error(p, "memory");
+  int oy = 0, rows_in = 0;
+  for (png_uint_32 sy = 0; sy < h; sy++) {
+    png_read_row(p, row, NULL);
+    int ty = (int)((uint64_t)sy * oh / h);
+    if (ty != oy) { // (an output row complete: its averages out)
+      for (int x = 0; x < ow * 4; x++) ob[(size_t)oy * ow * 4 + x] = (uint8_t)(acc[x] / (rows_in ? rows_in : 1));
+      memset(acc, 0, (size_t)ow * 4 * sizeof *acc); rows_in = 0; oy = ty;
+    }
+    for (int ox = 0; ox < ow; ox++) {
+      int sx0 = (int)((uint64_t)ox * w / ow), sx1 = (int)((uint64_t)(ox + 1) * w / ow);
+      if (sx1 <= sx0) sx1 = sx0 + 1;
+      uint32_t r = 0, g = 0, b = 0, a = 0;
+      for (int sx = sx0; sx < sx1; sx++) { const uint8_t *q = row + sx * 4; r += q[0]; g += q[1]; b += q[2]; a += q[3]; }
+      int c = sx1 - sx0;
+      acc[ox * 4] += r / c; acc[ox * 4 + 1] += g / c; acc[ox * 4 + 2] += b / c; acc[ox * 4 + 3] += a / c;
+    }
+    rows_in++;
+  }
+  for (int x = 0; x < ow * 4; x++) ob[(size_t)oy * ow * 4 + x] = (uint8_t)(acc[x] / (rows_in ? rows_in : 1));
+  png_destroy_read_struct(&p, &info, NULL);
+  free(row); free(acc);
+  out->rgba = ob; out->w = ow; out->h = oh;
+  return 0;
+}
 static int png(const uint8_t *d, size_t n, int max_w, int max_h, LvPixels *out) {
+  { int r = png_small(d, n, max_w, max_h, out); if (r != -2) return r; } // (made small a row at a time when it can be)
   png_image im;
   memset(&im, 0, sizeof im);
   im.version = PNG_IMAGE_VERSION;
