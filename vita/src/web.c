@@ -3642,6 +3642,10 @@ static void draw_webview(void) {
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, backdrop));
   vita2d_texture *t = NULL;
   int is_frame = 0;
+  if (wv_vid && lv_video_failed(wv_vid) && video_path[0]) {
+    static int rescued = -1;
+    if (rescued != wv) { rescued = wv; video_close_later(wv_vid); wv_vid = lv_video_open_sys(video_path, NULL, 1); if (wv_vid) lv_video_set_volume(wv_vid, cfg.volume * 32768 / 100); }
+  }
   if (wv_vid) { t = lv_video_frame(wv_vid); is_frame = t != NULL; }
   vc_frame = is_frame ? t : NULL; if (is_frame) { vc_fw = lv_video_width(wv_vid); vc_fh = lv_video_height(wv_vid); } // (the scrub preview's: this video's, never one closed before)
   if (!t && wv_gif) t = gif_play_frame(wv_gif);

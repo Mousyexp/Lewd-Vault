@@ -106,6 +106,8 @@ struct LvVideo {
   volatile int64_t seek_to;        // -1: none (the system player: a jump waiting for its first picture)
   int av_shown;                    // (the system player: its first picture has come)
   volatile int ended;
+  int64_t opened_us; // (when it was opened: a picture that never starts moving is given up on)
+  volatile int moved; // (its time has gone past the start at least once)
   uint8_t *pix[2];
   int pix_w, pix_h;
   volatile int pix_ready; // -1 none, else the buffer to upload
@@ -298,11 +300,11 @@ static int av_open(LvVideo *v) {
   init.fileReplacement.size = f_size;
   init.eventReplacement.objectPointer = v;
   init.eventReplacement.eventCallback = av_event;
-  // (its threads above the app's own (160): the Browser's downloads and decodes never hold a frame
-  //  up. Four frames: one shown, three decoded ahead; safe now that a frame is given back only once
-  //  the GPU has drawn it (lv_video_gpu_idle in main's loop))
-  init.basePriority = 110;
-  init.numOutputVideoFrameBuffers = 4;
+  // (its threads at the app's own priority, two frames: as played smoothest on the Vita; a frame is
+  //  given back only once the GPU has drawn it (main's loop waits for it first). MP4s play through
+  //  FFmpeg and the H.264 hardware now; this player is the fallback and Settings' choice)
+  init.basePriority = 0xA0;
+  init.numOutputVideoFrameBuffers = 2;
   init.autoStart = SCE_FALSE;
   v->h_av = sceAvPlayerInit(&init);
   // (the handle is an address in the player's memory, 0x81000000 up: negative as an int; an error is
@@ -312,7 +314,7 @@ static int av_open(LvVideo *v) {
   v->add_thread = sceKernelCreateThread("lv_av_add", av_add_main, 0x10000100, 0x10000, 0, 0, NULL); // (64 KB: the system player reads the file's header on it)
   if (v->add_thread >= 0) sceKernelStartThread(v->add_thread, sizeof v, &v);
   else if (sceAvPlayerAddSource(v->h_av, v->path) < 0) return -1;
-  v->audio_thread = sceKernelCreateThread("lv_av_sound", av_sound_main, 96, 0x4000, 0, SCE_KERNEL_CPU_MASK_USER_1, NULL); // (the sound above everything else of ours: never starved)
+  v->audio_thread = sceKernelCreateThread("lv_av_sound", av_sound_main, 0x10000100, 0x4000, 0, SCE_KERNEL_CPU_MASK_USER_1, NULL);
   if (v->audio_thread >= 0) sceKernelStartThread(v->audio_thread, sizeof v, &v);
   return 0;
 }
@@ -571,6 +573,7 @@ static void *sw_decode_main(void *arg) {
   AVFrame *af = av_frame_alloc();
   int16_t *pcm = malloc(48000 * 2 * sizeof(int16_t));
   int64_t skip_until = -1;
+  int avc_errors = 0;
   while (v->run) {
     if (v->seek_to >= 0) { skip_until = v->seek_to; sw_seek_now(v); }
     if (v->paused) {
@@ -624,7 +627,14 @@ static void *sw_decode_main(void *arg) {
         SceAvcdecArrayPicture arr = {0, 1, &pp};
         if (v->avc_npts < 32) v->avc_pts[v->avc_npts++] = pts;
         int r = sceAvcdecDecode(&v->avc_ctl, &au, &arr);
-        if (r < 0) LOG("avc: decode error %x at %lld\n", r, (long long)pts);
+        // (sixty pictures sent, two seconds or so, and not one back: given up on as well)
+        if (r >= 0 && arr.numOfOutput == 0 && v->avc_front < 0 && ++avc_errors >= 60) v->failed = 1;
+        if (r < 0) {
+          LOG("avc: decode error %x at %lld\n", r, (long long)pts);
+          // (the hardware turning it down again and again before a single picture: given up on, the
+          //  screen reopens it in the system player: lv_video_failed)
+          if ((avc_errors += 10) >= 60 && v->avc_front < 0) v->failed = 1;
+        }
         else if (arr.numOfOutput > 0) {
           // (its time: the earliest of those sent and not yet out, as frames come out in the order
           //  they're shown; the decoder's own isn't always filled in)
@@ -639,7 +649,7 @@ static void *sw_decode_main(void *arg) {
             skip_until = -1;
             sw_wait_for(v, opts);
             if (v->seek_to >= 0 || !v->run) { av_packet_unref(pkt); continue; }
-            v->pos_ms = opts;
+            v->pos_ms = opts; if (opts > 0) v->moved = 1;
             pthread_mutex_lock(&v->mx);
             v->avc_front = back;
             v->avc_back = (back + 1) % 3; // (never the one shown, nor the one shown before it)
@@ -748,11 +758,17 @@ static int sw_open(LvVideo *v) {
       v->as = (int)k;
     }
   }
+  // (an MP4 says its length on its streams, not the file's, until probed: taken from the picture's)
+  if (!v->duration && v->vs >= 0) {
+    AVStream *st = v->fmt->streams[v->vs];
+    if (st->duration > 0 && st->time_base.den) v->duration = (uint64_t)(st->duration * 1000 * st->time_base.num / st->time_base.den);
+  }
   LOG("sw: video %d audio %d %dx%d\n", v->vs, v->as, v->w, v->h);
   if (v->vs < 0) return -1; // (no picture we can decode: H.264 in MKV, AV1, ...)
   v->ring_cap = 48000; // one second of sound ahead
   v->ring = malloc((size_t)v->ring_cap * 2 * sizeof(int16_t));
   v->wall_start = now_us();
+  v->opened_us = v->wall_start;
   v->run = 1;
   pthread_attr_t at;
   pthread_attr_init(&at);
@@ -854,7 +870,20 @@ LvVideo *lv_video_open_growing(const char *path, const LvGrow *g) {
   if (av_open(v) != 0) { lv_video_close(v); return NULL; }
   return v;
 }
+// MP4/M4V/MOV: through FFmpeg (the app's own build: vita/tools/build-ffmpeg.sh, which has the MP4
+// reader) and the Vita's H.264 hardware, frame by frame on our clock, as VitaMediaDeck plays them;
+// the system player only when that can't open it (no FFmpeg of ours, or a picture it can't decode)
+static LvVideo *video_open2(const char *path, const uint8_t *key, int loop, int mp4_sw);
 LvVideo *lv_video_open(const char *path, const uint8_t *key, int loop) {
+#ifdef LV_FF_MOV
+  extern int lv_video_sys_only;
+  return video_open2(path, key, loop, !lv_video_sys_only);
+#else
+  return video_open2(path, key, loop, 0);
+#endif
+}
+static LvVideo *video_open2(const char *path, const uint8_t *key, int loop, int mp4_sw) {
+  int mp4 = ext(path, "mp4") || ext(path, "m4v") || ext(path, "mov");
   LvVideo *v = calloc(1, sizeof *v);
   if (!v) return NULL;
   snprintf(v->path, sizeof v->path, "%s", path);
@@ -865,8 +894,13 @@ LvVideo *lv_video_open(const char *path, const uint8_t *key, int loop) {
   v->add_thread = v->audio_thread = -1;
   v->run = 1;
   v->seek_to = -1;
-  v->sw = ext(path, "webm") || ext(path, "mkv") || ext(path, "avi");
-  if ((v->sw ? sw_open(v) : av_open(v)) != 0) { lv_video_close(v); return NULL; }
+  v->sw = ext(path, "webm") || ext(path, "mkv") || ext(path, "avi") || (mp4 && mp4_sw);
+  if ((v->sw ? sw_open(v) : av_open(v)) != 0) {
+    int again = v->sw && mp4;
+    LOG("video: %s didn't open (%s)%s\n", path, v->sw ? "FFmpeg" : "system player", again ? ": the system player instead" : "");
+    lv_video_close(v);
+    return again ? video_open2(path, key, loop, 0) : NULL;
+  }
   return v;
 }
 
@@ -876,7 +910,14 @@ vita2d_texture *lv_video_frame(LvVideo *v) {
 }
 int lv_video_width(const LvVideo *v) { return v ? (v->sw && v->rgb ? v->pix_w : v->w) : 0; }
 int lv_video_height(const LvVideo *v) { return v ? (v->sw && v->rgb ? v->pix_h : v->h) : 0; }
-int lv_video_failed(const LvVideo *v) { return v && !v->sw && v->failed; }
+int lv_video_failed(const LvVideo *v) {
+  if (!v) return 0;
+  if (v->failed) return 1;
+  // (FFmpeg's way, six seconds open, not paused, and its time still at the start: not playing)
+  return v->sw && v->avc && !v->paused && !v->moved && v->opened_us && now_us() - v->opened_us > 6000000;
+}
+int lv_video_sys_only; // (Settings › Video player: the system player for MP4s)
+LvVideo *lv_video_open_sys(const char *path, const uint8_t *key, int loop) { return video_open2(path, key, loop, 0); }
 uint64_t lv_video_pos(const LvVideo *v) {
   if (!v) return 0;
   if (v->sw) return (uint64_t)(v->pos_ms > 0 ? v->pos_ms : 0);

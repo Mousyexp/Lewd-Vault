@@ -571,6 +571,15 @@ The Title ID `LWDV00001` is where the Vita keeps the app and its data: don't cha
 
 ## Borrowed with thanks
 
-- **VitaMediaDeck** (github.com/spyro-98/VitaMediaDeck, GPL-3.0): how the system video player's
-  memory is handed out (zeroed, the frames' too), in `src/video.c`. To be cleared with its author
-  before release.
+- **VitaMediaDeck** (github.com/spyro-98/VitaMediaDeck, GPL-3.0), used with its author's permission:
+  how the system video player's memory is handed out (zeroed, the frames' too), and the way it plays
+  videos: the app's own FFmpeg build (`tools/build-ffmpeg.sh`, after its `tools/build-ffmpeg-vita-hw.sh`)
+  reading MP4s, the picture decoded by the Vita's H.264 hardware and shown frame by frame on the
+  app's own clock instead of through the system player (`src/video.c`).
+
+## Building FFmpeg
+
+`sh tools/build-ffmpeg.sh` (with `VITASDK` set) builds VitaSDK's FFmpeg 9.0.2, with the same options
+and the MP4/MOV reader added, into `deps/ffmpeg` (not in the repository). CMake uses it when it's
+there (MP4s then play through FFmpeg and the H.264 hardware), else VitaSDK's own (MP4s through the
+system player). The CI workflow builds it once and keeps it.

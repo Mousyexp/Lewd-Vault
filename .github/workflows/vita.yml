@@ -43,6 +43,16 @@ jobs:
       # the vault core on the runner's own compiler first: the format must match the PC byte for byte
       - name: Vault core tests
         run: sh vita/tests/run.sh
+      # the app's own FFmpeg (VitaSDK's version and options, with the MP4 reader added: MP4s then play
+      # through FFmpeg and the Vita's H.264 hardware); built once, kept between runs
+      - uses: actions/cache@v4
+        with:
+          path: vita/deps/ffmpeg
+          key: vita-ffmpeg-${{ hashFiles('vita/tools/build-ffmpeg.sh') }}
+      - name: Build the app's FFmpeg
+        run: |
+          docker run --rm -v "$PWD":/w -w /w vitasdk/vitasdk:latest \
+            sh -c 'command -v xz >/dev/null || (apt-get update -qq && apt-get install -y -qq xz-utils curl) || apk add --no-cache xz curl; sh vita/tools/build-ffmpeg.sh; chown -R '"$(id -u):$(id -g)"' vita/deps'
       - name: Build the VPK
         # (Google Drive: the "TVs and Limited Input devices" key, when the repository has one as secrets)
         env:

@@ -606,6 +606,7 @@ static struct {
   int nodecor; // the little anime girls (decor.c) hidden
   int notags;  // a save doesn't ask for your own tags
   int datediv; // the Library's date labels (Newest/Oldest): off unless chosen
+  int vsys;    // MP4s through the system player (sceAvPlayer), not FFmpeg and the H.264 hardware
   int rdim, rwarm; // the comic reader's dimming (0-6: tenths) and warmth (0-5: fifths)
   int streak_day, streak_n, streak_best; // days the app was opened in a row (day number, count, longest)
 } cfg = {"", 0, 0, 5, 0, 100, 1, 15, 2, "", "", 0, 0, 70, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
@@ -662,6 +663,7 @@ static void cfg_load(void) {
     else if (!strcmp(line, "nodecor")) cfg.nodecor = atoi(eq) != 0;
     else if (!strcmp(line, "notags")) cfg.notags = atoi(eq) != 0;
     else if (!strcmp(line, "datediv")) cfg.datediv = atoi(eq) != 0;
+    else if (!strcmp(line, "vplayer")) cfg.vsys = atoi(eq) != 0;
     else if (!strcmp(line, "reader_light")) { sscanf(eq, "%d,%d", &cfg.rdim, &cfg.rwarm); if (cfg.rdim < 0 || cfg.rdim > 6) cfg.rdim = 0; if (cfg.rwarm < 0 || cfg.rwarm > 5) cfg.rwarm = 0; }
     else if (!strcmp(line, "streak")) sscanf(eq, "%d,%d,%d", &cfg.streak_day, &cfg.streak_n, &cfg.streak_best);
     else if (!strcmp(line, "view")) sscanf(eq, "%d,%d,%d,%d", &cfg.ifit, &cfg.iorient, &cfg.vfit, &cfg.vorient);
@@ -706,6 +708,7 @@ static void cfg_write(void) {
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
           cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v, cfg.onboarded,
           cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback, cfg.ifit, cfg.iorient, cfg.vfit, cfg.vorient, cfg.tscale, cfg.accpic, cfg.wsize, cfg.rear_l, cfg.rear_r, cfg.autorot, cfg.nodecor, cfg.notags);
+  fprintf(f, "vplayer=%d\n", cfg.vsys);
   fprintf(f, "datediv=%d\nreader_light=%d,%d\nstreak=%d,%d,%d\n", cfg.datediv, cfg.rdim, cfg.rwarm, cfg.streak_day, cfg.streak_n, cfg.streak_best);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
@@ -3243,7 +3246,7 @@ static pthread_cond_t ccv = PTHREAD_COND_INITIALIZER;
 // ...and videos are opened there too (opening a file, reading its streams, starting its decoder: too
 // slow for the drawing thread): the full view asks, shows the thumbnail meanwhile, and takes the player
 // when it's ready, if it's still for the same picture (vopen_gen).
-static struct { char path[800], clip[800]; int loop; uint8_t key[32]; int has_key, gen; } vopen_job;
+static struct { char path[800], clip[800]; int loop, sys; uint8_t key[32]; int has_key, gen; } vopen_job; // (sys: the system player only)
 static volatile int vopen_want, vopen_gen, vopen_ready_gen = -1, vopen_ready_clip, vopen_fail_gen = -1;
 static LvVideo *volatile vopen_ready;
 static void *closer_main(void *arg) {
@@ -3257,7 +3260,7 @@ static void *closer_main(void *arg) {
       vopen_want = 0;
       pthread_mutex_unlock(&cmx);
       int clip = 0;
-      LvVideo *v = j.path[0] ? lv_video_open(j.path, j.has_key ? j.key : NULL, j.loop) : NULL;
+      LvVideo *v = j.path[0] ? (j.sys ? lv_video_open_sys : lv_video_open)(j.path, j.has_key ? j.key : NULL, j.loop) : NULL;
       if (!v && j.clip[0]) { v = lv_video_open(j.clip, j.has_key ? j.key : NULL, 1); clip = 1; }
       memset(j.key, 0, sizeof j.key);
       if (!v) vopen_fail_gen = j.gen; // (nothing to play: the spinner stops)
@@ -3274,6 +3277,7 @@ static void *closer_main(void *arg) {
   }
   return NULL;
 }
+static int vopen_sys_next; // (the next open: through the system player)
 static void video_open_async(const char *path, const char *clip, int loop) {
   make_room(32u << 20); // (a player: its buffers and frames, ~25 MB)
   pthread_mutex_lock(&cmx);
@@ -3281,6 +3285,7 @@ static void video_open_async(const char *path, const char *clip, int loop) {
   snprintf(vopen_job.path, sizeof vopen_job.path, "%s", path ? path : "");
   snprintf(vopen_job.clip, sizeof vopen_job.clip, "%s", clip ? clip : "");
   vopen_job.loop = loop;
+  vopen_job.sys = vopen_sys_next; vopen_sys_next = 0;
   vopen_job.has_key = vault.has_key;
   if (vault.has_key) memcpy(vopen_job.key, vault.key, 32);
   vopen_job.gen = vopen_gen;
@@ -3858,6 +3863,17 @@ static void draw_viewer(void) {
   //     fading slideshow, the one before until this one is ready) ---
   vita2d_texture *t = NULL;
   int is_frame = 0;
+  if (vid && !vid_clip && lv_video_failed(vid) && it->path) {
+    // (the hardware turned its picture down: the same file again through the system player, once)
+    static int rescued = -1;
+    if (rescued != shown[vk]) {
+      rescued = shown[vk];
+      video_close_later(vid);
+      vid = NULL;
+      vopen_sys_next = 1; // (opened on the closer's thread, as any video: never on this one)
+      video_open_async(it->path, NULL, 1);
+    }
+  }
   if (vid) { t = lv_video_frame(vid); is_frame = t != NULL; }
   vc_frame = is_frame ? t : NULL; if (is_frame) { vc_fw = lv_video_width(vid); vc_fh = lv_video_height(vid); }
   if (!t) t = big_item == shown[vk] ? big_tex : NULL;
@@ -4551,7 +4567,7 @@ static void draw_settings(void) {
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_REAR, ST_AUTOROT, ST_DECOR, ST_OTAGS, ST_STORAGE, ST_SAVEQ, ST_DELPICS, ST_DELVIDS, ST_DELCOMICS, ST_DELALL, ST_RESET, ST_DATEDIV, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_REAR, ST_AUTOROT, ST_DECOR, ST_OTAGS, ST_STORAGE, ST_SAVEQ, ST_DELPICS, ST_DELVIDS, ST_DELCOMICS, ST_DELALL, ST_RESET, ST_DATEDIV, ST_VPLAYER, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change; past 100% it's made louder than the video itself"},
@@ -4590,6 +4606,7 @@ static void draw_settings(void) {
     {"Delete everything in the vault", "", "All of it to the vault's _trash (✕ twice)"},
     {"Reset the app", "", "Its settings, PIN, keys, favourites and caches gone: as if never opened (the vault stays) (✕ twice)"},
     {"Date labels", cfg.datediv ? "On" : "Off", "Newest or Oldest first: a small label where each day, week or month begins"},
+    {"Video player", cfg.vsys ? "System" : "Smooth", "MP4s: Smooth plays them through the Vita's H.264 hardware frame by frame; System is the Vita's own player"},
   };
   // (which rows have been changed from how the app starts: their value in the accent, a touch bolder;
   //  the others' in grey, just saying what it is)
@@ -4606,7 +4623,7 @@ static void draw_settings(void) {
   // In sections, each with a header: the rows in the order shown (set_sel stays a row's ST_ id)
   static const signed char ORDER[] = {
     -1, ST_THEME, ST_ACCPIC, ST_BGS, ST_DECOR, ST_TEXT, ST_SNDPACK, ST_SOUNDS, ST_GLOW, ST_DBL,
-    -2, ST_VIEW, ST_AUTOROT, ST_VOL, ST_REAR,
+    -2, ST_VIEW, ST_AUTOROT, ST_VOL, ST_VPLAYER, ST_REAR,
     -6, ST_COMICS,
     -3, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK,
     -4, ST_DRIVE, ST_WIFI, ST_CONV,
@@ -4906,6 +4923,7 @@ static void draw_settings(void) {
       case ST_REAR: if (cross || d) { rear_window_open(); return; } break;
       case ST_AUTOROT: if (cross || d) { cfg.autorot = !cfg.autorot; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_DATEDIV: if (cross || d) { cfg.datediv = !cfg.datediv; sfx(SFX_TOGGLE); cfg_save(); } break;
+      case ST_VPLAYER: if (cross || d) { extern int lv_video_sys_only; cfg.vsys = !cfg.vsys; lv_video_sys_only = cfg.vsys; sfx(SFX_TOGGLE); cfg_save(); say(cfg.vsys ? "MP4s: the system player (from the next video)" : "MP4s: smooth, through the H.264 hardware (from the next video)"); } break;
       case ST_DECOR: if (cross || d) { cfg.nodecor = !cfg.nodecor; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_OTAGS: if (cross || d) { cfg.notags = !cfg.notags; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_DELPICS: case ST_DELVIDS: case ST_DELCOMICS: case ST_DELALL:
@@ -5616,6 +5634,7 @@ int main(void) {
   pgf = vita2d_load_default_pgf();
   rnd_state ^= (unsigned)time(NULL);
   cfg_load();
+  { extern int lv_video_sys_only; lv_video_sys_only = cfg.vsys; }
   { // the days opened in a row (a day by the Vita's own clock)
     struct tm l; lv_local_tm(time(NULL), &l);
     int today = (l.tm_year + 1900) * 372 + l.tm_mon * 31 + l.tm_mday; // (a day's number: only "the same" and "the next" matter)

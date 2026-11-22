@@ -17,7 +17,9 @@ int lv_video_height(const LvVideo *v);
 uint64_t lv_video_pos(const LvVideo *v);      // ms
 uint64_t lv_video_duration(const LvVideo *v); // ms, 0 until known
 int lv_video_ended(const LvVideo *v);
-int lv_video_failed(const LvVideo *v); // (the system player couldn't read the file)
+int lv_video_failed(const LvVideo *v); // (it couldn't be played: the system player couldn't read it, or the hardware turned its picture down)
+// The same file through the system player (sceAvPlayer) only: when lv_video_failed for an MP4
+LvVideo *lv_video_open_sys(const char *path, const uint8_t *key, int loop);
 int lv_video_paused(const LvVideo *v);
 void lv_video_pause(LvVideo *v, int on);
 void lv_video_seek(LvVideo *v, int64_t ms);

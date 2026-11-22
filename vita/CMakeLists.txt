@@ -43,9 +43,21 @@ if(NOT "$ENV{LEWD_VAULT_GOOGLE_TV_CLIENT_ID}" STREQUAL "" AND NOT "$ENV{LEWD_VAU
   target_compile_definitions(${PROJECT_NAME} PRIVATE
     LV_GOOGLE_TV_ID="$ENV{LEWD_VAULT_GOOGLE_TV_CLIENT_ID}" LV_GOOGLE_TV_SECRET="$ENV{LEWD_VAULT_GOOGLE_TV_CLIENT_SECRET}")
 endif()
+# The app's own FFmpeg (vita/tools/build-ffmpeg.sh: VitaSDK's, with the MP4 reader), when built:
+# MP4s then play through FFmpeg and the H.264 hardware instead of the system player
+set(LV_FF "${CMAKE_CURRENT_SOURCE_DIR}/deps/ffmpeg")
+if(EXISTS "${LV_FF}/lib/libavformat.a")
+  target_include_directories(${PROJECT_NAME} BEFORE PRIVATE "${LV_FF}/include")
+  target_compile_definitions(${PROJECT_NAME} PRIVATE LV_FF_MOV)
+  set(LV_FFLIBS "${LV_FF}/lib/libavformat.a" "${LV_FF}/lib/libavcodec.a" "${LV_FF}/lib/libswresample.a" "${LV_FF}/lib/libswscale.a" "${LV_FF}/lib/libavutil.a")
+  message(STATUS "FFmpeg: the app's own, with the MP4 reader")
+else()
+  set(LV_FFLIBS avformat avcodec swresample swscale avutil)
+  message(STATUS "FFmpeg: VitaSDK's (MP4s through the system player; run vita/tools/build-ffmpeg.sh)")
+endif()
 target_link_libraries(${PROJECT_NAME}
   vita2d freetype bz2 png turbojpeg webp sharpyuv
-  avformat avcodec swresample swscale avutil vpx mp3lame mpg123 opus vorbis ogg
+  ${LV_FFLIBS} vpx mp3lame mpg123 opus vorbis ogg
   curl ssl crypto zstd pthread z m
   SceAvPlayer_stub SceVideodec_stub SceAudio_stub SceGxm_stub SceDisplay_stub SceSysmodule_stub SceCtrl_stub
   SceTouch_stub ScePower_stub SceAppUtil_stub SceCommonDialog_stub SceIme_stub ScePgf_stub
