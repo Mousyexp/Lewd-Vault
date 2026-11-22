@@ -2237,6 +2237,7 @@ static int tab_of_screen(void) {
   }
   return -1;
 }
+static int last_tab_seen = -1;
 static void draw_bar(void) {
   // a tab changed (a tap, ○, a shortcut): the new one slides in from its side, a curtain of the
   // background drawing back over the first few frames (nothing of the old screen is kept)
@@ -2258,6 +2259,19 @@ static void draw_bar(void) {
         grad(W - cover - 80, 0, 80, H, BG, 0, a, 1);
       }
     } else tab_prev = -1;
+    // (another page within the same tab: Settings › Wi-Fi, Library › Favourites, Browser › Videos…
+    //  the new one rises in, the background's curtain lifting from the bottom up)
+    static int last_scr = -1; static unsigned sub_at;
+    if (last_scr >= 0 && screen != last_scr && now_tab >= 0 && now_tab == last_tab_seen) sub_at = frame_no ? frame_no : 1;
+    last_scr = screen; last_tab_seen = now_tab;
+    unsigned sage = frame_no - sub_at;
+    if (sub_at && sage < 16 && tab_prev < 0) {
+      float p = sage / 16.0f, e = 1 - (1 - p) * (1 - p) * (1 - p);
+      float top = H * e; // (the covered part shrinks downwards)
+      int a = (int)(255 * (1 - e * 0.5f));
+      grad(0, top - 90, W, 90, BG, 0, a, 0);
+      vita2d_draw_rectangle(0, top, W, H - top, with_alpha(BG, a));
+    }
   }
   // (tucked: a smaller pill, icons only)
   float t = chrome_hide;
@@ -3690,6 +3704,7 @@ static void draw_viewer(void) {
   if (t && (vita2d_texture_get_width(t) < 1 || vita2d_texture_get_height(t) < 1)) t = NULL;
   // (how it's shown: Viewing's size and orientation, for a video or a picture)
   view_tall = it->height > it->width * 1.15f;
+  if (vid && lv_video_width(vid) > 0) view_tall = lv_video_height(vid) > lv_video_width(vid) * 1.15f; // (a video: its own frames' shape)
   int isv = is_video(it), por = view_portrait(isv);
   lv_por = por; lv_mx = lv_my = 0; lv_mag = 1;
   lv_aw = por ? avail_h : W; lv_ah = por ? W : avail_h;
@@ -4311,7 +4326,7 @@ static void draw_settings(void) {
     {"Accent from the picture", cfg.accpic ? "On" : "Off", "The accent colour takes the picture's own, as you look through them"},
     {"Find duplicates", "", "The same picture more than once: one kept, the rest to the vault's trash"},
     {"Rear touchpad", vrear, "What each half of the back does: scroll, swipe, volume, zoom or nothing (\u2715 to choose)"},
-    {"Turn portrait pictures", cfg.autorot ? "On" : "Off", "A tall picture turned to fill the screen, for the Vita held on its side"},
+    {"Turn tall pictures and videos", cfg.autorot ? "On" : "Off", "A tall picture or video turned to fill the screen, for the Vita held on its side"},
     {"Decorations", cfg.nodecor ? "Off" : "On", "The little anime girls by empty screens and in corners, in the accent's colour (tap one)"},
     {"Your tags when saving", cfg.notags ? "Off" : "On", "After a save: pick tags you've given before or type new ones (yours come first)"},
     {"Save quality", cfg.wfull ? "Original" : "Vita-sized", "Saves kept as the original file, or made Vita-sized (smaller, quicker)"},
@@ -5319,8 +5334,10 @@ int main(void) {
 #endif
     if (launch_to) LOG("started from the LiveArea: %s\n", param);
   }
-  if (pin.on) pin_lock(-1);
-  else open_start_vault();
+  // (with a PIN: the vault opens first, behind the loading screen; the pad comes once it's open)
+  static int pin_after_load;
+  pin_after_load = pin.on;
+  open_start_vault();
   lv_net_warm(); // (the network's base, on a thread of its own: the online light and the Browser never wait for it)
 
   unsigned idle_save = 0;
@@ -5403,6 +5420,7 @@ int main(void) {
       if (wf_run) { wf_stop(); wf_last[0] = 0; if (screen == S_WIFI) wf_start(); }
       if (pin.on && pin.on_wake && screen != S_PIN) { slideshow = 0; pin_lock(screen == S_COVER ? cover_return : screen); }
     }
+    if (pin_after_load && screen != S_UNLOCKING && load_state != 1) { pin_after_load = 0; pin_lock(screen); }
     // (a video playing, or a slideshow: the Vita doesn't dim or sleep)
     if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow) || drive.state == DRV_SYNCING || drive.state == DRV_CODE || wf_run ||
         dl_post >= 0 || msave_on || conv_on) { // (and while a video downloads or a chapter is saved: sleep would cut the Wi-Fi)
