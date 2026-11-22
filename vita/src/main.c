@@ -5907,6 +5907,7 @@ int main(void) {
     // (a video playing: the frame before is drawn and done before a new one is taken from the player,
     //  which reuses its memory at once (otherwise frames jumped back and forth))
     if (vid || wv_vid) vita2d_wait_rendering_done();
+    vc_frame = NULL; // (each frame, set again by the screen that plays a video: never a closed one's)
     vita2d_start_drawing();
     // (vita2d starts every frame's vertices at the beginning of one pool, while the GPU may still be
     //  drawing the frame before from it (up to two frames are queued): its shapes came out garbled.

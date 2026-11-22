@@ -346,7 +346,12 @@ static void *vb_main(void *arg) {
       free(b);
       continue;
     }
-    if (!url[0]) continue;
+    if (!url[0]) { // (no picture to fetch: said so, not a loading card for ever)
+      pthread_mutex_lock(&vbmx);
+      if (gen == vb_gen && card >= 0 && card < VB_PER && job >= 0 && job < VB_ROWS) vrows[job].ts[card] = 3;
+      pthread_mutex_unlock(&vbmx);
+      continue;
+    }
     // a card's preview (or the banner's), at exactly its size
     uint8_t *b = NULL;
     size_t n = 0;
@@ -357,7 +362,11 @@ static void *vb_main(void *arg) {
     free(b);
     pthread_mutex_lock(&vbmx);
     if (nvb_done < 16 && gen == vb_gen) vb_done[nvb_done++] = d;
-    else free(d.px.rgba);
+    else {
+      free(d.px.rgba);
+      // (no room to hand it over: asked again later, not left loading for ever)
+      if (gen == vb_gen && card >= 0 && card < VB_PER && job >= 0 && job < VB_ROWS && vrows[job].ts[card] == 1) vrows[job].ts[card] = 0;
+    }
     pthread_mutex_unlock(&vbmx);
   }
   lv_http_free(h);

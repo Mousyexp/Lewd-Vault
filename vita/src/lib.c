@@ -1272,8 +1272,10 @@ static int lib_peek(void) {
 // (the Library's date labels: which group an item's day falls in, as words: Today, Yesterday, This
 //  week, the month, or the month and year)
 static void date_group(const char *added, char *out, size_t cap) {
+  if (!added) added = "";
   int y = atoi(added), m = strlen(added) >= 7 ? atoi(added + 5) : 0, d = strlen(added) >= 10 ? atoi(added + 8) : 0;
-  struct tm l; lv_local_tm(time(NULL), &l);
+  static struct tm l; static unsigned l_frame = ~0u; // (today: once a frame, not once a card)
+  if (l_frame != frame_no) { l_frame = frame_no; lv_local_tm(time(NULL), &l); }
   int ty = l.tm_year + 1900, tm = l.tm_mon + 1, td = l.tm_mday;
   long days_then = y * 372L + m * 31 + d, days_now = ty * 372L + tm * 31 + td; // (near enough for this week)
   if (y < 1900 || m < 1) { snprintf(out, cap, "Earlier"); return; }

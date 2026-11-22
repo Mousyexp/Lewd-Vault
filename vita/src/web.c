@@ -460,7 +460,7 @@ static void *preview_main(void *arg) {
     int full = nwdone >= 20;
     prev_cancel[me] = 0;
     pthread_mutex_unlock(&wmx);
-    if (!url) continue;
+    if (!url) { pthread_mutex_lock(&wmx); if (gen == wgen && p < nposts) wstate[p] = 0; pthread_mutex_unlock(&wmx); continue; } // (asked again later)
     if (full || !url[0]) {
       free(url);
       pthread_mutex_lock(&wmx);
@@ -472,12 +472,15 @@ static void *preview_main(void *arg) {
     uint8_t *b = NULL;
     size_t n = 0;
     int st = pv_cache_get(url, &b, &n) ? 200 : -1; // (seen before: from the card)
-    if (st != 200) { st = lv_http_get(h, url, &b, &n, 4 * 1024 * 1024, &prev_cancel[me], NULL, NULL); if (st == 200 && b) pv_cache_put(url, b, n); }
-    free(url);
+    int fetched = 0;
+    if (st != 200) { st = lv_http_get(h, url, &b, &n, 4 * 1024 * 1024, &prev_cancel[me], NULL, NULL); fetched = 1; }
     LvPixels px = {0};
     int cw = CARD_W, ch = CARD_H * 2;
     if (st == 200) cover_size(b, n, &cw, &ch);
     int ok = st == 200 && lv_decode(b, n, cw, ch, &px) == 0;
+    if (ok && fetched) pv_cache_put(url, b, n); // (only a picture that reads: an error page kept would never load again)
+    else if (!ok && !fetched) { char cp[200]; pv_path(url, cp, sizeof cp); sceIoRemove(cp); } // (a kept one that no longer reads: gone)
+    free(url);
     free(b);
     pthread_mutex_lock(&wmx);
     if (gen == wgen && p < nposts) {
@@ -3626,6 +3629,7 @@ static void draw_webview(void) {
   vita2d_texture *t = NULL;
   int is_frame = 0;
   if (wv_vid) { t = lv_video_frame(wv_vid); is_frame = t != NULL; }
+  vc_frame = is_frame ? t : NULL; if (is_frame) { vc_fw = lv_video_width(wv_vid); vc_fh = lv_video_height(wv_vid); } // (the scrub preview's: this video's, never one closed before)
   if (!t && wv_gif) t = gif_play_frame(wv_gif);
   // (a video playing with no picture after a few seconds: say why, where it's known: the Vita's
   //  hardware shows up to 1920 x 1088; bigger ones play only their sound)
