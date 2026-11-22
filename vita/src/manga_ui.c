@@ -1160,7 +1160,7 @@ static void draw_manga(void) {
   int sw = text_w(17, sl) + 36;
   rrect(16, 8, sw, 36, 18, ACC);
   text(34, 32, RGBA(20, 12, 16, 255), 17, sl);
-  if (hit(16, 8, sw, 36) || (in.pressed & SCE_CTRL_START)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 2; sheet_sel = mg.src; sites_scroll = 0; return; }
+  if (hit(16, 8, sw, 36) || (in.pressed & SCE_CTRL_START)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_return = S_MANGA; sites_tab = 2; sheet_sel = mg.src; sites_scroll = 0; return; }
   int kbw = kind_buttons(16 + sw + 10, 7, 2);
   if (screen != S_MANGA) return;
   int rx = W - 16, hb;

@@ -298,8 +298,11 @@ static int av_open(LvVideo *v) {
   init.fileReplacement.size = f_size;
   init.eventReplacement.objectPointer = v;
   init.eventReplacement.eventCallback = av_event;
-  init.basePriority = 0xA0;
-  init.numOutputVideoFrameBuffers = 2; // (few: a frame given back is decoded into again soon, not one far ahead shown late)
+  // (its threads above the app's own (160): the Browser's downloads and decodes never hold a frame
+  //  up. Four frames: one shown, three decoded ahead; safe now that a frame is given back only once
+  //  the GPU has drawn it (lv_video_gpu_idle in main's loop))
+  init.basePriority = 110;
+  init.numOutputVideoFrameBuffers = 4;
   init.autoStart = SCE_FALSE;
   v->h_av = sceAvPlayerInit(&init);
   // (the handle is an address in the player's memory, 0x81000000 up: negative as an int; an error is
@@ -309,7 +312,7 @@ static int av_open(LvVideo *v) {
   v->add_thread = sceKernelCreateThread("lv_av_add", av_add_main, 0x10000100, 0x10000, 0, 0, NULL); // (64 KB: the system player reads the file's header on it)
   if (v->add_thread >= 0) sceKernelStartThread(v->add_thread, sizeof v, &v);
   else if (sceAvPlayerAddSource(v->h_av, v->path) < 0) return -1;
-  v->audio_thread = sceKernelCreateThread("lv_av_sound", av_sound_main, 0x10000100, 0x4000, 0, SCE_KERNEL_CPU_MASK_USER_1, NULL);
+  v->audio_thread = sceKernelCreateThread("lv_av_sound", av_sound_main, 96, 0x4000, 0, SCE_KERNEL_CPU_MASK_USER_1, NULL); // (the sound above everything else of ours: never starved)
   if (v->audio_thread >= 0) sceKernelStartThread(v->audio_thread, sizeof v, &v);
   return 0;
 }

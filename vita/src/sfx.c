@@ -107,20 +107,56 @@ static void mixer_start(void) {
   SceUID t = sceKernelCreateThread("lv_sfx", mixer, 0x10000100 - 10, 0x4000, 0, SCE_KERNEL_CPU_MASK_USER_2, NULL);
   if (t >= 0) sceKernelStartThread(t, 0, NULL);
 }
-// Another pack: its sounds loaded, the old ones let go (the mixer held off meanwhile). A pack missing a
-// sound keeps silence for it.
+// Another pack: its sounds read on a thread of their own (reading and decoding a pack took the
+// screen a moment: the Settings page froze), then swapped in (the mixer held off only for the swap).
+// Asked again meanwhile, the latest wins. A pack missing a sound keeps silence for it.
+static char want_pack[64];
+static volatile int want_gen;
+static SceUID pack_sema = -1;
+static int pack_main(SceSize args, void *argp) {
+  (void)args; (void)argp;
+  for (;;) {
+    sceKernelWaitSema(pack_sema, 1, NULL);
+    int g = want_gen;
+    char pk[64];
+    sceKernelLockLwMutex(&mutex_work, 1, NULL);
+    snprintf(pk, sizeof pk, "%s", want_pack);
+    sceKernelUnlockLwMutex(&mutex_work, 1);
+    Clip fresh[SFX_COUNT], old[SFX_COUNT];
+    memset(fresh, 0, sizeof fresh);
+    snprintf(pack_dir, sizeof pack_dir, "%s%s%s", "app0:sounds", pk[0] ? "/" : "", pk);
+    for (int k = 0; k < SFX_COUNT && g == want_gen; k++) load_into(fresh, k);
+    if (g != want_gen) { for (int k = 0; k < SFX_COUNT; k++) free(fresh[k].pcm); continue; } // (another asked for: that one instead)
+    sceKernelLockLwMutex(&mutex_work, 1, NULL);
+    memcpy(old, clips, sizeof clips);
+    for (int v = 0; v < VOICES; v++) voices[v].clip = -1;
+    memcpy(clips, fresh, sizeof clips);
+    sceKernelUnlockLwMutex(&mutex_work, 1);
+    for (int k = 0; k < SFX_COUNT; k++) free(old[k].pcm);
+  }
+  return 0;
+}
 void sfx_pack(const char *pack) {
-  Clip fresh[SFX_COUNT], old[SFX_COUNT];
-  memset(fresh, 0, sizeof fresh);
-  snprintf(pack_dir, sizeof pack_dir, "%s%s%s", "app0:sounds", pack && pack[0] ? "/" : "", pack ? pack : "");
-  if (!clips_loaded) return; // (nothing read yet: the first sound reads this pack)
-  for (int k = 0; k < SFX_COUNT; k++) load_into(fresh, k); // (apart: the mixer still plays the old ones)
-  if (ready) sceKernelLockLwMutex(&mutex_work, 1, NULL);
-  memcpy(old, clips, sizeof clips);
-  for (int v = 0; v < VOICES; v++) voices[v].clip = -1;
-  memcpy(clips, fresh, sizeof clips);
-  if (ready) sceKernelUnlockLwMutex(&mutex_work, 1);
-  for (int k = 0; k < SFX_COUNT; k++) free(old[k].pcm);
+  if (!clips_loaded || !ready) { snprintf(pack_dir, sizeof pack_dir, "%s%s%s", "app0:sounds", pack && pack[0] ? "/" : "", pack ? pack : ""); return; } // (nothing read yet: the first sound reads this pack)
+  sceKernelLockLwMutex(&mutex_work, 1, NULL);
+  snprintf(want_pack, sizeof want_pack, "%s", pack ? pack : "");
+  want_gen++;
+  sceKernelUnlockLwMutex(&mutex_work, 1);
+  if (pack_sema < 0) {
+    pack_sema = sceKernelCreateSema("lv_sfx_pack", 0, 0, 1, NULL);
+    SceUID t = sceKernelCreateThread("lv_sfx_pack", pack_main, 0x10000100 + 10, 0x8000, 0, SCE_KERNEL_CPU_MASK_USER_2, NULL);
+    if (pack_sema < 0 || t < 0 || sceKernelStartThread(t, 0, NULL) < 0) { // (no thread: here, as before)
+      Clip fresh[SFX_COUNT], old[SFX_COUNT]; memset(fresh, 0, sizeof fresh);
+      snprintf(pack_dir, sizeof pack_dir, "%s%s%s", "app0:sounds", pack && pack[0] ? "/" : "", pack ? pack : "");
+      for (int k = 0; k < SFX_COUNT; k++) load_into(fresh, k);
+      sceKernelLockLwMutex(&mutex_work, 1, NULL);
+      memcpy(old, clips, sizeof clips); for (int v = 0; v < VOICES; v++) voices[v].clip = -1; memcpy(clips, fresh, sizeof clips);
+      sceKernelUnlockLwMutex(&mutex_work, 1);
+      for (int k = 0; k < SFX_COUNT; k++) free(old[k].pcm);
+      return;
+    }
+  }
+  sceKernelSignalSema(pack_sema, 1);
 }
 void sfx_volume(int percent) { volume = percent < 0 ? 0 : percent > 100 ? 100 : percent; }
 

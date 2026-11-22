@@ -194,6 +194,8 @@ typedef struct {
   vita2d_texture *tex[VB_PER];
   signed char ts[VB_PER]; // per card: 0 nothing, 1 asked, 2 here, 3 failed
   int dup; // (the same videos as a row above: a source that orders them all alike; not shown)
+  LvPost *ex; int nex;    // (an episode site: the other episodes of a show whose first is a card)
+  short epc[VB_PER];      // (per card: how many episodes its show has here, 1 for one)
 } VRow;
 #define VB_SHOW 14 // (cards in a row; the next place is its All tile: the whole of it in the Browser)
 static VRow vrows[VB_ROWS];
@@ -255,7 +257,9 @@ static void vb_cache_put(const char *u, const uint8_t *b, size_t n) {
 }
 static void *vb_main(void *arg) {
   pin_to_core(2); // (off the drawing thread's core)
-  int helper = arg != NULL; // (the second thread: rows two at a time, except an episode site's, whose page checks would be four connections at once)
+  // (the first thread: the rows' lists first, pictures when there are none to fetch; the other two:
+  //  pictures only (the banner, the cards), never held up behind a list or an episode site's checks)
+  int helper = arg != NULL;
   LvHttp *h = lv_http_new();
   LvHttp *h2 = lv_http_new(); // (a second connection: episode pages checked two at a time)
   while (worker_run) {
@@ -268,14 +272,15 @@ static void *vb_main(void *arg) {
       // (the row being looked at first): pictures show before every list is in (on an episode site
       // each list is a page check per episode)
       job = -1;
-      if (src >= 0 && vrows[0].state == 0 && !vb_list.ready) { job = 0; vrows[0].state = 1; break; }
+      if (!helper && src >= 0 && vrows[0].state == 0 && !vb_list.ready) { job = 0; vrows[0].state = 1; break; }
       if (vb_hero_state == 1) { vb_hero_state = 4; card = -1; job = 0; break; }
       if (nvb_want) { job = vb_want[nvb_want - 1].row; card = vb_want[nvb_want - 1].card; nvb_want--; break; }
       // (the other rows' lists only while the video browser is on screen: not fetched and checked
       //  in the background while something else is looked at, or a video from it streams)
       int episodes = 0;
       { int st2 = src >= 0 ? vsource_site(src) : -1; episodes = st2 >= 0 && lv_site_checks_items(&LV_SITES[st2]); }
-      for (int d = 0; d < vb_nrows && src >= 0 && !vb_list.ready && screen == S_VIDEOS && !(helper && episodes); d++) {
+      (void)episodes;
+      for (int d = 0; d < vb_nrows && src >= 0 && !vb_list.ready && screen == S_VIDEOS && !helper; d++) {
         int r = (vb_row < vb_nrows ? vb_row : 0) + d;
         if (r >= vb_nrows) r -= vb_nrows;
         if (vrows[r].state == 0) { job = r; vrows[r].state = 1; break; }
@@ -356,8 +361,11 @@ static void *vb_main(void *arg) {
     uint8_t *b = NULL;
     size_t n = 0;
     VbDone d = {job, card, gen, {0}};
-    if (lv_http_get(h, url, &b, &n, 4u << 20, NULL, NULL, NULL) == 200) {
+    int fetched = 0, st = pv_cache_get(url, &b, &n) ? 200 : -1; // (seen before: from the card)
+    if (st != 200) { st = lv_http_get(h, url, &b, &n, 4u << 20, NULL, NULL, NULL); fetched = 1; }
+    if (st == 200) {
       if (decode_exact(b, n, card < 0 ? W : VB_CW, card < 0 ? HERO_H : VB_CH, &d.px) != 0) d.px.rgba = NULL;
+      else if (fetched) pv_cache_put(url, b, n);
     }
     free(b);
     pthread_mutex_lock(&vbmx);
@@ -377,6 +385,7 @@ static void vb_clear(void) {
   for (int r = 0; r < VB_ROWS; r++) {
     for (int k = 0; k < VB_PER; k++) { if (vrows[r].tex[k]) release_tex(vrows[r].tex[k]); vrows[r].tex[k] = NULL; vrows[r].ts[k] = 0; }
     lv_posts_free(vrows[r].p, vrows[r].n);
+    lv_posts_free(vrows[r].ex, vrows[r].nex); vrows[r].ex = NULL; vrows[r].nex = 0;
     vrows[r].p = NULL; vrows[r].n = 0; vrows[r].state = 0; vrows[r].err[0] = 0;
     vb_col[r] = 0; vb_x[r] = 0;
   }
@@ -387,7 +396,9 @@ static void vb_clear(void) {
   vb_y = 0;
 }
 static int vb_key_src = -1; // (a source that needs your API key, asked for: opened once it's typed)
+static void vbd_close(void);
 static void vb_open(int k) {
+  vbd_close(); // (another source: no overview left open from the last)
   { int site = vsource_site(k);
     if (site >= 0 && LV_SITES[site].needs_key && !wkeys[site][0] && !ime_open) { // (its key first: your user ID, then the key)
       cfg.site = site; vb_key_src = k; sfx(SFX_OPEN);
@@ -416,7 +427,7 @@ static void vb_open(int k) {
     pthread_attr_init(&at);
     pthread_attr_setstacksize(&at, 512 * 1024); // (it decodes previews)
     vb_thread_on = pthread_create(&t, &at, vb_main, NULL) == 0;
-    if (vb_thread_on) pthread_create(&t, &at, vb_main, (void *)1); // (a second: two rows at a time)
+    if (vb_thread_on) { pthread_create(&t, &at, vb_main, (void *)1); pthread_create(&t, &at, vb_main, (void *)2); } // (two more: pictures only)
   }
   screen = S_VIDEOS;
 }
@@ -454,6 +465,52 @@ static void vb_dedupe(VRow *row) {
   }
   row->n = kept;
 }
+static void vb_title_of(const LvPost *p, char *out, size_t cap);
+// A video's show and episode, from its name: "... Episode 8", "... Ep 3", "... Part 2", or on an
+// episode site a plain number at its end. 0: not an episode.
+static int vb_series(const LvPost *p, int episode_site, char *key, size_t cap, int *ep) {
+  char t[200];
+  vb_title_of(p, t, sizeof t);
+  for (char *c = t; *c; c++) *c = (char)tolower((unsigned char)*c);
+  size_t n = strlen(t);
+  while (n && (t[n - 1] == ' ' || t[n - 1] == '-')) n--;
+  size_t e = n;
+  while (e && isdigit((unsigned char)t[e - 1])) e--;
+  if (e == n || n - e > 3) return 0;
+  int num = atoi(t + e);
+  size_t k = e;
+  while (k && (t[k - 1] == ' ' || t[k - 1] == '-')) k--;
+  static const char *const WORD[] = {"episode", "ep.", "ep", "part", "#", NULL};
+  int had = 0;
+  for (int w = 0; WORD[w] && !had; w++) {
+    size_t l = strlen(WORD[w]);
+    if (k >= l && !strncmp(t + k - l, WORD[w], l) && (k == l || t[k - l - 1] == ' ')) { k -= l; had = 1; }
+  }
+  while (k && (t[k - 1] == ' ' || t[k - 1] == '-')) k--;
+  if ((!had && !episode_site) || k < 3) return 0;
+  snprintf(key, cap, "%.*s", (int)k, t);
+  *ep = num;
+  return 1;
+}
+static int vb_episode_site(void) { int st = vsource_site(vb_src); return st >= 0 && (lv_site_checks_items(&LV_SITES[st]) || LV_SITES[st].kind == BK_XV); }
+// An episode site's row: one card a show, the others of it kept aside (from `from` on: what's new)
+static void vb_group(VRow *row, int from) {
+  int es = vb_episode_site();
+  int kept = from;
+  for (int i = from; i < row->n; i++) {
+    char key[200], k2[200]; int ep, ep2, owner = -1;
+    if (vb_series(&row->p[i], es, key, sizeof key, &ep))
+      for (int j = 0; j < kept && owner < 0; j++) if (vb_series(&row->p[j], es, k2, sizeof k2, &ep2) && !strcmp(key, k2)) owner = j;
+    if (owner >= 0) {
+      LvPost *nx = realloc(row->ex, (row->nex + 1) * sizeof *nx);
+      if (nx) { row->ex = nx; row->ex[row->nex++] = row->p[i]; if (owner < VB_PER) row->epc[owner]++; continue; }
+    }
+    if (kept != i) row->p[kept] = row->p[i];
+    if (kept < VB_PER) row->epc[kept] = 1;
+    kept++;
+  }
+  row->n = kept;
+}
 static int vb_row_shown(int r) { return r == VB_ROWS || (r < vb_nrows && !vrows[r].dup && !(vrows[r].state == 2 && !vrows[r].n && r > 0) && !(vrows[r].state == 3 && r > 0 && VROWS[r].tag && VROWS[r].tag[0])); }
 static void vb_take(void) {
   if (!vb_list.ready && !nvb_done) return; // (nothing come: no lock)
@@ -463,13 +520,14 @@ static void vb_take(void) {
     if (vb_list.gen == vb_gen && vb_list.append && r->p && vb_list.p) {
       // (more of a row: added at its end)
       LvPost *np = realloc(r->p, (r->n + vb_list.n) * sizeof *np);
-      if (np) { memcpy(np + r->n, vb_list.p, vb_list.n * sizeof *np); r->p = np; r->n += vb_list.n; free(vb_list.p); vb_dedupe(r); }
+      if (np) { int was = r->n; memcpy(np + r->n, vb_list.p, vb_list.n * sizeof *np); r->p = np; r->n += vb_list.n; free(vb_list.p); vb_dedupe(r); vb_group(r, was < r->n ? was : r->n); }
       else lv_posts_free(vb_list.p, vb_list.n);
       vb_dup_check(vb_list.row);
     } else if (vb_list.gen == vb_gen) {
       if (r->p) lv_posts_free(r->p, r->n);
+      lv_posts_free(r->ex, r->nex); r->ex = NULL; r->nex = 0;
       r->p = vb_list.p; r->n = vb_list.n; r->state = vb_list.p ? 2 : 3;
-      if (r->p) vb_dedupe(r);
+      if (r->p) { vb_dedupe(r); vb_group(r, 0); }
       snprintf(r->err, sizeof r->err, "%s", vb_list.err);
       if (vb_list.row == 0 && r->n && !vb_hero_state) { vb_hero_state = 1; pthread_cond_broadcast(&vbcv); }
       vb_dup_check(vb_list.row);
@@ -496,9 +554,12 @@ static void vb_take(void) {
   }
 }
 // The row a video was chosen from becomes the Browser's list, and the full view opens on it.
-static void vb_play(int r, int k) {
+// Plays list[k] in the Browser's full view, the list (a row, or a show's episodes) its neighbours
+static void vb_play_list(int r, const LvPost *list, int n, int k, int more);
+static void vb_play(int r, int k) { vb_play_list(r, vrows[r].p, vrows[r].n, k, 1); }
+static void vb_play_list(int r, const LvPost *list, int n, int k, int more) {
   int site = vsource_site(vb_src);
-  if (site < 0 || k >= vrows[r].n) return;
+  if (site < 0 || k >= n || !list) return;
   pthread_mutex_lock(&wmx);
   wgen++;
   for (int i = 0; i < nwdone; i++) { free(wdone[i].px.rgba); free(wdone[i].a); free(wdone[i].b); }
@@ -506,7 +567,6 @@ static void vb_play(int r, int k) {
   nwwant = 0;
   if (page_ready.ready) { lv_posts_free(page_ready.posts, page_ready.count); page_ready.ready = 0; page_ready.posts = NULL; }
   lv_posts_free(posts, nposts);
-  int n = vrows[r].n;
   posts = calloc(n + 1, sizeof *posts);
   signed char *ns = realloc(wstate, n + 1);
   short *nso = realloc(wslot_of, (n + 1) * sizeof *nso);
@@ -514,7 +574,7 @@ static void vb_play(int r, int k) {
   if (nso) wslot_of = nso;
   nposts = 0;
   if (posts && ns && nso) {
-    for (int i = 0; i < n; i++) { post_copy(&vrows[r].p[i], &posts[i]); wstate[i] = 0; wslot_of[i] = -1; }
+    for (int i = 0; i < n; i++) { post_copy(&list[i], &posts[i]); wstate[i] = 0; wslot_of[i] = -1; }
     nposts = n;
   }
   grid_build(&wgrid, nposts, post_aspect);
@@ -528,7 +588,7 @@ static void vb_play(int r, int k) {
   snprintf(job_q.q, sizeof job_q.q, "%s", cfg.wquery);
   snprintf(job_q.key, sizeof job_q.key, "%s", wkeys[site]);
   snprintf(job_q.hidden, sizeof job_q.hidden, "%s", whidden);
-  wpage = 1; wend = 0; werr[0] = 0; wloading = 0; list_want = 0;
+  wpage = 1; wend = !more; werr[0] = 0; wloading = 0; list_want = 0; // (a show's episodes: those only, no more pages)
   big_cancel = 1;
   pthread_mutex_unlock(&wmx);
   web_start();
@@ -603,6 +663,109 @@ static int vb_all_row = -1; static float vb_all_scroll; static unsigned vb_all_a
 static int vb_lock; static int vb_free; static float vb_vy; static int vb_free_x[VB_ROWS + 1]; // (a row moved by touch: stays where it was left until the D-pad moves in it) // (a touch: locked to across or down; scrolled freely by it)
 static int vb_hero_k; static unsigned vb_hero_at; static float vb_hero_x; // (the carousel: which, since when, dragged)
 static void draw_vb_all(void);
+// ----- a video's overview, opened from its card: its picture, its name, its episodes (a show's, on an
+//       episode site), and Play, Favourite, Save (or an Offline copy for a long one) -----
+static int vbd_on, vbd_row, vbd_card, vbd_sel, vbd_focus, vbd_btn, vbd_n;
+static unsigned vbd_at;
+static LvPost *vbd_eps; // (copies: the episodes in order, or the one video)
+static int vbd_epn[64];
+static void vbd_close(void) { lv_posts_free(vbd_eps, vbd_n); vbd_eps = NULL; vbd_n = 0; vbd_on = 0; }
+static void vb_detail_open(int r, int k) {
+  if (r < 0 || r >= VB_ROWS || k < 0 || k >= vrows[r].n) return;
+  vbd_close();
+  VRow *row = &vrows[r];
+  int es = vb_episode_site();
+  char key[200], k2[200]; int ep;
+  int is_show = vb_series(&row->p[k], es, key, sizeof key, &ep);
+  // the show's episodes here: this card's, and those kept aside with the same name
+  int cap = 1 + row->nex; LvPost *l = calloc(cap + 1, sizeof *l); int n = 0;
+  if (!l) return;
+  post_copy(&row->p[k], &l[n]); vbd_epn[n] = is_show ? ep : 0; n++;
+  for (int i = 0; is_show && i < row->nex && n < 64; i++) { int e2; if (vb_series(&row->ex[i], es, k2, sizeof k2, &e2) && !strcmp(key, k2)) { post_copy(&row->ex[i], &l[n]); vbd_epn[n] = e2; n++; } }
+  for (int a = 1; a < n; a++) for (int b = a; b > 0 && vbd_epn[b - 1] > vbd_epn[b]; b--) { // (in episode order)
+    LvPost t = l[b]; l[b] = l[b - 1]; l[b - 1] = t; int te = vbd_epn[b]; vbd_epn[b] = vbd_epn[b - 1]; vbd_epn[b - 1] = te; }
+  vbd_eps = l; vbd_n = n; vbd_row = r; vbd_card = k; vbd_sel = 0; vbd_focus = 0; vbd_btn = 0;
+  vbd_on = 1; vbd_at = frame_no; sfx(SFX_OPEN);
+}
+static void vbd_act(int b) {
+  int site = vsource_site(vb_src);
+  const LvPost *p = &vbd_eps[vbd_sel];
+  if (b == 1) { if (site >= 0) fav_toggle_video(p, site); return; }
+  int r = vbd_row, sel = vbd_sel, n = vbd_n;
+  LvPost *l = vbd_eps; vbd_eps = NULL; vbd_n = 0; vbd_on = 0; // (handed to the full view as its list)
+  vb_play_list(r, l, n, sel, 0);
+  lv_posts_free(l, n);
+  if (b == 2 && screen == S_WEBVIEW) { if (wv_is_long()) wv_offline(); else sw_open(); }
+}
+static void draw_vb_detail(void) {
+  if (!vbd_eps || vbd_n <= 0) { vbd_close(); return; }
+  VRow *row = &vrows[vbd_row];
+  const LvPost *p = &vbd_eps[vbd_sel];
+  float e = fminf(1, (frame_no - vbd_at) / 16.0f); e = 1 - (1 - e) * (1 - e) * (1 - e);
+  vita2d_draw_rectangle(0, 0, W, H, RGBA(8, 6, 10, 255));
+  // the picture: the card's, over the right of the page, fading into it
+  vita2d_texture *t = vbd_card < VB_PER ? row->tex[vbd_card] : NULL;
+  const float px0 = W * 0.40f, ph = 300;
+  if (t) draw_cover(t, px0 + (1 - e) * 30, 0, W - px0, ph, RGBA(255, 255, 255, (int)(255 * e)));
+  grad(px0, 0, 240, ph, RGBA(8, 6, 10, 255), 255, 0, 1);
+  grad(0, ph - 110, W, 110, RGBA(8, 6, 10, 255), 0, 255, 0);
+  // back
+  circle(36, 34, 20, with_alpha(SURF2, 220)); icon("back", 36, 34, TEXT);
+  if (hit(10, 8, 56, 56)) { sfx(SFX_BACK); vbd_close(); return; }
+  // its name (two lines), what it is
+  char tt[200]; vb_title_of(p, tt, sizeof tt); if (!tt[0]) snprintf(tt, sizeof tt, "Video");
+  { int maxw = (int)px0 - 20; char l1[200]; const char *rest = NULL;
+    if (text_w(26, tt) <= maxw) snprintf(l1, sizeof l1, "%s", tt);
+    else { size_t cut = 0; for (size_t i = 0; tt[i]; i++) if (tt[i] == ' ') { char tr[200]; snprintf(tr, sizeof tr, "%.*s", (int)i, tt); if (text_w(26, tr) > maxw) break; cut = i; }
+           if (!cut) cut = strlen(tt); snprintf(l1, sizeof l1, "%.*s", (int)cut, tt); rest = tt[cut] ? tt + cut + 1 : NULL; }
+    for (int o = 0; o < 2; o++) { text_fit(30 + o, 100, TEXT, 26, l1, maxw); if (rest) text_fit(30 + o, 132, TEXT, 26, rest, maxw); } }
+  { char meta[160], len[24] = ""; int site = vsource_site(vb_src);
+    if (p->duration > 0) { int d = p->duration; snprintf(len, sizeof len, d >= 3600 ? "%d:%02d:%02d" : "%d:%02d", d >= 3600 ? d / 3600 : d / 60, d >= 3600 ? d / 60 % 60 : d % 60, d % 60); }
+    snprintf(meta, sizeof meta, "%s%s%s%s%s", vbd_n > 1 ? "" : "", len, len[0] ? "  ·  " : "", site >= 0 ? LV_SITES[site].name : "", "");
+    if (vbd_n > 1) { char m2[200]; snprintf(m2, sizeof m2, "%d episodes  ·  %s", vbd_n, meta); text(30, 162, DIM, 15, m2); }
+    else text(30, 162, DIM, 15, meta); }
+  // the buttons: Play, Favourite, Save (Offline for a long one)
+  int fav = fav_find(0, p->page) >= 0; // (0: a video)
+  int site = vsource_site(vb_src), longv = site >= 0 && lv_is_long(&LV_SITES[site], p);
+  const char *bl[3] = {vbd_n > 1 ? "Play this episode" : "Play", fav ? "♥ Favourite" : "♡ Favourite", longv ? "↓ Offline copy" : "↓ Save"};
+  float bx = 30, by = 200;
+  for (int b = 0; b < 3; b++) {
+    int bw = text_w(16, bl[b]) + (b == 0 ? 64 : 36), on = vbd_focus == 0 && vbd_btn == b;
+    float lift = (1 - e) * (20 + b * 10);
+    unsigned bg = b == 0 ? ACC : fav && b == 1 ? mix_col(SURF2, ACC, 0.45f) : SURF2;
+    rrect_round(bx, by + 3 + lift, bw, 44, 22, RGBA(0, 0, 0, 90));
+    rrect_round(bx, by + lift, bw, 44, 22, bg);
+    rrect_round(bx + 3, by + 2 + lift, bw - 6, 16, 8, RGBA(255, 255, 255, 30));
+    if (b == 0) vc_tri(bx + 26, by + 22 + lift, 10, RGBA(20, 12, 16, 255));
+    text(bx + (b == 0 ? 44 : 18), by + 29 + lift, b == 0 ? RGBA(20, 12, 16, 255) : TEXT, 16, bl[b]);
+    if (on) focus_ring(bx, by + lift, bw, 44);
+    if (hit((int)bx, (int)by, bw, 44)) { vbd_focus = 0; vbd_btn = b; sfx(SFX_SELECT); vbd_act(b); return; }
+    bx += bw + 12;
+  }
+  // the episodes: numbered pills, the chosen one lit
+  if (vbd_n > 1) {
+    text(30, 290, TEXT, 18, "Episodes");
+    const int cols = 8, pw = 100, phh = 40, gx = 30, gy = 306;
+    for (int i = 0; i < vbd_n; i++) {
+      float x = gx + (i % cols) * (pw + 10), y = gy + (i / cols) * (phh + 10);
+      if (y > H - 20) break;
+      int on = i == vbd_sel;
+      rrect_round(x, y, pw, phh, 14, on ? with_alpha(ACC, 230) : SURF2);
+      char el[24]; if (vbd_epn[i] > 0) snprintf(el, sizeof el, "Ep %d", vbd_epn[i]); else snprintf(el, sizeof el, "%d", i + 1);
+      text_center((int)(x + pw / 2), (int)y + 26, on ? RGBA(20, 12, 16, 255) : TEXT, 15, el);
+      if (on && vbd_focus == 1) focus_ring(x, y, pw, phh);
+      if (hit((int)x, (int)y, pw, phh)) { if (vbd_sel == i) { sfx(SFX_SELECT); vbd_act(0); return; } vbd_sel = i; vbd_focus = 1; sfx(SFX_TICK); }
+    }
+  }
+  // the buttons on the pad
+  if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); vbd_close(); return; }
+  if (in.pressed & SCE_CTRL_DOWN && vbd_n > 1) { if (vbd_focus == 0) vbd_focus = 1; else if (vbd_sel + 8 < vbd_n) vbd_sel += 8; sfx(SFX_TICK); }
+  if (in.pressed & SCE_CTRL_UP) { if (vbd_focus == 1 && vbd_sel >= 8) vbd_sel -= 8; else vbd_focus = 0; sfx(SFX_TICK); }
+  if (in.pressed & SCE_CTRL_RIGHT) { if (vbd_focus == 0) vbd_btn = vbd_btn < 2 ? vbd_btn + 1 : 2; else if (vbd_sel + 1 < vbd_n) vbd_sel++; sfx(SFX_TICK); }
+  if (in.pressed & SCE_CTRL_LEFT) { if (vbd_focus == 0) vbd_btn = vbd_btn > 0 ? vbd_btn - 1 : 0; else if (vbd_sel > 0) vbd_sel--; sfx(SFX_TICK); }
+  if (in.pressed & SCE_CTRL_CROSS) { sfx(SFX_SELECT); vbd_act(vbd_focus == 1 ? 0 : vbd_btn); return; }
+  if (in.pressed & SCE_CTRL_TRIANGLE) { vbd_act(1); }
+}
 static void draw_videos(void) {
   if (!VROWS[0].title) vrows_for(vb_src); // (the rows not made yet: this source's)
   Input vb_keep = in; // (All's window open: the page under it gets no input)
@@ -617,6 +780,7 @@ static void draw_videos(void) {
     if (frame_no - seen > 2) { pthread_mutex_lock(&vbmx); pthread_cond_broadcast(&vbcv); pthread_mutex_unlock(&vbmx); }
     seen = frame_no;
   }
+  if (vbd_on) { draw_vb_detail(); draw_bar(); in = vb_keep; return; } // (a video's overview, over the page)
   int nup = upnext_n();
   if (vb_row > VB_ROWS || (vb_row == VB_ROWS && !nup)) vb_row = 0;
   vita2d_draw_rectangle(0, 0, W, H, RGBA(8, 6, 10, 255));
@@ -659,7 +823,7 @@ static void draw_videos(void) {
   int hrow = hr == r0 ? 0 : vb_row;
   (void)vb_hero_k; (void)vb_hero_at; (void)vb_hero_x;
   // ---- the rows ----
-  int ry = (int)y0 + HERO_H - 4;
+  int ry = (int)(-vb_y) + HERO_H - 4; // (the rows scroll; the banner over them stays)
   for (int r = 0; r < VB_ROWS; r++) {
     VRow *row = &vrows[r];
     if (!vb_row_shown(r)) continue; // (the same as a row above, a genre with nothing, or one this source hasn't)
@@ -709,8 +873,9 @@ static void draw_videos(void) {
       for (char *c = e; *c; c++) *c = (char)toupper((unsigned char)*c);
       rrect(x + VB_CW - text_w(11, e) - 18, cy + 8, text_w(11, e) + 12, 18, 9, RGBA(0, 0, 0, 150));
       text(x + VB_CW - text_w(11, e) - 12, cy + 21, TEXT, 11, e);
+      if (k < VB_PER && row->epc[k] > 1) { char eb[24]; snprintf(eb, sizeof eb, "%d episodes", row->epc[k]); int ew = text_w(11, eb) + 14; rrect(x + VB_CW - ew - 8, cy + VB_CH - 28, ew, 20, 10, with_alpha(ACC, 220)); text(x + VB_CW - ew - 1, cy + VB_CH - 14, RGBA(20, 12, 16, 255), 11, eb); }
       if (is_saved(&row->p[k])) { circle(x + VB_CW - 16, cy + VB_CH - 16, 10, ACC); text_center(x + VB_CW - 16, cy + VB_CH - 11, RGBA(20, 12, 16, 255), 12, "✓"); }
-      if (hit((int)x, (int)cy, VB_CW, VB_CH) && in.tap_y < H - BAR && in.tap_y > hh) { vb_row = r; vb_col[r] = k; sfx(SFX_SELECT); vb_play(r, k); return; }
+      if (hit((int)x, (int)cy, VB_CW, VB_CH) && in.tap_y < H - BAR && in.tap_y > hh) { vb_row = r; vb_col[r] = k; sfx(SFX_SELECT); vb_detail_open(r, k); return; }
     }
     // the All tile at the end: the whole row as a grid in the Browser
     {
@@ -773,19 +938,21 @@ static void draw_videos(void) {
       char tt[160];
       vb_title_of(&hr->p[hk], tt, sizeof tt);
       if (!tt[0]) snprintf(tt, sizeof tt, "%s", VROWS[hrow].title);
+      int two_lines = 0;
       // (its name on up to two lines: an episode's number is at its end, and cut off it looked the same as the one before)
       { int maxw = (int)px0 - 30, fs = 27; char l1[160]; const char *rest = NULL;
         if (text_w(fs, tt) <= maxw) snprintf(l1, sizeof l1, "%s", tt);
         else { size_t cut = 0; for (size_t i = 0; tt[i]; i++) if (tt[i] == ' ') { char tr[160]; snprintf(tr, sizeof tr, "%.*s", (int)i, tt); if (text_w(fs, tr) > maxw) break; cut = i; }
                if (!cut) cut = strlen(tt); snprintf(l1, sizeof l1, "%.*s", (int)cut, tt); rest = tt[cut] ? tt + cut + 1 : NULL; }
-        float ty = y0 + 110 - shrink * 0.55f - (rest ? 26 : 0);
+        two_lines = rest != NULL;
+        float ty = y0 + (rest ? 86 : 104); // (clear of the source button above, however small the banner)
         for (int o = 0; o < 3; o++) {
           text_fit(30 + (o == 1), ty + (o == 2), TEXT, fs, l1, maxw);
           if (rest) text_fit(30 + (o == 1), ty + 32 + (o == 2), TEXT, fs, rest, maxw);
         } }
       // its tags: glass chips, two lines at most
       { char tg[600]; snprintf(tg, sizeof tg, "%s", hr->p[hk].tags ? hr->p[hk].tags : "");
-        int cx = 30, cy = (int)(y0 + 130 - shrink * 0.55f), lines = 0, maxl = shrink > 40 ? 1 : 2;
+        int cx = 30, cy = (int)(y0 + (two_lines ? 128 : 120)), lines = 0, maxl = shrink > 30 ? 0 : two_lines ? 1 : 2; // (shrunk: no chips, the room is the title's)
         for (char *t = strtok(tg, " "); t && lines < maxl; t = strtok(NULL, " ")) {
           for (char *c = t; *c; c++) if (*c == '_') *c = ' ';
           if (strcasestr(tt, t) || strlen(t) < 3) continue; // (a word of its name isn't a tag)
@@ -798,7 +965,7 @@ static void draw_videos(void) {
           cx += cw + 6;
         } }
       // Play: a pink glass button, a glow beating behind it like a heart; its triangle centred
-      float pcx = 60, pcy = y0 + 222 - shrink, pr = 24;
+      float pcx = 60, pcy = y0 + hh - 42, pr = 24;
       int pressed = in.touching && hypotf(in.tx - pcx, in.ty - pcy) < pr + 6;
       float br = 0.5f - 0.5f * cosf(frame_no * 6.2832f / 180.0f); // (a slow breath, three seconds)
       for (int g = 4; g >= 1; g--) circle(pcx, pcy, pr + g * 4, with_alpha(ACC, (int)((10 + 10 * br) / g)));
@@ -822,7 +989,7 @@ static void draw_videos(void) {
   rrect(16, 10, sw, 40, 20, with_alpha(TEXT, 40));
   if (si) vita2d_draw_texture_scale(si, 24, 14, 32 / 112.0f, 32 / 112.0f);
   text(64, 37, TEXT, 17, sl);
-  if (hit(16, 10, sw, 40)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
+  if (hit(16, 10, sw, 40)) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_return = S_VIDEOS; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
   int kbw = kind_buttons(16 + sw + 10, 11, 1);
   if (screen != S_VIDEOS) { in = vb_keep; return; }
   (void)kbw;
@@ -841,10 +1008,10 @@ static void draw_videos(void) {
   if (in.pressed & SCE_CTRL_LEFT) { if (vb_col[vb_row] > 0) { vb_col[vb_row]--; sfx(SFX_TICK); } }
   if ((in.pressed & SCE_CTRL_CROSS) && cur_n) {
     if (cur && vb_col[vb_row] >= (cur->n < VB_SHOW ? cur->n : VB_SHOW)) { sfx(SFX_OPEN); vb_all_row = vb_row; vb_all_scroll = 0; vb_all_at = frame_no; return; }
-    sfx(SFX_SELECT); if (cur) vb_play(vb_row, vb_col[vb_row]); else upnext_play(vb_col[vb_row]); return;
+    sfx(SFX_SELECT); if (cur) vb_detail_open(vb_row, vb_col[vb_row]); else upnext_play(vb_col[vb_row]); return;
   }
   if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = S_LIBRARY; return; } // (nothing behind it: the Library)
-  if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
+  if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); screen = S_WEB; sheet = SH_SITES; sites_return = S_VIDEOS; sites_tab = 1; sheet_sel = vb_src; sites_scroll = 0; return; }
   // the next ones just out of sight, ready
   if (cur) for (int k = vb_col[vb_row]; k < vb_col[vb_row] + 6 && k < cur->n; k++) vb_ask(vb_row, k);
   for (int k = 0; k < 5; k++) vb_ask(0, k); // (the carousel's)

@@ -3368,7 +3368,7 @@ static void show_item(int k) {
     char clip[800];
     int can = is_video(it) && it->path && (ext_is(it->path, "mp4", "m4v", "mov") || ext_is(it->path, "webm", "mkv", NULL));
     int has_clip = lv_clip_path(&vault, it, clip, sizeof clip);
-    if (can || has_clip) video_open_async(can ? it->path : NULL, has_clip ? clip : NULL, slideshow || (it->duration > 0 && it->duration < 60)); // (short ones, under a minute, go round and round)
+    if (can || has_clip) video_open_async(can ? it->path : NULL, has_clip ? clip : NULL, 1); // (the Library's videos always go round and round)
   }
   ask_big(shown[vk]);
 }
@@ -3536,7 +3536,16 @@ static void vctl_flash_draw(void) {
 // top right. have: the share downloaded (0-1), or negative for all of it.
 #define VC_BAR_Y (H - 44)
 static int vc_scrub; static float vc_scrub_f;
-static vita2d_texture *vc_frame; static int vc_fw, vc_fh; // (the video's picture this frame: the scrub preview shows it small)
+static vita2d_texture *vc_frame; static int vc_fw, vc_fh;
+// (sound for a while and still no picture: its picture is in a format the Vita's player can't show)
+static void no_picture_note(const LvVideo *v) {
+  if (lv_video_pos(v) < 4000 || lv_video_paused(v)) return;
+  const char *l1 = "This video's picture can't be shown on the Vita", *l2 = "Only its sound plays: its format is one the Vita's player doesn't have (Video conversion makes a 480p copy that plays)";
+  int bw = text_w(15, l2) + 40; if (bw > W - 40) bw = W - 40;
+  glass(W / 2 - bw / 2, H / 2 - 44, bw, 76, 0);
+  text_center(W / 2, H / 2 - 16, TEXT, 17, l1);
+  text_fit(W / 2 - bw / 2 + 20, H / 2 + 12, DIM, 13, l2, bw - 40);
+} // (the video's picture this frame: the scrub preview shows it small)
 static int vc_locked, vctl_can_lock; static unsigned vc_lock_seen; // (the lock: the screen's touches do nothing)
 static float vc_dim; // (darker, from a drag on the left: 0 to 0.7)
 #define VC_PILL_X (W / 2 - 30)
@@ -3564,13 +3573,13 @@ static void vctl_draw(const LvVideo *v, int a, float have) {
   unsigned sh = RGBA(0, 0, 0, 110 * a / 240);
   // (each icon's shadow is the icon itself, faint, drawn a little around and below it: a soft edge
   //  that follows its shape, not a disc behind it)
-  static const float sho[][2] = {{-2, 1}, {2, 1}, {0, -1}, {0, 3}, {-1, 2}, {1, 2}};
-  sh = RGBA(0, 0, 0, 40 * a / 240);
+  static const float sho[][2] = {{-2, 1}, {2, 1}, {0, 3}}; // (three passes: soft enough, and light to draw every frame)
+  sh = RGBA(0, 0, 0, 60 * a / 240);
   // (play and pause turn into each other: one shrinks and fades as the other grows in)
   static float pz = 1;
   pz += ((lv_video_paused(v) ? 0.0f : 1.0f) - pz) * ease(0.3f);
   float tri_s = 26 * (0.55f + 0.45f * (1 - pz)), bar_h = 44 * (0.55f + 0.45f * pz);
-  for (int o = 0; o < 6; o++) {
+  for (int o = 0; o < 3; o++) {
     float ox = sho[o][0], oy = sho[o][1];
     if (pz < 0.5f) vc_tri(W / 2 - 4 + ox, VC_BTN_Y + oy, tri_s, sh);
     else { rrect(W / 2 - 16 + ox, VC_BTN_Y - bar_h / 2 + oy, 11, bar_h, 3, sh); rrect(W / 2 + 5 + ox, VC_BTN_Y - bar_h / 2 + oy, 11, bar_h, 3, sh); }
@@ -3938,6 +3947,7 @@ static void draw_viewer(void) {
     if (big_failed) text_center(W / 2, H / 2, DIM, 18, "This file can't be shown on the Vita");
     else spinner(W / 2, H / 2, 24);
   }
+  if (vid && !vid_clip && !is_frame) no_picture_note(vid);
   if (vid && !vid_clip && vc_dim > 0.01f) vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, (int)(255 * vc_dim))); // (dimmed by a drag on the left)
   if (vhero.closing || (!t && vhero.drag > 0)) {
     // (flying home: nothing else drawn or done; closed once it's there)
@@ -3983,34 +3993,6 @@ static void draw_viewer(void) {
   }
   if (zoom * lv_mag > 1.25f && big_item == shown[vk] && big_hi_item != shown[vk] && !vid) { make_room(16u << 20); big_hi = 1; big_hi_item = shown[vk]; ask_big(shown[vk]); big_hi = 0; }
   if (vo_open) { draw_view_options(); return; } // (Viewing: its panel over the picture)
-  // (a long video in its last ten seconds: the next one, a card sliding in at the top right, a ring
-  //  counting down; at the end it plays. Tapped, now; its x, not for this one)
-  if (vid && !vid_clip && !slideshow && !details && vk + 1 < nshown) {
-    static int un_cancel = -1; static unsigned un_in;
-    uint64_t d = lv_video_duration(vid), q = lv_video_pos(vid);
-    if (d >= 60000 && q + 10000 > d && un_cancel != shown[vk]) {
-      if (!un_in || frame_no - un_in > 100000) un_in = frame_no;
-      float e = fminf(1, (frame_no - un_in) / 16.0f); e = 1 - (1 - e) * (1 - e) * (1 - e);
-      float left = d > q ? (d - q) / 10000.0f : 0;
-      const float cw = 250, chh = 84, cx = W - cw - 16 + (1 - e) * (cw + 30), cy = 128;
-      glass(cx, cy, cw, chh, 0);
-      vita2d_texture *nt = thumb_of(shown[vk + 1]);
-      if (nt) draw_cover_round(nt, cx + 8, cy + 8, 120, 68, 10, RGBA(255, 255, 255, 255)); else rrect(cx + 8, cy + 8, 120, 68, 10, SURF2);
-      // (the countdown: a ring round a play button over the picture)
-      float rcx = cx + 68, rcy = cy + 42;
-      circle(rcx, rcy, 17, RGBA(0, 0, 0, 150));
-      for (int d2 = 0; d2 < (int)(36 * left); d2++) { float an = -1.5708f + d2 / 36.0f * 6.2832f; circle(rcx + cosf(an) * 17, rcy + sinf(an) * 17, 1.8f, ACC); }
-      vc_tri(rcx - 2, rcy, 9, TEXT);
-      const LvItem *nx = &vault.items[shown[vk + 1]];
-      text(cx + 138, cy + 28, ACC, 13, "Up next");
-      text_fit(cx + 138, cy + 50, TEXT, 14, nx->name[0] ? nx->name : nx->file, (int)cw - 150);
-      char cs[16]; snprintf(cs, sizeof cs, "in %d s", (int)(left * 10 + 0.99f)); text(cx + 138, cy + 70, FAINT, 12, cs);
-      circle(cx + cw - 14, cy + 14, 10, RGBA(0, 0, 0, 140)); icon("xmark", cx + cw - 14, cy + 14, TEXT);
-      if (in.tap && hypotf(in.tap_x - (cx + cw - 14), in.tap_y - (cy + 14)) < 16) { un_cancel = shown[vk]; sfx(SFX_CLOSE); in.tap = 0; }
-      else if (in.tap && in.tap_x >= cx && in.tap_x < cx + cw && in.tap_y >= cy && in.tap_y < cy + chh) { sfx(SFX_TICK); in.tap = 0; show_item(vk + 1); return; }
-      if (lv_video_ended(vid) || q + 300 >= d) { un_in = 0; show_item(vk + 1); return; }
-    } else un_in = 0;
-  }
   // --- touch: swipe for the next one, pinch to zoom, drag when zoomed, tap for the controls ---
   // (a finger that went down on the video's bar or its volume: theirs alone, the picture stays put)
   // (locked: touches do nothing; the padlock shows while one is down, and held a second it opens)

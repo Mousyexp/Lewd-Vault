@@ -2052,6 +2052,7 @@ static void draw_find_sheet(void) {
 // The site switcher: a window with two tabs, Pictures (the sites, and + to add one) and Videos (the
 // video sources, opening the video browser); each with its icon (sites/*.png).
 static int sites_tab;      // 0 pictures, 1 videos, 2 manga
+static int sites_return;   // (opened from the videos or the comics: closed without a pick, back there; 0 the Browser's own)
 static float sites_scroll;
 // (the icons by slot: the sites 0-30, the add tile 31, the video sources 32-63, the comics' 64-95)
 static vita2d_texture *site_tex[96];
@@ -2262,7 +2263,7 @@ static void draw_sites_sheet(void) {
   icon("xmark", wx + ww - 34, segy + 20, DIM);
   if (frame_no - sh_open < 3) in.tap = 0; // (the tap that opened it isn't one outside it)
   if ((in.tap && (hypotf(in.tap_x - (wx + ww - 34), in.tap_y - (segy + 20)) < 24 || in.tap_y > wy + wh || in.tap_x < wx || in.tap_x > wx + ww)) || (in.pressed & SCE_CTRL_CIRCLE)) {
-    in.tap = 0; in.pressed &= ~SCE_CTRL_CIRCLE; sfx(SFX_CLOSE); sheet = SH_NONE; return;
+    in.tap = 0; in.pressed &= ~SCE_CTRL_CIRCLE; sfx(SFX_CLOSE); sheet = SH_NONE; if (sites_return) { screen = sites_return; sites_return = 0; } return;
   }
   if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
     sites_tab = (sites_tab + ((in.pressed & SCE_CTRL_RTRIGGER) ? 1 : 2)) % 3;
@@ -2379,6 +2380,7 @@ static void draw_sites_sheet(void) {
   if ((in.pressed & SCE_CTRL_CROSS) && sheet_sel == n - 1) { sfx(SFX_OPEN); find_open(sites_tab); }
   else if ((in.pressed & SCE_CTRL_SQUARE) && sites_tab == 1 && vsrc_is_added(pick)) { vsrc_remove(pick); sfx(SFX_DELETE); say("Video source removed"); }
   else if (in.pressed & SCE_CTRL_CROSS) {
+    sites_return = 0; // (a pick: wherever it goes)
     if (sites_tab == 2) { sfx(SFX_SELECT); sheet = SH_NONE; manga_open(pick); }
     else if (sites_tab) {
       if (vsource_blocked(pick)) { sfx(SFX_ERROR); say("This site only answers after a browser check (Cloudflare), so the Vita can't reach it"); }
@@ -2394,7 +2396,7 @@ static void draw_sites_sheet(void) {
     sfx(SFX_DELETE);
     say("Site removed");
   }
-  else if ((in.pressed & SCE_CTRL_CIRCLE) || (in.tap && !(in.tap_x >= wx && in.tap_x < wx + ww && in.tap_y >= wy && in.tap_y < wy + wh))) { sfx(SFX_CLOSE); sheet = SH_NONE; }
+  else if ((in.pressed & SCE_CTRL_CIRCLE) || (in.tap && !(in.tap_x >= wx && in.tap_x < wx + ww && in.tap_y >= wy && in.tap_y < wy + wh))) { sfx(SFX_CLOSE); sheet = SH_NONE; if (sites_return) { screen = sites_return; sites_return = 0; in.tap = 0; } }
   in.pressed = 0;
   in.tap = 0;
 }
@@ -2981,7 +2983,7 @@ static void draw_web(void) {
   if (sic) vita2d_draw_texture_scale(sic, 16, hy + 12, 32 / 112.0f, 32 / 112.0f);
   text_fit(sic ? 54 : 26, hy + 34, RGBA(20, 12, 16, 255), 17, site, ws - (sic ? 74 : 50));
   icon("chev_r", 10 + ws - 18, hy + 28, RGBA(20, 12, 16, 255));
-  if (!sheet_open && hit(10, hy + 4, ws, 48)) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = site_tile_of(cfg.site); sites_tab = 0; sites_scroll = 0; }
+  if (!sheet_open && hit(10, hy + 4, ws, 48)) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = site_tile_of(cfg.site); sites_tab = 0; sites_scroll = 0; sites_return = 0; }
   // filter, sort and the light on the right
   char filt[40];
   int nr = 0;
@@ -3039,7 +3041,7 @@ static void draw_web(void) {
     }
     if ((in.pressed & SCE_CTRL_CROSS) && nposts) { sfx(SFX_SELECT); wdetails = 0; wdetails_y = 0; wchrome_until = frame_no + 180; wv_back = S_WEB; screen = S_WEBVIEW; wv_show(wsel); return; }
     if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_TAB); screen = S_SHOW; plan_sel = 0; }
-    if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = site_tile_of(cfg.site); sites_tab = 0; sites_scroll = 0; }
+    if (in.pressed & SCE_CTRL_START) { sfx(SFX_OPEN); sheet = SH_SITES; sheet_sel = site_tile_of(cfg.site); sites_tab = 0; sites_scroll = 0; sites_return = 0; }
   }
   { // (the sources window open: a tap anywhere is the window's first (outside it closes it), never the bar's)
     int keep_tap = in.tap; if (sheet == SH_SITES) in.tap = 0;
@@ -3597,8 +3599,17 @@ static void wv_save_pill_draw(int chrome) {
   if (saving) spinner((int)cx, (int)cy - 6, 11);
   else if (saved) { icon("check", cx, cy - 7, with_alpha(ACC, a)); }
   else icon("save", cx, cy - 7, ink);
-  // (its button: △, under the icon)
-  text_center((int)cx, (int)(cy + 22), ink, 13, saved ? "Saved" : "\u25b3 Save");
+  text_center((int)cx, (int)(cy + 22), ink, 13, saved ? "Saved" : "Save");
+  if (!saved && !saving) { // (its button on the Vita: a small black disc at its corner with the green triangle, as on the pad)
+    float bx = cx + r * 0.72f, by = cy - r * 0.72f;
+    circle(bx, by + 1.5f, 13, RGBA(0, 0, 0, a / 2));
+    circle(bx, by, 12, RGBA(24, 24, 28, a));
+    circle(bx, by, 12, with_alpha(TEXT, a / 10));
+    const float tr = 6.5f; unsigned g = RGBA(64, 214, 160, a); // (the triangle's own green)
+    float ax = bx, ay = by - tr, b1x = bx - tr * 0.866f, b1y = by + tr * 0.5f, c1x = bx + tr * 0.866f, c1y = by + tr * 0.5f;
+    for (int k = 0; k <= 10; k++) { float t = k / 10.0f;
+      circle(ax + (b1x - ax) * t, ay + (b1y - ay) * t, 1.2f, g); circle(b1x + (c1x - b1x) * t, b1y + (c1y - b1y) * t, 1.2f, g); circle(c1x + (ax - c1x) * t, c1y + (ay - c1y) * t, 1.2f, g); }
+  }
 }
 static void draw_webview(void) {
   if (!nposts) { screen = wv_back; return; }
@@ -3613,7 +3624,10 @@ static void draw_webview(void) {
     //  its index (moov) comes before its pictures: one with it at the end can't start until it's all
     //  here, and a player waiting on reads stalls and jumps)
     int64_t need = vstart_need(g->total);
-    int streamable = g->total > 12ll * 1024 * 1024 && g->have >= need && mp4_moov_first(dl_path[dl_slot], g->have) == 1;
+    // (no longer: playing while it came stalled on the Vita (frozen frames, "buffering" with minutes
+    //  already here, then stuck for good). A video plays once it's all on the card)
+    (void)need; (void)mp4_moov_first;
+    int streamable = 0;
     if (streamable) {
       stream_tried = wv; stream_tried_gen = wgen;
       make_room(32u << 20); // (a player: room first)
@@ -3704,19 +3718,29 @@ static void draw_webview(void) {
     }
     return;
   }
+  if (wv_vid && !is_frame) no_picture_note(wv_vid);
   if (wv_loading) {
     // (a striped pill under the middle, with how much: up where the eye is, not at the very foot)
     float f = big_progress;
     int64_t got = 0, all = 0;
     lv_http_progress_bytes(&big_progress, &got, &all);
     // (a big video: the bar fills to the head start it plays from, not the whole file)
-    int big_vid = lv_post_is_video(p) && all > 12ll * 1024 * 1024;
-    if (big_vid) f = fminf(1, (float)got / (float)vstart_need(all));
+    int big_vid = 0; // (a video plays once it's all here: the bar is the whole file)
     pill_progress(W / 2 - 160, H / 2 + 40, 320, 22, f > 0 ? f : -1, 255);
     char m[80], a1[24], a2[24];
     fmt_bytes(got, a1, sizeof a1); fmt_bytes(all, a2, sizeof a2);
     if (big_vid) snprintf(m, sizeof m, "Starting the video\u2026 %d%%", (int)(f * 100));
-    else if (all > 0) snprintf(m, sizeof m, "%s%s of %s", lv_post_is_video(p) ? "The video: " : "", a1, a2);
+    else if (all > 0 && lv_post_is_video(p)) {
+      // (how long it's still to come, from the speed so far)
+      static int64_t s_got; static uint64_t s_t; static float bps;
+      uint64_t now = sceKernelGetProcessTimeWide();
+      if (got < s_got) { s_got = got; s_t = now; bps = 0; }
+      if (now - s_t > 500000) { float b = (got - s_got) / ((now - s_t) / 1e6f); bps = bps > 0 ? bps * 0.7f + b * 0.3f : b; s_got = got; s_t = now; }
+      int left = bps > 1 ? (int)((all - got) / bps) : -1;
+      if (left >= 0) snprintf(m, sizeof m, "The video: %s of %s \u00b7 about %d:%02d to go, then it plays", a1, a2, left / 60, left % 60);
+      else snprintf(m, sizeof m, "The video: %s of %s, then it plays", a1, a2);
+    }
+    else if (all > 0) snprintf(m, sizeof m, "%s of %s", a1, a2);
     else snprintf(m, sizeof m, "%s", lv_post_is_video(p) ? "Downloading the video\u2026" : "Loading\u2026");
     text_center(W / 2, H / 2 + 88, DIM, 16, m);
   }
@@ -3764,7 +3788,7 @@ static void draw_webview(void) {
   int64_t vseek = INT64_MIN;
   int vchrome = frame_no < wchrome_until || (wv_vid && lv_video_paused(wv_vid));
   // (an episode loading or paused: its card, whose taps are its own)
-  int card_tap = wdetails_y < 0.05f && whero.drag <= 0 && wv_is_long() && (!wv_vid || lv_video_paused(wv_vid)) && !sw_on && wv_episode_card(p);
+  int card_tap = 0; (void)wv_episode_card; // (no card over an episode: its overview page (the video browser's) has those buttons)
   if (card_tap) {}
   else if (in.tap && wv_save_pill_hit()) { if (!is_saved(p) && !saving) sw_open(); else sfx(SFX_TICK); return; }
   else if (in.dbl && wv_vid && wdetails_y < 0.5f && vctl_dbl_side(in.tap_x)) {
