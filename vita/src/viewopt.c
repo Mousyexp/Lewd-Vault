@@ -7,7 +7,7 @@
 enum { VF_FIT, VF_FILL, VF_ORIG, VF_WIDTH, VF_STRETCH };
 static const char *const VF_NAME[] = {"Fit to screen", "Fill the screen", "Original size", "Fit width", "Stretch to fill"};
 static const char *const VF_SHORT[] = {"Fit", "Fill", "Original", "Width", "Stretch"};
-static const char *const VOR_NAME[] = {"Landscape", "Portrait (on its side)"};
+static const char *const VOR_NAME[] = {"Landscape", "Portrait (tall ones lengthwise)"};
 enum { VO_IFIT, VO_IORIENT, VO_VFIT, VO_VORIENT, VO_N };
 static const char *const VO_ROW[VO_N] = {"Pictures: size", "Pictures: orientation", "Videos: size", "Videos: orientation"};
 static const char *const VO_ICON[VO_N] = {"zoom", "rotate", "film", "rotate"};
@@ -20,8 +20,9 @@ static const char *vo_text(int k) { int v = *vo_val(k); return k == VO_IORIENT |
 // (what the full view shows now: a video's frame or a picture)
 static int view_mode(int video) { return video ? cfg.vfit : cfg.ifit; }
 static int view_tall; // (the picture shown is taller than wide: the full views set it before asking)
-// (Settings › Turn portrait pictures: a tall picture turned to fill the screen held on its side)
-static int view_portrait(int video) { return (video ? cfg.vorient == 1 : cfg.iorient == 1) || (cfg.autorot && view_tall); }
+// (Portrait: a tall picture or video turned a quarter so it runs along the screen's length and is
+//  shown bigger, the Vita held on its side; a wide one stays as it is, it already fills the screen)
+static int view_portrait(int video) { return view_tall && ((video ? cfg.vorient == 1 : cfg.iorient == 1) || cfg.autorot); }
 
 // The scale for a texture tw x th whose own pixels are ow x oh (0: not known), into a space aw x ah
 // (the view's own: across and down as it's held). Returns how much bigger than "fit" that is.

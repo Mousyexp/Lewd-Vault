@@ -3498,6 +3498,7 @@ static void draw_webview(void) {
   // (how it's shown: Viewing's size and orientation, for a video or a picture)
   int isv = lv_post_is_video(p);
   view_tall = p->height > p->width * 1.15f;
+  if (wv_vid && lv_video_width(wv_vid) > 0) view_tall = lv_video_height(wv_vid) > lv_video_width(wv_vid) * 1.15f; // (a video: its own frames' shape)
   wv_por = view_portrait(isv); wv_mx = wv_my = 0; wv_mag = 1;
   wv_aw = wv_por ? avail_h : W; wv_ah = wv_por ? W : avail_h;
   if (t) {

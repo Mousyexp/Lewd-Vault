@@ -3746,6 +3746,7 @@ static void draw_viewer(void) {
   // (how it's shown: Viewing's size and orientation, for a video or a picture)
   view_tall = it->height > it->width * 1.15f;
   if (vid && lv_video_width(vid) > 0) view_tall = lv_video_height(vid) > lv_video_width(vid) * 1.15f; // (a video: its own frames' shape)
+  else if ((it->width < 1 || it->height < 1) && th_now) view_tall = vita2d_texture_get_height(th_now) > vita2d_texture_get_width(th_now) * 1.15f; // (size not known yet: its thumbnail's)
   int isv = is_video(it), por = view_portrait(isv);
   lv_por = por; lv_mx = lv_my = 0; lv_mag = 1;
   lv_aw = por ? avail_h : W; lv_ah = por ? W : avail_h;
