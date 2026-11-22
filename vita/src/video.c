@@ -145,7 +145,14 @@ static int ext(const char *p, const char *e) {
 
 // ======================= sceAvPlayer =======================
 
-static void *av_alloc(void *p, uint32_t align, uint32_t size) { return memalign(align < 16 ? 16 : align, size); }
+// (the system player's memory, zeroed: it can expect its structures to start empty. Learned from
+//  VitaMediaDeck (github.com/spyro-98/VitaMediaDeck, GPL-3.0, src/media/avplayer_init.c), whose crash
+//  dumps showed the player reading a function pointer from memory memalign had left as it was)
+static void *av_alloc(void *p, uint32_t align, uint32_t size) {
+  void *m = memalign(align < 16 ? 16 : align, size);
+  if (m) memset(m, 0, size);
+  return m;
+}
 static void avp_free(void *p, void *ptr) { free(ptr); }
 // frames in CDRAM (256 KiB aligned blocks), mapped for the GPU to read
 static void *av_alloc_tex(void *p, uint32_t align, uint32_t size) {
@@ -164,6 +171,7 @@ static void *av_alloc_tex(void *p, uint32_t align, uint32_t size) {
     sceKernelFreeMemBlock(uid);
     return NULL;
   }
+  memset(base, 0, size); // (frames start black, not whatever the memory held: no garbage before the first)
   return base;
 }
 static void av_free_tex(void *p, void *ptr) {

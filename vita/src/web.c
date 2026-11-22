@@ -1374,6 +1374,7 @@ static void src_next_offer(int y) {
     web_search();
   }
 }
+static int nvsources(void);
 static int wq_hidden; // (the search the video browser put there for a row: not shown, gone when the source changes)
 static void wq_unhide(void) { if (wq_hidden) { wq_hidden = 0; cfg.wquery[0] = 0; } }
 static int kind_buttons(int x, int y, int active) {
@@ -1394,7 +1395,7 @@ static int kind_buttons(int x, int y, int active) {
     if (!on && hit(bx, y - 4, s, s + 8)) {
       sfx(SFX_TAB); in.tap = 0;
       if (k == 0) { screen = S_WEB; if (wq_hidden) { wq_unhide(); web_search(); } }
-      else if (k == 1) { screen = S_VIDEOS; if (vb_src < 0) vb_open(0); }
+      else if (k == 1) { nvsources(); screen = S_VIDEOS; vb_open(vb_src >= 0 && vb_src < nvsources() ? vb_src : 0); } // (the sources' list made first: else "(null)" and nothing)
       else manga_open(mg_src_now());
     }
   }
@@ -2093,6 +2094,7 @@ static void draw_sites_sheet(void) {
   // (a way out, staying on the source: the ✕ at the top right, a tap outside the window, or ○)
   circle(wx + ww - 34, segy + 20, 18, SURF2);
   icon("xmark", wx + ww - 34, segy + 20, DIM);
+  if (frame_no - sh_open < 3) in.tap = 0; // (the tap that opened it isn't one outside it)
   if ((in.tap && (hypotf(in.tap_x - (wx + ww - 34), in.tap_y - (segy + 20)) < 24 || in.tap_y > wy + wh || in.tap_x < wx || in.tap_x > wx + ww)) || (in.pressed & SCE_CTRL_CIRCLE)) {
     in.tap = 0; in.pressed &= ~SCE_CTRL_CIRCLE; sfx(SFX_CLOSE); sheet = SH_NONE; return;
   }
@@ -3082,7 +3084,9 @@ static int wv_view_rx(void) { int x1, w1, x2, w2; wv_btns(&x1, &w1, &x2, &w2); r
 static void wv_btns(int *x1, int *w1, int *x2, int *w2) {
   const char *l1, *l2;
   wv_labels(&l1, &l2);
-  *w2 = text_w(15, l2) + 24;
+  // (a picture saves from its big round button: no second Save up here)
+  int pic = wv < nposts && !wv_is_long() && !lv_post_is_video(&posts[wv]);
+  *w2 = pic ? 0 : text_w(15, l2) + 24;
   *x2 = W - 72 - *w2;
   *w1 = l1 ? text_w(15, l1) + 24 : 0;
   *x1 = *x2 - 8 - *w1;
@@ -3586,7 +3590,7 @@ static void draw_webview(void) {
     else if (frame_no < wchrome_until && in.tap_y < 60 && in.tap_x < W - 64 && in.tap_x > W - 420) {
       int x1, w1, x2, w2;
       wv_btns(&x1, &w1, &x2, &w2);
-      if (in.tap_x >= x2 - 4) { if (wv_is_long()) wv_offline(); else sw_open(); }
+      if (w2 && in.tap_x >= x2 - 4) { if (wv_is_long()) wv_offline(); else sw_open(); }
       else if (w1 && in.tap_x >= x1 - 4) fav_toggle_video(&posts[wv], wv_site());
     }
     else wchrome_until = frame_no < wchrome_until ? frame_no : frame_no + 240;
@@ -3633,8 +3637,10 @@ static void draw_webview(void) {
       wv_labels(&l1, &l2);
       wv_btns(&x1, &w1, &x2, &w2);
       view_btn_draw(lv_post_is_video(p), a, (w1 ? x1 : x2) - 8);
-      rrect(x2, 16, w2, 28, 14, saved ? with_alpha(SURF2, a) : with_alpha(ACC, a));
-      text(x2 + 12, 35, saved ? with_alpha(TEXT, a) : RGBA(20, 12, 16, a), 15, l2);
+      if (w2) {
+        rrect(x2, 16, w2, 28, 14, saved ? with_alpha(SURF2, a) : with_alpha(ACC, a));
+        text(x2 + 12, 35, saved ? with_alpha(TEXT, a) : RGBA(20, 12, 16, a), 15, l2);
+      }
       if (l1) {
         int fav = fav_find(0, p->page) >= 0;
         rrect(x1, 16, w1, 28, 14, fav ? with_alpha(ACC, a) : with_alpha(SURF2, a));

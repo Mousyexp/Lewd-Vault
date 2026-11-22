@@ -2090,7 +2090,15 @@ static void draw_splash(const char *line, int alpha) {
   }
   ACC = splash_restore_acc; TEXT = splash_restore_text; // (the app's own colours back)
 }
+static void spinner(float cx, float cy, float r);
+static int pin_was_shown; // (the PIN pad has been on screen: the heart's loading screen isn't shown again)
 static void draw_unlocking(int stage) {
+  if (pin_was_shown) { // (after the PIN: a quiet ring on the background, not the heart a second time)
+    vita2d_draw_rectangle(0, 0, W, H, BG);
+    spinner(W / 2, H / 2 - 10, 18);
+    text_center(W / 2, H / 2 + 40, DIM, 16, stage ? "Opening the vault\u2026" : "Checking the password\u2026");
+    return;
+  }
   draw_splash(stage ? "Opening the vault\u2026" : "Checking the password\u2026", 255);
 }
 
@@ -5572,9 +5580,11 @@ int main(void) {
     }
     if (otag_open) { in = otag_keep; draw_otag(); } // (your tags for a save: over everything, its input its own)
     // the loading screen at start, fading into whatever is behind it once the vault is open
-    if (frame_no < splash_until + 24) {
+    if (screen == S_PIN) pin_was_shown = 1;
+    if (frame_no < splash_until + 24 && !pin_was_shown) {
       static int splash_over; // (once the PIN pad has shown, the loading screen doesn't come back after it)
       if (screen == S_PIN) { splash_over = 1; splash_until = 0; }
+      if (pin_was_shown) { splash_over = 1; splash_until = 0; }
       if (!splash_over && frame_no >= splash_until && (screen == S_UNLOCKING || load_state == 1)) splash_until = frame_no + 1; // (still opening)
       int a = frame_no < splash_until ? 255 : (int)(255 * (splash_until + 24 - frame_no) / 24.0f);
       if (screen != S_LOCKED || frame_no < splash_until) draw_splash(screen == S_LOCKED ? "Untraceable vault" : "Opening the vault\u2026", a);

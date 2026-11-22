@@ -568,3 +568,9 @@ system's own dumps in `ux0:data`, the last 200 lines of its log), and sent if th
 | `src/rear.c` | The rear touchpad: each half's job, its sign, its window |
 
 The Title ID `LWDV00001` is where the Vita keeps the app and its data: don't change it.
+
+## Borrowed with thanks
+
+- **VitaMediaDeck** (github.com/spyro-98/VitaMediaDeck, GPL-3.0): how the system video player's
+  memory is handed out (zeroed, the frames' too), in `src/video.c`. To be cleared with its author
+  before release.
