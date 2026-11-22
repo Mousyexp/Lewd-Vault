@@ -4636,14 +4636,14 @@ static void draw_settings(void) {
   static const char *const SECT[] = {"Appearance", "Playback", "Privacy", "Sync and sources", "Library", "Comics", "App data"};
   static const char *const SECT_ICON[] = {"sliders", "play", "info", "wifi", "photos", "book", "xmark"};
   enum { NORD = sizeof ORDER / sizeof *ORDER };
-  const int rh = 58, hh = 40, top = 112, room = H - BAR - top + 8;
-  float ypos[NORD], total = 0;
+  const int rh = 58, hh = 40, top = 112, room = H - BAR - top + 8, PCARD_H = 112;
+  float ypos[NORD], total = PCARD_H; // (your card first, above the rows)
   int at = 0;
   for (int k = 0; k < NORD; k++) { ypos[k] = total; total += ORDER[k] < 0 ? hh : rh; if (ORDER[k] == set_sel) at = k; }
   // (the chosen row kept in sight, its section's header too when it's the first)
   // (only while going by the D-pad: a touch or the stick scrolls freely, the choice stays where it is)
   static int set_follow = 1;
-  float want = ypos[at] - (at > 0 && ORDER[at - 1] < 0 ? hh : 0);
+  float want = at <= 1 ? 0 : ypos[at] - (at > 0 && ORDER[at - 1] < 0 ? hh : 0); // (the first row: up to the very top, your card too)
   if (set_follow && ypos[at] + rh - set_scroll > room) set_scroll = ypos[at] + rh - room;
   if (set_follow && want < set_scroll) set_scroll = want;
   float fy = -1;
@@ -4656,6 +4656,48 @@ static void draw_settings(void) {
   rw_now += (rw_want - rw_now) * ease(0.3f);
   if (fabsf(rw_want - rw_now) < 0.5f) rw_now = rw_want;
   const int RW = (int)rw_now - 12; // (room for the scroll bar)
+  { // your card, at the top of the list (scrolls with it): the vault, its size, your streak, and where the room goes (a ring) the vault, its size, your streak, and where the room goes (a ring)
+    const float px = 30, py = top + 4 - set_scroll, pw = RW, ph = PCARD_H - 16;
+    if (py + ph > top - 10) {
+    glass(px, py, pw, ph, 0);
+    // (the accent as an avatar, a heart in it)
+    circle(px + 38, py + ph / 2, 24, ACC); circle(px + 38, py + ph / 2 - 8, 15, RGBA(255, 255, 255, 50));
+    heart(px + 38, py + ph / 2 + 1, 8, RGBA(20, 12, 16, 255));
+    const char *vn = strrchr(cfg.vault, '/'); vn = vn ? vn + 1 : cfg.vault[0] ? cfg.vault : "Your vault";
+    text_fit(px + 72, py + 32, TEXT, 18, vn, (int)(pw * 0.42f));
+    char l2[80]; snprintf(l2, sizeof l2, "%d items  \u00b7  %d day%s in a row", vault.n, cfg.streak_n, cfg.streak_n == 1 ? "" : "s");
+    text_fit(px + 72, py + 54, DIM, 13, l2, (int)(pw * 0.42f));
+    if (cfg.streak_n >= 2) icon("flame", px + 72 + fminf(text_w(13, l2), pw * 0.42f) + 12, py + 50, ACC);
+    text(px + 72, py + 76, FAINT, 11, "Tap for your stats and achievements \u203a");
+    if (hit((int)px, (int)py, (int)pw, (int)ph) && in.tap_y > top && in.tap_y < H - BAR) { sfx(SFX_OPEN); stats_back = S_SETTINGS; stats_open_at = frame_no; screen = S_STATS; return; }
+    // the ring: pictures, videos, comics, the app's own data
+    if (store_state == 0) store_measure();
+    float rcx = px + pw * 0.56f, rcy = py + ph / 2, rr = 28;
+    int64_t parts[4] = {store_kind[0], store_kind[1], store_kind[2], store_data}, tot = 0;
+    for (int k = 0; k < 4; k++) tot += parts[k] > 0 ? parts[k] : 0;
+    unsigned pc[4] = {ACC, RGBA(90, 160, 240, 255), RGBA(240, 170, 70, 255), with_alpha(TEXT, 140)};
+    const char *pn[4] = {"Pictures", "Videos", "Comics", "App data"};
+    static unsigned ring_at; if (!ring_at || store_state != 2) ring_at = frame_no;
+    float rg = fminf(1, (frame_no - ring_at) / 30.0f); rg = 1 - (1 - rg) * (1 - rg) * (1 - rg); // (it fills round as it opens)
+    const int N = 72; float a0 = -1.5708f;
+    for (int d = 0; d < N; d++) circle(rcx + cosf(a0 + d * 6.2832f / N) * rr, rcy + sinf(a0 + d * 6.2832f / N) * rr, 6, with_alpha(TEXT, 14));
+    for (int k = 0; k < 4 && tot > 0 && store_state == 2; k++) {
+      float part = parts[k] / (float)tot * rg; int nn = (int)(part * N + 0.5f);
+      for (int d = 0; d < nn; d++) { float an = a0 + (d + 0.5f) * 6.2832f / N; circle(rcx + cosf(an) * rr, rcy + sinf(an) * rr, 6, pc[k]); }
+      a0 += part * 6.2832f;
+    }
+    char tb[24]; double gb = tot / 1073741824.0;
+    if (store_state != 2) snprintf(tb, sizeof tb, "\u2026"); else if (gb >= 1) snprintf(tb, sizeof tb, "%.1f GB", gb); else snprintf(tb, sizeof tb, "%.0f MB", tot / 1048576.0);
+    text_center((int)rcx, (int)rcy + 5, TEXT, 12, tb);
+    for (int k = 0; k < 4; k++) {
+      float colw = (px + pw - 8 - (rcx + rr + 18)) / 2, lx = rcx + rr + 18 + (k / 2) * colw, ly = py + 30 + (k % 2) * 30;
+      circle(lx, ly - 4, 5, pc[k]);
+      char lb[40]; double mb = parts[k] / 1048576.0;
+      if (mb >= 1024) snprintf(lb, sizeof lb, "%s %.1f GB", pn[k], mb / 1024); else snprintf(lb, sizeof lb, "%s %.0f MB", pn[k], mb);
+      text_fit((int)lx + 10, (int)ly, DIM, 11, lb, (int)colw - 14);
+    }
+  }
+  }
   for (int k = 0; k < NORD; k++) {
     int y = top + (int)ypos[k] - (int)set_scroll;
     if (y + rh < top - 10 || y > H - BAR) continue;
@@ -4725,46 +4767,6 @@ static void draw_settings(void) {
     heart(ix + 1, ty - 35, 15 * beat, ACC);
     rrect(30, ty + 13, text_w(ts, "Settings") * 0.55f, 5, 2, with_alpha(ACC, 200)); // (a stroke under it)
     textf(31, ty + 36, FAINT, 14, "%d items%s", vault.n, vault.untraceable ? "  ·  Untraceable" : "");
-  }
-  { // your card: the vault, its size, your streak, and where the room goes (a ring)
-    const float px = 30 + text_w(52, "Settings") + 34, py = 10, pw = W - 172 - px, ph = top - 22;
-    glass(px, py, pw, ph, 0);
-    // (the accent as an avatar, a heart in it)
-    circle(px + 38, py + ph / 2, 24, ACC); circle(px + 38, py + ph / 2 - 8, 15, RGBA(255, 255, 255, 50));
-    heart(px + 38, py + ph / 2 + 1, 8, RGBA(20, 12, 16, 255));
-    const char *vn = strrchr(cfg.vault, '/'); vn = vn ? vn + 1 : cfg.vault[0] ? cfg.vault : "Your vault";
-    text_fit(px + 72, py + 32, TEXT, 18, vn, (int)(pw * 0.42f));
-    char l2[80]; snprintf(l2, sizeof l2, "%d items  \u00b7  %d day%s in a row", vault.n, cfg.streak_n, cfg.streak_n == 1 ? "" : "s");
-    text_fit(px + 72, py + 54, DIM, 13, l2, (int)(pw * 0.42f));
-    if (cfg.streak_n >= 2) icon("flame", px + 72 + fminf(text_w(13, l2), pw * 0.42f) + 12, py + 50, ACC);
-    text(px + 72, py + 76, FAINT, 11, "Tap for your stats and achievements \u203a");
-    if (hit((int)px, (int)py, (int)pw, (int)ph)) { sfx(SFX_OPEN); stats_back = S_SETTINGS; stats_open_at = frame_no; screen = S_STATS; return; }
-    // the ring: pictures, videos, comics, the app's own data
-    if (store_state == 0) store_measure();
-    float rcx = px + pw * 0.56f, rcy = py + ph / 2, rr = 28;
-    int64_t parts[4] = {store_kind[0], store_kind[1], store_kind[2], store_data}, tot = 0;
-    for (int k = 0; k < 4; k++) tot += parts[k] > 0 ? parts[k] : 0;
-    unsigned pc[4] = {ACC, RGBA(90, 160, 240, 255), RGBA(240, 170, 70, 255), with_alpha(TEXT, 140)};
-    const char *pn[4] = {"Pictures", "Videos", "Comics", "App data"};
-    static unsigned ring_at; if (!ring_at || store_state != 2) ring_at = frame_no;
-    float rg = fminf(1, (frame_no - ring_at) / 30.0f); rg = 1 - (1 - rg) * (1 - rg) * (1 - rg); // (it fills round as it opens)
-    const int N = 72; float a0 = -1.5708f;
-    for (int d = 0; d < N; d++) circle(rcx + cosf(a0 + d * 6.2832f / N) * rr, rcy + sinf(a0 + d * 6.2832f / N) * rr, 6, with_alpha(TEXT, 14));
-    for (int k = 0; k < 4 && tot > 0 && store_state == 2; k++) {
-      float part = parts[k] / (float)tot * rg; int nn = (int)(part * N + 0.5f);
-      for (int d = 0; d < nn; d++) { float an = a0 + (d + 0.5f) * 6.2832f / N; circle(rcx + cosf(an) * rr, rcy + sinf(an) * rr, 6, pc[k]); }
-      a0 += part * 6.2832f;
-    }
-    char tb[24]; double gb = tot / 1073741824.0;
-    if (store_state != 2) snprintf(tb, sizeof tb, "\u2026"); else if (gb >= 1) snprintf(tb, sizeof tb, "%.1f GB", gb); else snprintf(tb, sizeof tb, "%.0f MB", tot / 1048576.0);
-    text_center((int)rcx, (int)rcy + 5, TEXT, 12, tb);
-    for (int k = 0; k < 4; k++) {
-      float colw = (px + pw - 8 - (rcx + rr + 18)) / 2, lx = rcx + rr + 18 + (k / 2) * colw, ly = py + 30 + (k % 2) * 30;
-      circle(lx, ly - 4, 5, pc[k]);
-      char lb[40]; double mb = parts[k] / 1048576.0;
-      if (mb >= 1024) snprintf(lb, sizeof lb, "%s %.1f GB", pn[k], mb / 1024); else snprintf(lb, sizeof lb, "%s %.0f MB", pn[k], mb);
-      text_fit((int)lx + 10, (int)ly, DIM, 11, lb, (int)colw - 14);
-    }
   }
   // (the girl with the peace sign, all of her in the title row at the right, her animation playing)
   vita2d_set_clip_rectangle(0, 0, W, top - 4);
