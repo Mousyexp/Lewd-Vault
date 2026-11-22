@@ -180,6 +180,7 @@ static int is_cover_in_all(int i) { return cfg.lmode == 0 && comic_flag && i < c
 static int *book_count; // per item (a book's first page): its pages
 static int *book_read;  // per item (a book's first page): the page last looked at, 1.. (0: not opened)
 static int nbook_count;
+static unsigned char *book_new; // per item (a book's first page): pages added in the last three days that come after where it was read
 // The Comics mode's list: the books (one card each), or the pages of the book open. 0: not that mode.
 static int lib_books(void) {
   comics_scan();
@@ -200,7 +201,10 @@ static int lib_books(void) {
     book_count = nb;
     int *nr = realloc(book_read, (vault.n + 1) * sizeof *nr);
     if (!nr) { nshown = m; return 1; }
-    book_read = nr; nbook_count = vault.n + 1;
+    book_read = nr;
+    unsigned char *nn = realloc(book_new, vault.n + 1);
+    if (!nn) { nshown = m; return 1; }
+    book_new = nn; nbook_count = vault.n + 1;
   }
   nshown = 0;
   for (int k = 0; k < m; ) {
@@ -215,6 +219,10 @@ static int lib_books(void) {
       if (p->view >= 0 && vault.views[p->view].last && strcmp(vault.views[p->view].last, best) > 0) { best = vault.views[p->view].last; at = j - k + 1; }
     }
     book_read[shown[k]] = at;
+    // (a new chapter: a page added in the last three days, past the page read)
+    { char since[24]; time_t t3 = time(NULL) - 3 * 86400; struct tm l; lv_local_tm(t3, &l); strftime(since, sizeof since, "%Y-%m-%d", &l);
+      int nw = 0; for (int j = k + (at > 0 ? at : 0); j < e && !nw; j++) if (strcmp(vault.items[shown[j]].added, since) >= 0) nw = 1;
+      book_new[shown[k]] = (unsigned char)nw; }
     shown[nshown++] = shown[k];
     k = e;
   }
@@ -1204,8 +1212,13 @@ static int lib_cross(void) {
   if (cross_down_at && !down) { cross_down_at = 0; return 1; }
   return 0;
 }
+static int peek_k = -1; static unsigned peek_at; // (a card held: its quick peek, lib.c)
 static int lib_long_press_card(int k) {
-  // a finger held still on a card for half a second
+  // a finger held still on a card for half a second: its peek (big, over the grid; up opens it, down
+  // its actions, let go closes it)
+  if (in.touching && !in.moved && frame_no - in.down_frame == 24 && k >= 0 && k < nshown && !selecting) {
+    sfx(SFX_OPEN); peek_k = k; peek_at = frame_no; in.moved = 1; return 1;
+  }
   if (in.touching && !in.moved && frame_no - in.down_frame == 30 && k >= 0 && k < nshown) {
     if (selecting) { picked[shown[k]] ^= 1; npicked += picked[shown[k]] ? 1 : -1; sfx(SFX_TOGGLE); return 1; }
     sfx(SFX_OPEN);
@@ -1224,6 +1237,52 @@ static void month_of(const char *added, char *out, size_t cap) {
   if (m < 1 || m > 12) { snprintf(out, cap, "%s", added); return; }
   snprintf(out, cap, "%s %d", M[m - 1], y);
 }
+// The peek: the held card big in the middle, its name and what it is under it; dragged up it opens,
+// down its actions (the quick menu); let go, it's put back. Returns 1 while it's up (the grid still).
+static int lib_peek(void) {
+  if (peek_k < 0) return 0;
+  if (peek_k >= nshown) { peek_k = -1; return 0; }
+  int i = shown[peek_k];
+  float dy = in.touching ? in.ty - in.down_y : 0;
+  float e = fminf(1, (frame_no - peek_at) / 12.0f); e = 1 - (1 - e) * (1 - e) * (1 - e);
+  vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, (int)(170 * e)));
+  vita2d_texture *t = thumb_of(i);
+  const LvItem *it = &vault.items[i];
+  float tw = t ? vita2d_texture_get_width(t) : 4, th = t ? vita2d_texture_get_height(t) : 3;
+  float sc = fminf(560 / tw, 330 / th) * (0.7f + 0.3f * e) * (1 + fminf(0, dy) / -900.0f);
+  float w = tw * sc, h = th * sc, x = W / 2 - w / 2, y = H / 2 - h / 2 - 30 + dy * 0.4f;
+  rrect_round(x - 2, y + 8, w + 4, h + 4, 18, RGBA(0, 0, 0, (int)(120 * e)));
+  if (t) draw_cover_round(t, x, y, w, h, 16, RGBA(255, 255, 255, (int)(255 * e))); else rrect_round(x, y, w, h, 16, SURF2);
+  ring9(x - 2, y - 2, w + 4, h + 4, with_alpha(TEXT, (int)(80 * e)));
+  // what it is: its name, its kind (and length), its stars
+  char ln[200]; const char *nm = it->name[0] ? it->name : it->file;
+  text_center(W / 2, (int)(y + h + 30), with_alpha(TEXT, (int)(255 * e)), 18, nm);
+  if (!strcmp(it->kind, "video")) snprintf(ln, sizeof ln, "Video \u00b7 %d:%02d  \u00b7  %s", (int)it->duration / 60, (int)it->duration % 60, it->category);
+  else snprintf(ln, sizeof ln, "%s \u00b7 %d \u00d7 %d  \u00b7  %s", !strcmp(it->kind, "gif") ? "GIF" : "Picture", it->width, it->height, it->category);
+  text_center(W / 2, (int)(y + h + 52), with_alpha(DIM, (int)(255 * e)), 13, ln);
+  // (where a drag takes it: up opens, down its actions)
+  float up = fminf(1, fmaxf(0, -dy / 70.0f)), down = fminf(1, fmaxf(0, dy / 70.0f));
+  text_center(W / 2, 40, with_alpha(up > 0.99f ? ACC : FAINT, (int)(255 * e)), 14, "\u2191 open");
+  text_center(W / 2, H - 20, with_alpha(down > 0.99f ? ACC : FAINT, (int)(255 * e)), 14, "\u2193 actions  \u00b7  let go to put it back");
+  if (in.touching && dy < -70) { int k = peek_k; peek_k = -1; sfx(SFX_SELECT); lib_open(k); return 1; }
+  if (in.touching && dy > 70) { quick_item = i; lsheet = LS_QUICK; lsheet_sel = 0; delete_armed = 0; peek_k = -1; sfx(SFX_OPEN); return 1; }
+  if (!in.touching) { peek_k = -1; sfx(SFX_CLOSE); }
+  return 1;
+}
+// (the Library's date labels: which group an item's day falls in, as words: Today, Yesterday, This
+//  week, the month, or the month and year)
+static void date_group(const char *added, char *out, size_t cap) {
+  int y = atoi(added), m = strlen(added) >= 7 ? atoi(added + 5) : 0, d = strlen(added) >= 10 ? atoi(added + 8) : 0;
+  struct tm l; lv_local_tm(time(NULL), &l);
+  int ty = l.tm_year + 1900, tm = l.tm_mon + 1, td = l.tm_mday;
+  long days_then = y * 372L + m * 31 + d, days_now = ty * 372L + tm * 31 + td; // (near enough for this week)
+  if (y < 1900 || m < 1) { snprintf(out, cap, "Earlier"); return; }
+  if (days_then == days_now) { snprintf(out, cap, "Today"); return; }
+  if (days_now - days_then == 1 || (td == 1 && days_now - days_then <= 3 && m != tm)) { snprintf(out, cap, "Yesterday"); return; }
+  if (days_now - days_then < 7 && days_now - days_then > 0) { snprintf(out, cap, "This week"); return; }
+  static const char *M[] = {"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"};
+  if (y == ty) snprintf(out, cap, "%s", M[m - 1]); else snprintf(out, cap, "%s %d", M[m - 1], y);
+}
 // dragging along the right edge flings through everything; a bubble says which month
 static int fast_scroll(float max_scroll, float view_h) {
   // (a drag down the right edge: up or down, not in from the side, which opens the tags)
@@ -1238,14 +1297,32 @@ static int fast_scroll(float max_scroll, float view_h) {
   f = f < 0 ? 0 : f > 1 ? 1 : f;
   scroll = f * max_scroll;
   scroll_v = 0;
-  int k = grid_first(&lgrid, scroll);
-  if (k < nshown) {
-    char m[32];
-    month_of(vault.items[shown[k]].added, m, sizeof m);
-    int w = text_w(16, m) + 28;
-    rrect(W - 50 - w, in.ty - 16, w, 32, 16, ACC);
-    text(W - 50 - w + 14, in.ty + 6, RGBA(20, 12, 16, 255), 16, m);
+  return 1; // (drawn by scrub_handle, with the grid)
+}
+// The scrubber: a glass handle on the right edge, in while the grid moves (or it's held), out a
+// moment after; held, a bubble beside it says where: the month (by date), else how far along
+static void scrub_handle(float max_scroll, float view_h, int held) {
+  static float last_scroll = -1, show; static unsigned moved_at;
+  if (fabsf(scroll - last_scroll) > 0.5f || held) moved_at = frame_no;
+  last_scroll = scroll;
+  float want = max_scroll > view_h * 0.5f && frame_no - moved_at < 90 ? 1 : 0;
+  show += (want - show) * ease(0.2f);
+  if (show < 0.02f) return;
+  float f = max_scroll > 0 ? fminf(1, fmaxf(0, scroll / max_scroll)) : 0;
+  const float hh = 44, hw = held ? 12 : 8, x = W - 8 - hw + (1 - show) * 24, y = TOP + f * (view_h - hh);
+  rrect_round(x - 1, y + 2, hw + 2, hh, hw / 2, RGBA(0, 0, 0, (int)(90 * show)));
+  rrect_round(x, y, hw, hh, hw / 2, with_alpha(held ? ACC : mix_col(SURF2, TEXT, 0.35f), (int)(235 * show)));
+  for (int g = -1; g <= 1; g++) rrect(x + 2, y + hh / 2 + g * 5, hw - 4, 1.5f, 0.75f, with_alpha(held ? RGBA(20, 12, 16, 255) : BG, (int)(200 * show)));
+  if (held) {
+    int k = grid_first(&lgrid, scroll);
+    if (k < nshown) {
+      char m[40];
+      if (cfg.sort == 0 || cfg.sort == 1) month_of(vault.items[shown[k]].added, m, sizeof m);
+      else snprintf(m, sizeof m, "%d of %d", k + 1, nshown);
+      int w = text_w(16, m) + 28; float by = fminf(H - BAR - 40, fmaxf(TOP, y + hh / 2 - 16));
+      rrect_round(W - 40 - w, by + 3, w, 32, 16, RGBA(0, 0, 0, 90));
+      rrect_round(W - 40 - w, by, w, 32, 16, ACC);
+      text(W - 40 - w + 14, by + 22, RGBA(20, 12, 16, 255), 16, m);
+    }
   }
-  rrect(W - 10, TOP + f * (view_h - 40), 6, 40, 3, ACC);
-  return 1;
 }

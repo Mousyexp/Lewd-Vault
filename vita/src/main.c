@@ -605,6 +605,9 @@ static struct {
   int autorot; // portrait pictures turned to fill the screen held on its side
   int nodecor; // the little anime girls (decor.c) hidden
   int notags;  // a save doesn't ask for your own tags
+  int datediv; // the Library's date labels (Newest/Oldest): off unless chosen
+  int rdim, rwarm; // the comic reader's dimming (0-6: tenths) and warmth (0-5: fifths)
+  int streak_day, streak_n, streak_best; // days the app was opened in a row (day number, count, longest)
 } cfg = {"", 0, 0, 5, 0, 100, 1, 15, 2, "", "", 0, 0, 70, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 330, 65, 100, 0, 0, 0, 0, 0, 0, 0, 0};
 static int glow_v2; // (the config had glowv: its glow is the new one's)
 static void cfg_load(void) {
@@ -658,6 +661,9 @@ static void cfg_load(void) {
     else if (!strcmp(line, "autorot")) cfg.autorot = atoi(eq) != 0;
     else if (!strcmp(line, "nodecor")) cfg.nodecor = atoi(eq) != 0;
     else if (!strcmp(line, "notags")) cfg.notags = atoi(eq) != 0;
+    else if (!strcmp(line, "datediv")) cfg.datediv = atoi(eq) != 0;
+    else if (!strcmp(line, "reader_light")) { sscanf(eq, "%d,%d", &cfg.rdim, &cfg.rwarm); if (cfg.rdim < 0 || cfg.rdim > 6) cfg.rdim = 0; if (cfg.rwarm < 0 || cfg.rwarm > 5) cfg.rwarm = 0; }
+    else if (!strcmp(line, "streak")) sscanf(eq, "%d,%d,%d", &cfg.streak_day, &cfg.streak_n, &cfg.streak_best);
     else if (!strcmp(line, "view")) sscanf(eq, "%d,%d,%d,%d", &cfg.ifit, &cfg.iorient, &cfg.vfit, &cfg.vorient);
     else if (!strcmp(line, "comic")) sscanf(eq, "%d,%d,%d,%d,%d,%d,%d", &cfg.cmode, &cfg.corient, &cfg.canim, &cfg.cdir, &cfg.ctap, &cfg.cdbl, &cfg.cback);
   }
@@ -700,6 +706,7 @@ static void cfg_write(void) {
           cfg.vault, cfg.sort, cfg.kind, cfg.interval, cfg.shuffle, cfg.volume, cfg.site, cfg.ratings, cfg.wsort, cfg.wquery, cfg.save_cat,
           cfg.wpages, cfg.wsel, cfg.sounds, cfg.dbltap, cfg.glow, cfg.wspan, cfg.wfull, cfg.hide, cfg.tlock, cfg.local_vault, cfg.lmode, cfg.theme, cfg.bgstyle, cfg.sndpack, cfg.conv, cfg.acc_h, cfg.acc_s, cfg.acc_v, cfg.onboarded,
           cfg.cmode, cfg.corient, cfg.canim, cfg.cdir, cfg.ctap, cfg.cdbl, cfg.cback, cfg.ifit, cfg.iorient, cfg.vfit, cfg.vorient, cfg.tscale, cfg.accpic, cfg.wsize, cfg.rear_l, cfg.rear_r, cfg.autorot, cfg.nodecor, cfg.notags);
+  fprintf(f, "datediv=%d\nreader_light=%d,%d\nstreak=%d,%d,%d\n", cfg.datediv, cfg.rdim, cfg.rwarm, cfg.streak_day, cfg.streak_n, cfg.streak_best);
   fclose(f);
   sceIoRemove(DATA "/config.txt");
   sceIoRename(DATA "/config.txt.part", DATA "/config.txt");
@@ -723,6 +730,9 @@ static const char *SORTS[] = {"Newest", "Oldest", "Most viewed", "Top rated", "M
 static int64_t *item_bytes; static int item_bytes_n;
 static volatile int store_state; // 0 not measured, 1 measuring, 2 done
 static volatile int64_t store_vault, store_data;
+static volatile int64_t store_kind[3]; // (pictures and GIFs, videos, comic pages: their bytes)
+static unsigned char *store_kinds; static int store_kinds_n; // (each item's kind, taken on the drawing thread for the measurer)
+static int is_comic(int i);
 static int64_t dir_bytes(const char *dir, int depth) {
   DIR *d = opendir(dir);
   if (!d) return 0;
@@ -768,10 +778,12 @@ static void *store_main(void *arg) {
   pthread_mutex_unlock(&vmx);
   int64_t *b = calloc(n + 1, sizeof *b);
   int64_t sum = 0;
+  int64_t kb[3] = {0, 0, 0};
   for (int i = 0; b && paths && i < n; i++) {
     struct stat st;
-    if (paths[i] && stat(paths[i], &st) == 0) { b[i] = st.st_size; sum += st.st_size; }
+    if (paths[i] && stat(paths[i], &st) == 0) { b[i] = st.st_size; sum += st.st_size; if (store_kinds && i < store_kinds_n) kb[store_kinds[i] < 3 ? store_kinds[i] : 0] += st.st_size; }
   }
+  for (int k = 0; k < 3; k++) store_kind[k] = kb[k];
   for (int i = 0; paths && i < n; i++) free(paths[i]);
   free(paths);
   store_data = dir_bytes(DATA, 0);
@@ -787,6 +799,9 @@ static void *store_main(void *arg) {
 static void store_measure(void) {
   if (store_state == 1) return;
   store_state = 1;
+  // (each item's kind, for the storage ring: taken here, where the lists are safe to read)
+  free(store_kinds); store_kinds = malloc(vault.n + 1); store_kinds_n = store_kinds ? vault.n : 0;
+  for (int i = 0; store_kinds && i < vault.n; i++) store_kinds[i] = vault.hot[i].kind == LV_VIDEO ? 1 : is_comic(i) ? 2 : 0;
   pthread_t t; pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, 256 * 1024);
   if (pthread_create(&t, &at, store_main, NULL) == 0) pthread_detach(t); else store_state = 0;
 }
@@ -2770,6 +2785,8 @@ static void draw_library(void) {
   int sheet_up = lsheet != LS_NONE || side_open || side_t > 0;
   if (sheet_up) { in.pressed = 0; in.tap = 0; in.touching = 0; in.flicked = 0; in.ly = 0; in.dbl = 0; }
   if (!sheet_up && lhero_input() == 2) { in = saved_in; return; }
+  Input peek_in = in; int peeking = peek_k >= 0; // (a card's peek up: the grid stays still under it)
+  if (peeking) { in.touching = 0; in.tap = 0; in.flicked = 0; in.pressed = 0; in.dbl = 0; in.ly = 0; in.lx = 0; }
   int open_now = sheet_up ? 0 : lib_cross();
   int fast = sheet_up ? 0 : fast_scroll(max_scroll, view_h);
   if (fast) { in.touching = 0; in.tap = 0; }
@@ -2939,9 +2956,19 @@ static void draw_library(void) {
       // a book's look: its spine at the left (a shade and a light line), and how far it's been read
       grad(x, y, 14, ch, RGBA(0, 0, 0, 255), 150, 0, 1);
       vita2d_draw_rectangle(x + 14, y + 4, 1, ch - 8, RGBA(255, 255, 255, 40));
-      if (book_read && book_read[i] > 0 && book_count[i] > 0) {
+      if (book_read && book_read[i] > 0 && book_count[i] > 0) { // (how far it's been read: a ring in its corner, the share inside)
         float f = fminf(1, book_read[i] / (float)book_count[i]);
-        rrect(x + 6, y + ch - 5, (cw - 12) * f, 3, 1, ACC);
+        float rcx = x + cw - 22, rcy = y + ch - 66, rr = 14;
+        circle(rcx, rcy, rr + 4, RGBA(0, 0, 0, 150));
+        for (int d = 0; d < 40; d++) { float an = -1.5708f + d / 40.0f * 6.2832f; circle(rcx + cosf(an) * rr, rcy + sinf(an) * rr, 1.8f, d < (int)(40 * f) ? ACC : with_alpha(TEXT, 40)); }
+        char pc2[8]; if (f >= 1) snprintf(pc2, sizeof pc2, "\u2713"); else snprintf(pc2, sizeof pc2, "%d", (int)(f * 100));
+        text_center((int)rcx, (int)rcy + 4, TEXT, f >= 1 ? 13 : 10, pc2);
+      }
+      if (book_new && book_new[i]) { // (a new chapter in it, not read yet: a ribbon across its corner)
+        float rx = x + cw - 70, ry = y + 34;
+        rrect_round(rx, ry, 66, 20, 10, ACC);
+        rrect_round(rx + 2, ry + 1, 62, 8, 4, RGBA(255, 255, 255, 50));
+        text_center((int)(rx + 33), (int)ry + 15, RGBA(20, 12, 16, 255), 11, "NEW");
       }
       grad(x, y + ch - 46, cw, 46, RGBA(0, 0, 0, 255), 0, 200, 0);
       text_fit((int)x + 8, (int)(y + ch - 10), TEXT, 14, it->collection, (int)cw - 16);
@@ -2986,6 +3013,18 @@ static void draw_library(void) {
     if (!it->path) { rrect(x + 6, y + 6, 20, 20, 10, RGBA(0, 0, 0, 160)); text_center(x + 16, y + 21, ACC2, 14, "!"); }
     if (selecting && picked && picked[i]) { circle(x + cw - 16, y + 16, 11, ACC); text_center((int)(x + cw - 16), (int)y + 22, RGBA(20, 12, 16, 255), 14, "\u2713"); }
     else if (selecting) circle(x + cw - 16, y + 16, 10, with_alpha(TEXT, 90));
+    if (cfg.datediv && (cfg.sort == 0 || cfg.sort == 1) && !book_shelf) { // (where a day, week or month begins: a small label on its first card)
+      char g1[32], g0[32] = "";
+      date_group(it->added, g1, sizeof g1);
+      if (k > 0) date_group(vault.items[shown[k - 1]].added, g0, sizeof g0);
+      if (strcmp(g1, g0)) {
+        int lw = text_w(13, g1) + 22;
+        rrect_round(x + 6, y + ch - 30 - 22, lw, 24, 12, RGBA(0, 0, 0, 120));
+        rrect_round(x + 5, y + ch - 32 - 22, lw, 24, 12, with_alpha(mix_col(SURF2, ACC, 0.35f), 235));
+        rrect_round(x + 7, y + ch - 31 - 22, lw - 4, 10, 5, with_alpha(TEXT, 28));
+        text(x + 16, y + ch - 15 - 22, TEXT, 13, g1);
+      }
+    }
     if (popping) { int pa = (int)(200 * (1 - (frame_no - lib_pop_at) / 40.0f)); for (int g = 1; g <= 3; g++) ring9(x - g * 3, y - g * 3, cw + g * 6, ch + g * 6, with_alpha(ACC, pa / g)); } // (and a pink glow)
     { int sl = slot_of ? slot_of[i] : -1; if (t && sl >= 0 && sl < SLOTS && frame_no - slots[sl].at < 12) vita2d_draw_rectangle(x, y, cw, ch, with_alpha(SURF, (int)(255 * (1 - (frame_no - slots[sl].at) / 12.0f)))); } // (its picture just come: fading up from the loading card)
     if (ap < 1) vita2d_draw_rectangle(x - 4, y - 4, cw + 8, ch + 8, with_alpha(BG, (int)(255 * (1 - ap))));
@@ -2997,6 +3036,7 @@ static void draw_library(void) {
     }
   }
   if (fr_x >= 0) focus_ring(fr_x, fr_y, fr_w, fr_h);
+  scrub_handle(max_scroll, view_h, fast);
   // (and the next screenful the way it's going, ready before it's needed: below going down, above
   //  going up)
   if (!flinging) {
@@ -3153,6 +3193,7 @@ static void draw_library(void) {
   }
   draw_side_tab();
   draw_bar();
+  if (peeking) { Input keep = in; in = peek_in; int r = lib_peek(); (void)r; if (screen != S_LIBRARY) return; in = keep; }
   in = saved_in;
   // (a sheet opened this frame doesn't also take the press that opened it: □ would close it again)
   if (!sheet_up) { in.pressed = 0; in.tap = 0; in.dbl = 0; }
@@ -3493,8 +3534,24 @@ static void vctl_flash_draw(void) {
 // thick, growing under a finger (dragged: the picture follows on letting go); the title over it at the
 // left, a download button at the right; back ten, play/pause, on ten in the middle; the volume at the
 // top right. have: the share downloaded (0-1), or negative for all of it.
-static int vc_scrub; static float vc_scrub_f;
 #define VC_BAR_Y (H - 44)
+static int vc_scrub; static float vc_scrub_f;
+static vita2d_texture *vc_frame; static int vc_fw, vc_fh; // (the video's picture this frame: the scrub preview shows it small)
+static int vc_locked, vctl_can_lock; static unsigned vc_lock_seen; // (the lock: the screen's touches do nothing)
+static float vc_dim; // (darker, from a drag on the left: 0 to 0.7)
+#define VC_PILL_X (W / 2 - 30)
+#define VC_PILL_Y (VC_BAR_Y + 12)
+static int vc_in_pill(int x, int y) { return x >= VC_PILL_X - 6 && x < VC_PILL_X + 66 && y >= VC_PILL_Y - 6 && y < VC_PILL_Y + 34; }
+#define VC_LOCK_X 38
+#define VC_LOCK_Y 100
+// a small padlock: its shackle (open when unlocked), its body
+static void padlock(float cx, float cy, int open, unsigned c) {
+  for (int k = 0; k <= 16; k++) { float an = 3.14159f + k / 16.0f * 3.14159f; float ox = open ? 5 : 0; circle(cx + ox + cosf(an) * 6, cy - 3 + sinf(an) * 6, 1.4f, c); }
+  if (!open) { rrect(cx - 7, cy - 4, 2, 5, 1, c); }
+  rrect(cx + 5 + (open ? 5 : 0), cy - 4, 2, 5, 1, c);
+  rrect(cx - 9, cy, 18, 13, 3, c);
+  circle(cx, cy + 6, 2, RGBA(20, 12, 16, 255));
+}
 static void vctl_draw(const LvVideo *v, int a, float have) {
   if (!v) return;
   uint64_t d = lv_video_duration(v), q = lv_video_pos(v);
@@ -3544,6 +3601,11 @@ static void vctl_draw(const LvVideo *v, int a, float have) {
       float rr = 5 * w2 + vgrow * 1.6f * sinf(frame_no * 0.25f - w2 * 0.9f);
       for (int j = -4; j <= 4; j++) { float an = j * 0.17f; circle(sx + 4 + cosf(an) * rr, vy + sinf(an) * rr, 0.9f, with_alpha(TEXT, (int)(a * on_w))); }
     } }
+  if (vctl_can_lock) { // the lock: a glass button under the back button
+    circle(VC_LOCK_X, VC_LOCK_Y + 2, 21, RGBA(0, 0, 0, a / 3));
+    circle(VC_LOCK_X, VC_LOCK_Y, 20, with_alpha(SURF2, a * 3 / 4));
+    padlock(VC_LOCK_X, VC_LOCK_Y - 1, 1, ink);
+  }
   // the title over the bar, at the left: what it's from, small, then its name, bold, with ›
   if (vctl_sub[0]) text_fit(28, VC_BAR_Y - 46, with_alpha(TEXT, a * 200 / 255), 14, vctl_sub, W / 2);
   if (vctl_title[0]) { char t[180]; snprintf(t, sizeof t, "%s \u203a", vctl_title); text_fit(29, VC_BAR_Y - 18, ink, 22, t, W - 200); text_fit(28, VC_BAR_Y - 18, ink, 22, t, W - 200); }
@@ -3575,8 +3637,30 @@ static void vctl_draw(const LvVideo *v, int a, float have) {
   t2[0] = '-';
   text(bx, VC_BAR_Y + 30, with_alpha(TEXT, a * 200 / 255), 14, t1);
   text(bx + bw - text_w(14, t2), VC_BAR_Y + 30, with_alpha(TEXT, a * 200 / 255), 14, t2);
+  // the speed: a small pill under the bar's middle; a tap goes 1x, 2x, 4x and round
+  { int sp = lv_video_speed(v); char sl[8]; snprintf(sl, sizeof sl, "%d\u00d7", sp / 100);
+    rrect_round(VC_PILL_X, VC_PILL_Y, 60, 28, 14, sp != 100 ? with_alpha(ACC, a) : with_alpha(TEXT, a / 5));
+    text_center(VC_PILL_X + 30, VC_PILL_Y + 20, sp != 100 ? with_alpha(RGBA(20, 12, 16, 255), a) : ink, 14, sl); }
+  // (dragging: a small picture of where it is floats over the finger. The video itself is moved there
+  //  now and then while dragging (twice a second, and only for a real change), not every frame)
+  if (vc_scrub && d) {
+    static unsigned seek_at; static float seek_f = -1;
+    if (frame_no - seek_at > 30 && fabsf(vc_scrub_f - seek_f) * d > 2000) { seek_at = frame_no; seek_f = vc_scrub_f; lv_video_seek((LvVideo *)v, (int64_t)(d * vc_scrub_f)); }
+    float pw = 176, ph = 99, pcx = fminf(W - 20 - pw / 2, fmaxf(20 + pw / 2, bx + bw * vc_scrub_f)), py = VC_BAR_Y - 34 - ph;
+    rrect_round(pcx - pw / 2 - 3, py - 3 + 4, pw + 6, ph + 6, 14, RGBA(0, 0, 0, 120));
+    rrect_round(pcx - pw / 2 - 3, py - 3, pw + 6, ph + 6, 14, with_alpha(TEXT, a));
+    rrect_round(pcx - pw / 2, py, pw, ph, 11, RGBA(0, 0, 0, 255));
+    if (vc_frame && vc_fw > 0 && vc_fh > 0) {
+      float sc = fminf(pw / vc_fw, ph / vc_fh);
+      vita2d_draw_texture_part_scale(vc_frame, pcx - vc_fw * sc / 2, py + ph / 2 - vc_fh * sc / 2, 0, 0, vc_fw, vc_fh, sc, sc);
+    }
+    char pt[16]; fmt_time((uint64_t)(d * vc_scrub_f), pt, sizeof pt);
+    int tw = text_w(13, pt) + 16;
+    rrect_round(pcx - tw / 2, py + ph - 26, tw, 22, 11, RGBA(0, 0, 0, 180));
+    text_center((int)pcx, (int)(py + ph - 10), TEXT, 13, pt);
+  }
   // (dragging the bar: the place follows the finger; let go, it plays from there)
-  if (in.touching && in.down_y > VC_BAR_Y - 34 && in.down_y < VC_BAR_Y + 34 && d) { vc_scrub = 1; vc_scrub_f = fminf(1, fmaxf(0, (in.tx - bx) / bw)); }
+  if (in.touching && in.down_y > VC_BAR_Y - 34 && in.down_y < VC_BAR_Y + 34 && d && !vc_in_pill(in.down_x, in.down_y)) { vc_scrub = 1; vc_scrub_f = fminf(1, fmaxf(0, (in.tx - bx) / bw)); }
   else if (vc_scrub) { vc_scrub = 0; lv_video_seek((LvVideo *)v, (int64_t)(d * vc_scrub_f)); }
 }
 // (a touch that began on the bar or the volume while the controls show: theirs, nothing else moves)
@@ -3588,6 +3672,8 @@ static int vctl_owns_touch(int shown) {
 static int vctl_tap(LvVideo *v, int x, int y, int64_t *seek_to) {
   if (!v) return 0;
   if (hypotf(x - W / 2, y - VC_BTN_Y) < 48) { lv_video_pause(v, !lv_video_paused(v)); sfx(SFX_TOGGLE); return 1; }
+  if (vc_in_pill(x, y)) { int sp = lv_video_speed(v) == 100 ? 200 : lv_video_speed(v) == 200 ? 400 : 100; lv_video_set_speed(v, sp); sfx(SFX_TOGGLE); say(sp == 100 ? "Normal speed" : sp == 200 ? "2\u00d7 (no sound)" : "4\u00d7 (no sound)"); return 1; }
+  if (vctl_can_lock && hypotf(x - VC_LOCK_X, y - VC_LOCK_Y) < 26) { vc_locked = 1; vc_lock_seen = frame_no; sfx(SFX_TOGGLE); say("Screen locked: hold the padlock to unlock"); return 1; }
   for (int s = -1; s <= 1; s += 2)
     if (hypotf(x - (W / 2 + s * 140), y - VC_BTN_Y) < 38) { *seek_to = (int64_t)lv_video_pos(v) + s * 10000; vflash(s); return 2; }
   if (y > VC_BAR_Y - 34 && y < VC_BAR_Y + 34) return 2; // (the bar: dragged, handled as it's drawn)
@@ -3764,6 +3850,7 @@ static void draw_viewer(void) {
   vita2d_texture *t = NULL;
   int is_frame = 0;
   if (vid) { t = lv_video_frame(vid); is_frame = t != NULL; }
+  vc_frame = is_frame ? t : NULL; if (is_frame) { vc_fw = lv_video_width(vid); vc_fh = lv_video_height(vid); }
   if (!t) t = big_item == shown[vk] ? big_tex : NULL;
   if (!t && xfade_wanted && big_tex && big_item >= 0 && !vid) t = big_tex;
   if (!t) t = th_now;
@@ -3851,6 +3938,7 @@ static void draw_viewer(void) {
     if (big_failed) text_center(W / 2, H / 2, DIM, 18, "This file can't be shown on the Vita");
     else spinner(W / 2, H / 2, 24);
   }
+  if (vid && !vid_clip && vc_dim > 0.01f) vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, (int)(255 * vc_dim))); // (dimmed by a drag on the left)
   if (vhero.closing || (!t && vhero.drag > 0)) {
     // (flying home: nothing else drawn or done; closed once it's there)
     if (hero_done(&vhero) || !t) { memset(&vhero, 0, sizeof vhero); close_viewer(); }
@@ -3895,9 +3983,75 @@ static void draw_viewer(void) {
   }
   if (zoom * lv_mag > 1.25f && big_item == shown[vk] && big_hi_item != shown[vk] && !vid) { make_room(16u << 20); big_hi = 1; big_hi_item = shown[vk]; ask_big(shown[vk]); big_hi = 0; }
   if (vo_open) { draw_view_options(); return; } // (Viewing: its panel over the picture)
+  // (a long video in its last ten seconds: the next one, a card sliding in at the top right, a ring
+  //  counting down; at the end it plays. Tapped, now; its x, not for this one)
+  if (vid && !vid_clip && !slideshow && !details && vk + 1 < nshown) {
+    static int un_cancel = -1; static unsigned un_in;
+    uint64_t d = lv_video_duration(vid), q = lv_video_pos(vid);
+    if (d >= 60000 && q + 10000 > d && un_cancel != shown[vk]) {
+      if (!un_in || frame_no - un_in > 100000) un_in = frame_no;
+      float e = fminf(1, (frame_no - un_in) / 16.0f); e = 1 - (1 - e) * (1 - e) * (1 - e);
+      float left = d > q ? (d - q) / 10000.0f : 0;
+      const float cw = 250, chh = 84, cx = W - cw - 16 + (1 - e) * (cw + 30), cy = 128;
+      glass(cx, cy, cw, chh, 0);
+      vita2d_texture *nt = thumb_of(shown[vk + 1]);
+      if (nt) draw_cover_round(nt, cx + 8, cy + 8, 120, 68, 10, RGBA(255, 255, 255, 255)); else rrect(cx + 8, cy + 8, 120, 68, 10, SURF2);
+      // (the countdown: a ring round a play button over the picture)
+      float rcx = cx + 68, rcy = cy + 42;
+      circle(rcx, rcy, 17, RGBA(0, 0, 0, 150));
+      for (int d2 = 0; d2 < (int)(36 * left); d2++) { float an = -1.5708f + d2 / 36.0f * 6.2832f; circle(rcx + cosf(an) * 17, rcy + sinf(an) * 17, 1.8f, ACC); }
+      vc_tri(rcx - 2, rcy, 9, TEXT);
+      const LvItem *nx = &vault.items[shown[vk + 1]];
+      text(cx + 138, cy + 28, ACC, 13, "Up next");
+      text_fit(cx + 138, cy + 50, TEXT, 14, nx->name[0] ? nx->name : nx->file, (int)cw - 150);
+      char cs[16]; snprintf(cs, sizeof cs, "in %d s", (int)(left * 10 + 0.99f)); text(cx + 138, cy + 70, FAINT, 12, cs);
+      circle(cx + cw - 14, cy + 14, 10, RGBA(0, 0, 0, 140)); icon("xmark", cx + cw - 14, cy + 14, TEXT);
+      if (in.tap && hypotf(in.tap_x - (cx + cw - 14), in.tap_y - (cy + 14)) < 16) { un_cancel = shown[vk]; sfx(SFX_CLOSE); in.tap = 0; }
+      else if (in.tap && in.tap_x >= cx && in.tap_x < cx + cw && in.tap_y >= cy && in.tap_y < cy + chh) { sfx(SFX_TICK); in.tap = 0; show_item(vk + 1); return; }
+      if (lv_video_ended(vid) || q + 300 >= d) { un_in = 0; show_item(vk + 1); return; }
+    } else un_in = 0;
+  }
   // --- touch: swipe for the next one, pinch to zoom, drag when zoomed, tap for the controls ---
   // (a finger that went down on the video's bar or its volume: theirs alone, the picture stays put)
-  if (vid && !vid_clip && vctl_owns_touch(frame_no < chrome_until || lv_video_paused(vid))) { swipe_x = 0; chrome_until = frame_no + 360; } // (and the controls stay while it's held)
+  // (locked: touches do nothing; the padlock shows while one is down, and held a second it opens)
+  if (vc_locked && !(vid && !vid_clip)) vc_locked = 0;
+  if (vc_locked) {
+    static unsigned hold_from;
+    if (in.touching) {
+      vc_lock_seen = frame_no;
+      if (hypotf(in.tx - VC_LOCK_X, in.ty - VC_LOCK_Y) < 30) { if (!hold_from) hold_from = frame_no; if (frame_no - hold_from > 60) { vc_locked = 0; hold_from = 0; sfx(SFX_TOGGLE); say("Unlocked"); chrome_until = frame_no + 360; } }
+      else hold_from = 0;
+    } else hold_from = 0;
+    if (vc_locked && frame_no - vc_lock_seen < 120) {
+      float hf = hold_from ? fminf(1, (frame_no - hold_from) / 60.0f) : 0;
+      circle(VC_LOCK_X, VC_LOCK_Y, 22, RGBA(0, 0, 0, 170));
+      for (int d2 = 0; d2 < (int)(40 * hf); d2++) { float an = -1.5708f + d2 / 40.0f * 6.2832f; circle(VC_LOCK_X + cosf(an) * 24, VC_LOCK_Y + sinf(an) * 24, 2, ACC); }
+      padlock(VC_LOCK_X, VC_LOCK_Y - 1, 0, TEXT);
+      text(VC_LOCK_X + 32, VC_LOCK_Y + 5, DIM, 13, "Hold to unlock");
+    }
+    in.touching = 0; in.tap = 0; in.dbl = 0; in.flicked = 0; in.moved = 0;
+  }
+  // (a video: up and down on its left third darkens or brightens it; on its right third, the volume)
+  static int side_drag; static unsigned side_at;
+  if (vid && !vid_clip && in.touching && zoom < 1.01f && !lv_por && details_y < 0.05f) {
+    float mdy = in.ty - in.down_y, mdx = in.tx - in.down_x;
+    if (!side_drag && (in.down_x < W / 3 || in.down_x > W * 2 / 3) && in.down_y > 130 && in.down_y < VC_BAR_Y - 60 && fabsf(mdy) > 14 && fabsf(mdy) > fabsf(mdx) * 1.5f) side_drag = in.down_x < W / 3 ? 1 : 2;
+    if (side_drag == 1) vc_dim = fminf(0.7f, fmaxf(0, vc_dim + in.drag_dy / 360.0f));
+    if (side_drag == 2) { cfg.volume = (int)fminf(100, fmaxf(0, cfg.volume - in.drag_dy / 3.0f)); lv_video_set_volume(vid, cfg.volume * 32768 / 100); }
+    if (side_drag) side_at = frame_no;
+  } else if (!in.touching) { if (side_drag == 2) cfg_save(); side_drag = 0; }
+  if (side_at && frame_no - side_at < 50 && vid) { // (its level, a tall pill at that side)
+    static int last_side; if (side_drag) last_side = side_drag;
+    int sd = last_side;
+    float lv = sd == 1 ? 1 - vc_dim / 0.7f : cfg.volume / 100.0f, al = fminf(1, (50 - (frame_no - side_at)) / 15.0f);
+    float px = sd == 1 ? 60 : W - 60, py = H / 2 - 90, pw = 36, ph = 180;
+    rrect_round(px - pw / 2, py, pw, ph, 18, RGBA(0, 0, 0, (int)(170 * al)));
+    rrect_round(px - pw / 2 + 4, py + 4 + (ph - 8) * (1 - lv), pw - 8, (ph - 8) * lv, 14, with_alpha(sd == 1 ? TEXT : ACC, (int)(230 * al)));
+    if (sd == 1) { circle(px, py + ph + 22, 6, with_alpha(TEXT, (int)(255 * al))); for (int r2 = 0; r2 < 8; r2++) { float an = r2 * 0.785f; circle(px + cosf(an) * 11, py + ph + 22 + sinf(an) * 11, 1.6f, with_alpha(TEXT, (int)(255 * al))); } }
+    else text_center((int)px, (int)(py + ph + 30), with_alpha(ACC, (int)(255 * al)), 20, "\u266a");
+  }
+  if (side_drag) { swipe_x = 0; chrome_until = frame_no + 360; }
+  else if (vid && !vid_clip && vctl_owns_touch(frame_no < chrome_until || lv_video_paused(vid))) { swipe_x = 0; chrome_until = frame_no + 360; } // (and the controls stay while it's held)
   else if (in.touching && details_y < 0.5f) {
     if (in.tcount >= 2) {
       static float pmx, pmy;
@@ -4067,14 +4221,16 @@ static void draw_viewer(void) {
       snprintf(vctl_title, sizeof vctl_title, "%s", it->name[0] ? it->name : it->file);
       snprintf(vctl_sub, sizeof vctl_sub, "%s", it->category ? it->category : "");
       vctl_can_save = 0;
+      vctl_can_lock = 1;
       vctl_draw(vid, a, -1);
+      vctl_can_lock = 0;
       uint64_t d = lv_video_duration(vid);
       // the loop's ends, the speed, and what the buttons do
       const float bw = W - 80 - 92;
       if (d && ab_a >= 0) rrect(40 + bw * fminf(1, ab_a / (float)d) - 2, H - 36, 4, 18, 2, with_alpha(ACC2, a));
       if (d && ab_b >= 0) rrect(40 + bw * fminf(1, ab_b / (float)d) - 2, H - 36, 4, 18, 2, with_alpha(ACC2, a));
       char hint[96];
-      snprintf(hint, sizeof hint, "%s\u2190\u2192 10 s  \u00b7  \u2191 speed  \u00b7  \u2193 A-B loop  \u00b7  L R next",
+      snprintf(hint, sizeof hint, "%s\u2190\u2192 next  \u00b7  \u2191 speed  \u00b7  \u2193 A-B loop",
                lv_video_speed(vid) == 200 ? "2\u00d7  \u00b7  " : lv_video_speed(vid) == 400 ? "4\u00d7  \u00b7  " : "");
       text_center(W / 2, H - 52, with_alpha(DIM, a), 13, hint);
     }
@@ -4413,7 +4569,7 @@ static void draw_settings(void) {
   if (cfg.sounds) snprintf(v4, sizeof v4, "%d%%", cfg.sounds); else snprintf(v4, sizeof v4, "Off");
   char vd[96] = "Off";
   if (pin.decoy_hash[0] && !decoy_session) { const char *nm = strrchr(pin.decoy_vault, '/'); snprintf(vd, sizeof vd, "→ %s", pin.decoy_vault[0] ? (nm ? nm + 1 : pin.decoy_vault) : "the vault list"); }
-  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_REAR, ST_AUTOROT, ST_DECOR, ST_OTAGS, ST_STORAGE, ST_SAVEQ, ST_DELPICS, ST_DELVIDS, ST_DELCOMICS, ST_DELALL, ST_RESET, ST_N };
+  enum { ST_SEARCH, ST_VOL, ST_SOUNDS, ST_DBL, ST_GLOW, ST_DRIVE, ST_WIFI, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK, ST_STATS, ST_CLEAN, ST_HEALTH, ST_THEME, ST_BGS, ST_SNDPACK, ST_CONV, ST_VAULT, ST_CACHE, ST_COMICS, ST_VIEW, ST_TEXT, ST_ACCPIC, ST_DUPES, ST_REAR, ST_AUTOROT, ST_DECOR, ST_OTAGS, ST_STORAGE, ST_SAVEQ, ST_DELPICS, ST_DELVIDS, ST_DELCOMICS, ST_DELALL, ST_RESET, ST_DATEDIV, ST_N };
   struct { const char *name, *value, *hint; } rows[ST_N] = {
     {"Search", query[0] ? query : "", "Tags, names, categories and collections"},
     {"Video volume", v3, "← → to change; past 100% it's made louder than the video itself"},
@@ -4444,13 +4600,14 @@ static void draw_settings(void) {
     {"Turn tall pictures and videos", cfg.autorot ? "On" : "Off", "A tall picture or video turned to fill the screen, for the Vita held on its side"},
     {"Decorations", cfg.nodecor ? "Off" : "On", "The little anime girls by empty screens and in corners, in the accent's colour (tap one)"},
     {"Your tags when saving", cfg.notags ? "Off" : "On", "After a save: pick tags you've given before or type new ones (yours come first)"},
+    {"Storage used", vstore, "What the app takes on the card \u00b7 \u2715 the Library, largest files first"},
     {"Save quality", cfg.wfull ? "Original" : "Vita-sized", "Saves kept as the original file, or made Vita-sized (smaller, quicker)"},
     {"Delete all pictures", "", "Every picture in this vault to its _trash (✕ twice)"},
     {"Delete all videos", "", "Every video in this vault to its _trash (✕ twice)"},
     {"Delete all comics", "", "Every comic page in this vault to its _trash (✕ twice)"},
     {"Delete everything in the vault", "", "All of it to the vault's _trash (✕ twice)"},
     {"Reset the app", "", "Its settings, PIN, keys, favourites and caches gone: as if never opened (the vault stays) (✕ twice)"},
-    {"Storage used", vstore, "What the app takes on the card \u00b7 \u2715 the Library, largest files first"},
+    {"Date labels", cfg.datediv ? "On" : "Off", "Newest or Oldest first: a small label where each day, week or month begins"},
   };
   // (which rows have been changed from how the app starts: their value in the accent, a touch bolder;
   //  the others' in grey, just saying what it is)
@@ -4471,7 +4628,7 @@ static void draw_settings(void) {
     -6, ST_COMICS,
     -3, ST_PIN, ST_DECOY, ST_COVER, ST_TLOCK,
     -4, ST_DRIVE, ST_WIFI, ST_CONV,
-    -5, ST_SEARCH, ST_OTAGS, ST_SAVEQ, ST_STORAGE, ST_STATS, ST_CLEAN, ST_DUPES, ST_HEALTH, ST_VAULT, ST_CACHE,
+    -5, ST_SEARCH, ST_DATEDIV, ST_OTAGS, ST_SAVEQ, ST_STORAGE, ST_STATS, ST_CLEAN, ST_DUPES, ST_HEALTH, ST_VAULT, ST_CACHE,
     -7, ST_DELPICS, ST_DELVIDS, ST_DELCOMICS, ST_DELALL, ST_RESET,
   };
   static int set_init;
@@ -4568,6 +4725,46 @@ static void draw_settings(void) {
     heart(ix + 1, ty - 35, 15 * beat, ACC);
     rrect(30, ty + 13, text_w(ts, "Settings") * 0.55f, 5, 2, with_alpha(ACC, 200)); // (a stroke under it)
     textf(31, ty + 36, FAINT, 14, "%d items%s", vault.n, vault.untraceable ? "  ·  Untraceable" : "");
+  }
+  { // your card: the vault, its size, your streak, and where the room goes (a ring)
+    const float px = 30 + text_w(52, "Settings") + 34, py = 10, pw = W - 172 - px, ph = top - 22;
+    glass(px, py, pw, ph, 0);
+    // (the accent as an avatar, a heart in it)
+    circle(px + 38, py + ph / 2, 24, ACC); circle(px + 38, py + ph / 2 - 8, 15, RGBA(255, 255, 255, 50));
+    heart(px + 38, py + ph / 2 + 1, 8, RGBA(20, 12, 16, 255));
+    const char *vn = strrchr(cfg.vault, '/'); vn = vn ? vn + 1 : cfg.vault[0] ? cfg.vault : "Your vault";
+    text_fit(px + 72, py + 32, TEXT, 18, vn, (int)(pw * 0.42f));
+    char l2[80]; snprintf(l2, sizeof l2, "%d items  \u00b7  %d day%s in a row", vault.n, cfg.streak_n, cfg.streak_n == 1 ? "" : "s");
+    text_fit(px + 72, py + 54, DIM, 13, l2, (int)(pw * 0.42f));
+    if (cfg.streak_n >= 2) icon("flame", px + 72 + fminf(text_w(13, l2), pw * 0.42f) + 12, py + 50, ACC);
+    text(px + 72, py + 76, FAINT, 11, "Tap for your stats and achievements \u203a");
+    if (hit((int)px, (int)py, (int)pw, (int)ph)) { sfx(SFX_OPEN); stats_back = S_SETTINGS; stats_open_at = frame_no; screen = S_STATS; return; }
+    // the ring: pictures, videos, comics, the app's own data
+    if (store_state == 0) store_measure();
+    float rcx = px + pw * 0.56f, rcy = py + ph / 2, rr = 28;
+    int64_t parts[4] = {store_kind[0], store_kind[1], store_kind[2], store_data}, tot = 0;
+    for (int k = 0; k < 4; k++) tot += parts[k] > 0 ? parts[k] : 0;
+    unsigned pc[4] = {ACC, RGBA(90, 160, 240, 255), RGBA(240, 170, 70, 255), with_alpha(TEXT, 140)};
+    const char *pn[4] = {"Pictures", "Videos", "Comics", "App data"};
+    static unsigned ring_at; if (!ring_at || store_state != 2) ring_at = frame_no;
+    float rg = fminf(1, (frame_no - ring_at) / 30.0f); rg = 1 - (1 - rg) * (1 - rg) * (1 - rg); // (it fills round as it opens)
+    const int N = 72; float a0 = -1.5708f;
+    for (int d = 0; d < N; d++) circle(rcx + cosf(a0 + d * 6.2832f / N) * rr, rcy + sinf(a0 + d * 6.2832f / N) * rr, 6, with_alpha(TEXT, 14));
+    for (int k = 0; k < 4 && tot > 0 && store_state == 2; k++) {
+      float part = parts[k] / (float)tot * rg; int nn = (int)(part * N + 0.5f);
+      for (int d = 0; d < nn; d++) { float an = a0 + (d + 0.5f) * 6.2832f / N; circle(rcx + cosf(an) * rr, rcy + sinf(an) * rr, 6, pc[k]); }
+      a0 += part * 6.2832f;
+    }
+    char tb[24]; double gb = tot / 1073741824.0;
+    if (store_state != 2) snprintf(tb, sizeof tb, "\u2026"); else if (gb >= 1) snprintf(tb, sizeof tb, "%.1f GB", gb); else snprintf(tb, sizeof tb, "%.0f MB", tot / 1048576.0);
+    text_center((int)rcx, (int)rcy + 5, TEXT, 12, tb);
+    for (int k = 0; k < 4; k++) {
+      float colw = (px + pw - 8 - (rcx + rr + 18)) / 2, lx = rcx + rr + 18 + (k / 2) * colw, ly = py + 30 + (k % 2) * 30;
+      circle(lx, ly - 4, 5, pc[k]);
+      char lb[40]; double mb = parts[k] / 1048576.0;
+      if (mb >= 1024) snprintf(lb, sizeof lb, "%s %.1f GB", pn[k], mb / 1024); else snprintf(lb, sizeof lb, "%s %.0f MB", pn[k], mb);
+      text_fit((int)lx + 10, (int)ly, DIM, 11, lb, (int)colw - 14);
+    }
   }
   // (the girl with the peace sign, all of her in the title row at the right, her animation playing)
   vita2d_set_clip_rectangle(0, 0, W, top - 4);
@@ -4724,6 +4921,7 @@ static void draw_settings(void) {
       case ST_DUPES: if (cross) { sfx(SFX_OPEN); screen = S_DUPES; return; } break;
       case ST_REAR: if (cross || d) { rear_window_open(); return; } break;
       case ST_AUTOROT: if (cross || d) { cfg.autorot = !cfg.autorot; sfx(SFX_TOGGLE); cfg_save(); } break;
+      case ST_DATEDIV: if (cross || d) { cfg.datediv = !cfg.datediv; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_DECOR: if (cross || d) { cfg.nodecor = !cfg.nodecor; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_OTAGS: if (cross || d) { cfg.notags = !cfg.notags; sfx(SFX_TOGGLE); cfg_save(); } break;
       case ST_DELPICS: case ST_DELVIDS: case ST_DELCOMICS: case ST_DELALL:
@@ -5431,6 +5629,18 @@ int main(void) {
   pgf = vita2d_load_default_pgf();
   rnd_state ^= (unsigned)time(NULL);
   cfg_load();
+  { // the days opened in a row (a day by the Vita's own clock)
+    struct tm l; lv_local_tm(time(NULL), &l);
+    int today = (l.tm_year + 1900) * 372 + l.tm_mon * 31 + l.tm_mday; // (a day's number: only "the same" and "the next" matter)
+    time_t y = time(NULL) - 86400; struct tm ly; lv_local_tm(y, &ly);
+    int yesterday = (ly.tm_year + 1900) * 372 + ly.tm_mon * 31 + ly.tm_mday;
+    if (cfg.streak_day != today) {
+      cfg.streak_n = cfg.streak_day == yesterday ? cfg.streak_n + 1 : 1;
+      cfg.streak_day = today;
+      if (cfg.streak_n > cfg.streak_best) cfg.streak_best = cfg.streak_n;
+      cfg_save();
+    }
+  }
   text_pct = cfg.tscale ? cfg.tscale : 100;
   apply_theme(); // (the background and accent chosen, from the first screen on)
   vita2d_set_clear_color(BG);

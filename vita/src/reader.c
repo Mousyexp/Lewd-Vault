@@ -29,21 +29,23 @@ static const char *const RD_DIR[] = {"Left to right", "Right to left (manga)"};
 static const char *const RD_TAP[] = {"Sides turn pages", "Anywhere: the next", "Only the controls"};
 static const char *const RD_DBL[] = {"Zoom", "Nothing", "Fit width"};
 static const char *const RD_BACK[] = {"Swipe turns pages", "Nothing"};
-enum { RO_MODE, RO_ORIENT, RO_ANIM, RO_DIR, RO_TAP, RO_DBL, RO_BACK, RO_N };
-static const char *const RO_ICON[RO_N] = {"pages", "rotate", "swipe", "direction", "tap", "zoom", "touchpad"};
-static const char *const RO_NAME[RO_N] = {"Reading", "Orientation", "Page turn", "Direction", "Taps", "Double tap", "Rear touchpad"};
+enum { RO_MODE, RO_ORIENT, RO_ANIM, RO_DIR, RO_TAP, RO_DBL, RO_BACK, RO_DIM, RO_WARM, RO_N };
+static const char *const RO_ICON[RO_N] = {"pages", "rotate", "swipe", "direction", "tap", "zoom", "touchpad", "eye", "flame"};
+static const char *const RO_NAME[RO_N] = {"Reading", "Orientation", "Page turn", "Direction", "Taps", "Double tap", "Rear touchpad", "Dimmer", "Warmth (for the night)"};
 static int *ro_val(int k) {
   switch (k) {
     case RO_MODE: return &cfg.cmode; case RO_ORIENT: return &cfg.corient; case RO_ANIM: return &cfg.canim;
-    case RO_DIR: return &cfg.cdir; case RO_TAP: return &cfg.ctap; case RO_DBL: return &cfg.cdbl; default: return &cfg.cback;
+    case RO_DIR: return &cfg.cdir; case RO_TAP: return &cfg.ctap; case RO_DBL: return &cfg.cdbl; case RO_DIM: return &cfg.rdim; case RO_WARM: return &cfg.rwarm; default: return &cfg.cback;
   }
 }
-static int ro_count(int k) { static const int N[RO_N] = {2, 2, 4, 2, 3, 3, 2}; return N[k]; }
+static int ro_count(int k) { static const int N[RO_N] = {2, 2, 4, 2, 3, 3, 2, 7, 6}; return N[k]; } // (dimmer: off, 10..60 %; warmth: off, 20..100 %)
 static const char *ro_text(int k) {
   int v = *ro_val(k);
   switch (k) {
     case RO_MODE: return RD_MODE[v]; case RO_ORIENT: return RD_ORIENT[v]; case RO_ANIM: return RD_ANIM[v];
-    case RO_DIR: return RD_DIR[v]; case RO_TAP: return RD_TAP[v]; case RO_DBL: return RD_DBL[v]; default: return RD_BACK[v];
+    case RO_DIR: return RD_DIR[v]; case RO_TAP: return RD_TAP[v]; case RO_DBL: return RD_DBL[v];
+    case RO_DIM: case RO_WARM: { static char b[16]; if (!v) return "Off"; snprintf(b, sizeof b, "%d%%", v * (k == RO_DIM ? 10 : 20)); return b; }
+    default: return RD_BACK[v];
   }
 }
 
@@ -51,7 +53,7 @@ static const char *ro_text(int k) {
 static int ro_open, ro_sel;
 static void draw_reading_options(void) {
   vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, 160));
-  const int w = 560, rh = 56, x = (W - w) / 2, y = 26, h = RO_N * rh + 70;
+  const int w = 560, rh = 48, x = (W - w) / 2, y = 14, h = RO_N * rh + 66;
   rrect(x, y, w, h, 22, SURF);
   icon("book", x + 30, y + 30, ACC);
   text(x + 50, y + 37, TEXT, 20, "Reading comics");
@@ -270,6 +272,9 @@ static int comic_reader(ComicSrc *s) {
       if (cfg.cmode == 1 || s->strip) rd.vel = -dir * RH * 0.05f; else rd_turn(s, rtl ? -dir : dir);
     }
   }
+  // (dimmer and warmer, for reading at night: a dark veil and an amber one over the pages)
+  if (cfg.rdim > 0) vita2d_draw_rectangle(0, 0, W, H, RGBA(0, 0, 0, cfg.rdim * 10 * 255 / 100));
+  if (cfg.rwarm > 0) vita2d_draw_rectangle(0, 0, W, H, RGBA(255, 140, 40, cfg.rwarm * 16));
   // the controls, along the top for a while after a tap (not turned: read in either hold)
   if (frame_no < rd.chrome_until) {
     int a = frame_no + 30 > rd.chrome_until ? (int)((rd.chrome_until - frame_no) * 8) : 240;

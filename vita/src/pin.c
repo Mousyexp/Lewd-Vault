@@ -351,6 +351,64 @@ static void draw_stats(void) {
   float grow = fminf(1, (frame_no - opened_at) / 30.0f);
   grow = 1 - (1 - grow) * (1 - grow) * (1 - grow); // (the bars rise as it opens)
   char b[160];
+  // two pages: the numbers, and the achievements (a glass switch at the top right; L / R)
+  static int ach_page; static float ach_x;
+  {
+    const int sw = 300, sx = W - sw - 30, sy = 16;
+    rrect(sx, sy, sw, 38, 19, SURF2);
+    ach_x += (ach_page - ach_x) * ease(0.25f);
+    glass(sx + 3 + ach_x * (sw / 2), sy + 3, sw / 2 - 6, 32, 0);
+    text_center(sx + sw / 4, sy + 25, ach_page ? DIM : TEXT, 15, "Numbers");
+    text_center(sx + sw * 3 / 4, sy + 25, ach_page ? TEXT : DIM, 15, "Achievements");
+    if (hit(sx, sy, sw / 2, 38) && ach_page) { ach_page = 0; sfx(SFX_TAB); opened_at = frame_no; }
+    if (hit(sx + sw / 2, sy, sw / 2, 38) && !ach_page) { ach_page = 1; sfx(SFX_TAB); opened_at = frame_no; }
+    if (in.pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) { ach_page = !ach_page; sfx(SFX_TAB); opened_at = frame_no; }
+  }
+  if (ach_page) {
+    // the milestones: a badge each, lit once reached, else a bar to it
+    struct { const char *ic, *name, *what; double have, goal; } A[] = {
+      {"save", "First save", "Put something in the vault", vault.n, 1},
+      {"photos", "Collector", "100 in the vault", vault.n, 100},
+      {"stack", "Hoarder", "1,000 in the vault", vault.n, 1000},
+      {"history", "A week in a row", "Opened 7 days running", cfg.streak_best, 7},
+      {"sparkle", "A month in a row", "Opened 30 days running", cfg.streak_best, 30},
+      {"eye", "Regular", "1,000 times opened", (double)views, 1000},
+      {"heart", "Big heart", "100 hearts given", (double)hearts, 100},
+      {"hourglass", "Ten hours", "10 hours spent looking", secs / 3600, 10},
+      {"tag", "Organised", "10 categories", vault.ncats, 10},
+      {"check", "Seen it all", "Everything opened at least once (50+ items)", vault.n >= 50 ? vault.n - never : 0, vault.n >= 50 ? vault.n : 50},
+    };
+    const int NA = (int)(sizeof A / sizeof A[0]), cols = 5, cw = 172, chh = 168, gx = 30, gy = 70;
+    int got = 0;
+    for (int k = 0; k < NA; k++) if (A[k].have >= A[k].goal) got++;
+    snprintf(b, sizeof b, "%d of %d  \u00b7  streak %d day%s (best %d)", got, NA, cfg.streak_n, cfg.streak_n == 1 ? "" : "s", cfg.streak_best);
+    text(30 + text_w(26, "Your stats") + 16, 44, FAINT, 13, b);
+    for (int k = 0; k < NA; k++) {
+      float e = fminf(1, fmaxf(0, ((int)(frame_no - opened_at) - k * 2) / 14.0f)); e = 1 - (1 - e) * (1 - e);
+      float x = gx + (k % cols) * (cw + 10), y = gy + (k / cols) * (chh + 12) + (1 - e) * 20;
+      int done = A[k].have >= A[k].goal;
+      float f = fminf(1, A[k].have / A[k].goal);
+      rrect(x, y, cw, chh, 18, with_alpha(SURF, (int)(255 * e)));
+      if (done) rrect(x + 2, y + 1, cw - 4, chh * 0.4f, 16, with_alpha(ACC, (int)(30 * e)));
+      float bx = x + cw / 2, by = y + 50;
+      if (done) { float gl = 0.5f + 0.5f * sinf(frame_no * 0.05f + k); circle(bx, by, 36 + gl * 3, with_alpha(ACC, (int)(40 * e))); }
+      circle(bx, by + 2, 30, RGBA(0, 0, 0, (int)(90 * e)));
+      circle(bx, by, 30, done ? with_alpha(ACC, (int)(255 * e)) : with_alpha(SURF2, (int)(255 * e)));
+      circle(bx, by - 9, 18, RGBA(255, 255, 255, (int)((done ? 50 : 18) * e)));
+      icon(A[k].ic, bx, by, done ? RGBA(20, 12, 16, (int)(255 * e)) : with_alpha(FAINT, (int)(255 * e)));
+      text_center((int)bx, (int)(y + 104), with_alpha(done ? TEXT : DIM, (int)(255 * e)), 15, A[k].name);
+      text_fit((int)(x + 10), (int)(y + 124), with_alpha(FAINT, (int)(255 * e)), 11, A[k].what, cw - 20);
+      if (!done) {
+        rrect_round(x + 14, y + 140, cw - 28, 8, 4, with_alpha(TEXT, (int)(14 * e)));
+        rrect_round(x + 14, y + 140, fmaxf(8, (cw - 28) * f * grow), 8, 4, with_alpha(ACC, (int)(200 * e)));
+        snprintf(b, sizeof b, "%.0f / %.0f", A[k].have < A[k].goal ? A[k].have : A[k].goal, A[k].goal);
+        text_center((int)bx, (int)(y + 162), with_alpha(FAINT, (int)(255 * e)), 11, b);
+      } else text_center((int)bx, (int)(y + 156), with_alpha(ACC, (int)(255 * e)), 13, "\u2713 Done");
+    }
+    if (in.pressed & SCE_CTRL_CIRCLE) { sfx(SFX_BACK); screen = stats_back; }
+    draw_bar();
+    return;
+  }
   // the totals, small, across the top
   {
     char v[4][48];
