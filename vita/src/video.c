@@ -51,6 +51,7 @@ vita2d_texture *tex_new(unsigned w, unsigned h);
 
 // (in the stub library, not in the SDK's header)
 int sceAvPlayerStreamCount(SceAvPlayerHandle h);
+int sceAvcdecSetDecodeMode(int codec, int mode); // (in the stub library: wiliwili's decoder sets 0x80 before decoding)
 int sceAvPlayerEnableStream(SceAvPlayerHandle h, uint32_t stream);
 #define SCE_AVPLAYER_STATE_READY 2
 
@@ -520,6 +521,8 @@ static int avc_open(LvVideo *v, AVCodecParameters *cp) {
   sceSysmoduleLoadModule(SCE_SYSMODULE_AVCDEC);
   v->avc_w16 = (cp->width + 15) & ~15;
   v->avc_h16 = (cp->height + 15) & ~15;
+  // (the decode mode wiliwili's Vita decoder (in VitaMediaDeck's FFmpeg) sets before it starts)
+  sceAvcdecSetDecodeMode(SCE_VIDEODEC_TYPE_HW_AVCDEC, 0x80);
   SceVideodecQueryInitInfoHwAvcdec init = {sizeof init, (uint32_t)v->avc_w16, (uint32_t)v->avc_h16, 5, 1};
   if (sceVideodecInitLibrary(SCE_VIDEODEC_TYPE_HW_AVCDEC, &init) < 0) { LOG("avc: init failed\n"); return -1; }
   v->avc_lib = 1;
@@ -765,7 +768,9 @@ static int sw_open(LvVideo *v) {
   }
   LOG("sw: video %d audio %d %dx%d\n", v->vs, v->as, v->w, v->h);
   if (v->vs < 0) return -1; // (no picture we can decode: H.264 in MKV, AV1, ...)
-  v->ring_cap = 48000; // one second of sound ahead
+  // (four seconds of sound ahead: an MP4 keeps its sound and picture in chunks of a second or so, and
+  //  with one second the reading stopped on a full sound buffer while the pictures after it waited)
+  v->ring_cap = 48000 * 4;
   v->ring = malloc((size_t)v->ring_cap * 2 * sizeof(int16_t));
   v->wall_start = now_us();
   v->opened_us = v->wall_start;
