@@ -39,8 +39,8 @@ LvSite LV_SITES[LV_MAX_SITES] = {
   {"HentaiCity", BK_HCITY, "https://www.hentaicity.com", NULL, 1, 0, "hentaicity", "Hentai episodes, 8 min and longer", NULL, 1},
   {"HentaiOcean", BK_HOCEAN, "https://hentaiocean.com", NULL, 0, 0, "hentaiocean", "Hentai episodes, new each day", NULL, 1},
 };
-const int LV_NBUILTIN = 20;
-int LV_NSITES = 20;
+const int LV_NBUILTIN = 21; // (the entries above: counted by booru_test, so one added can't be left out again)
+int LV_NSITES = 21;
 int lv_site_checks_items(const LvSite *s) { return s->kind == BK_HWORLD || s->kind == BK_HCLOUD || s->kind == BK_HCITY || s->kind == BK_HOCEAN; }
 int lv_is_long(const LvSite *s, const LvPost *p) { return lv_post_is_video(p) && (p->duration >= LV_LONG_VIDEO || (s && (s->kind == BK_XV || s->kind == BK_HWORLD || s->kind == BK_HCLOUD || s->kind == BK_HCITY || s->kind == BK_HOCEAN))); }
 int lv_site_is_booru(const LvSite *s) { return s->kind <= BK_E621; }

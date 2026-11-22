@@ -60,6 +60,9 @@ static void check_kind(const char *file, const LvSite *s, int want) {
 }
 
 int main(void) {
+  // every built-in site counted: one added to the list but not to the count was never offered
+  CHECK(LV_NSITES == LV_NBUILTIN && LV_SITES[LV_NBUILTIN - 1].name && LV_SITES[LV_NBUILTIN].name == NULL, "built-in count %d", LV_NBUILTIN);
+  CHECK(site("HentaiOcean") != NULL, "HentaiOcean listed");
   // HentaiCity: eight minutes and longer, its counter links undone, each episode's tags and MP4
   {
     LvSite hy = {"HentaiCity", BK_HCITY, "https://www.hentaicity.com", NULL, 1, 0, NULL, NULL, NULL, 1};

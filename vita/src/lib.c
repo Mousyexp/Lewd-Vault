@@ -532,22 +532,68 @@ static int sheet_nav(int n) {
   return (in.pressed & SCE_CTRL_RIGHT) ? 1 : (in.pressed & SCE_CTRL_LEFT) ? -1 : (in.pressed & SCE_CTRL_CROSS) ? 1 : 0;
 }
 static void sheet_close(void) { sfx(SFX_CLOSE); lsheet = LS_NONE; save_edits_now(); }
-// The order: a list to pick from (△ or the button opens it; ✕ or a tap picks)
+// The order, as a card (the dating apps' look): at the top the first of the Library in that order,
+// big and rounded with its name over it; under it the orders as round coloured buttons with their
+// names, four to a row. ←→↑↓ move, ✕ or a tap picks, ○ or a tap outside closes.
 static void draw_sort_sheet(void) {
   static const char *const SORT_ICONS[NSORTS] = {"newest", "oldest", "eye", "star", "heart", "shuffle", "sparkle", "eye_off", "history", "hourglass", "stack"}; // (one per order: a missing one was a crash)
-  const int rh = 42, w = 320, h = NSORTS * rh + 52, x = W - w - 16 + sheet_off(), y = 10;
+  static const unsigned SORT_COL[NSORTS] = {RGBA(240, 84, 84, 255), RGBA(150, 96, 240, 255), RGBA(80, 196, 110, 255), RGBA(244, 170, 60, 255), RGBA(240, 100, 170, 255),
+                                            RGBA(70, 150, 232, 255), RGBA(60, 196, 196, 255), RGBA(150, 150, 160, 255), RGBA(206, 150, 96, 255), RGBA(120, 128, 240, 255), RGBA(232, 120, 90, 255)};
+  const int w = 372, h = H - 20, x = W - w - 12 + sheet_off(), y = 10, cols = 4;
+  static unsigned opened_at; static int was;
+  if (!was) opened_at = frame_no; was = 1;
+  float op = fminf(1, (frame_no - opened_at) / 14.0f);
   sheet_frame(x, y, w, h);
-  text(x + 20, y + 32, TEXT, 18, "Order");
+  // the head: a round badge, two lines (as the reference's greeting)
+  circle(x + 34, y + 32, 18, with_alpha(ACC, 60));
+  icon("sort", x + 34, y + 32, ACC);
+  text(x + 60, y + 26, FAINT, 12, "Sort your Library");
+  text(x + 60, y + 45, TEXT, 17, "Order");
+  // the card: the first one in the order now
+  const int cx = x + 14, cy = y + 62, cw = w - 28, ch = 176;
+  int sel_k = lsheet_sel >= 0 && lsheet_sel < NSORTS ? lsheet_sel : cfg.sort;
+  vita2d_texture *t = nshown ? thumb_of(shown[0]) : NULL;
+  rrect_round(cx, cy + 4, cw, ch, 22, RGBA(0, 0, 0, 90));
+  if (t) draw_cover_round(t, cx, cy, cw, ch, 22, RGBA(255, 255, 255, 255));
+  else rrect_round(cx, cy, cw, ch, 22, mix_col(SORT_COL[sel_k], RGBA(0, 0, 0, 255), 0.55f));
+  grad(cx, cy + ch * 0.4f, cw, ch * 0.6f, RGBA(0, 0, 0, 255), 0, 210, 0);
+  { char b[32]; snprintf(b, sizeof b, "%d in the Library", nshown); int bw = text_w(12, b) + 20;
+    rrect_round(cx + 12, cy + 12, bw, 24, 12, RGBA(0, 0, 0, 150)); text(cx + 22, cy + 29, TEXT, 12, b); }
+  text_fit(cx + 18, cy + ch - 34, TEXT, 24, SORTS[sel_k], cw - 40);
+  circle(cx + 18 + text_w(24, SORTS[sel_k]) + 12 > cx + cw - 30 ? cx + cw - 30 : cx + 18 + text_w(24, SORTS[sel_k]) + 12, cy + ch - 42, 5, sel_k == cfg.sort ? RGBA(90, 214, 120, 255) : FAINT);
+  text(cx + 18, cy + ch - 14, DIM, 13, sel_k == cfg.sort ? "In use now" : "✕ to sort this way");
+  // the orders: round buttons
+  const float gw = (w - 28) / (float)cols, gy0 = cy + ch + 22, rhg = 78;
   for (int k = 0; k < NSORTS; k++) {
-    int ry = y + 44 + k * rh;
-    sheet_row_i(k, x, ry, w, rh, SORT_ICONS[k], SORTS[k], k == cfg.sort ? "\u2713" : "");
+    float bx = x + 14 + (k % cols) * gw + gw / 2, by = gy0 + (k / cols) * rhg + 24;
+    // (they come in one after another as it opens)
+    float e = fminf(1, fmaxf(0, op * 1.6f - k * 0.05f)); e = 1 - (1 - e) * (1 - e);
+    by += (1 - e) * 18;
+    int on = k == lsheet_sel, cur = k == cfg.sort;
+    float r = (on ? 25 : 21) * (0.6f + 0.4f * e);
+    circle(bx, by + 3, r, RGBA(0, 0, 0, (int)(90 * e)));
+    circle(bx, by, r, with_alpha(SORT_COL[k], (int)(255 * e)));
+    circle(bx, by - r * 0.32f, r * 0.6f, RGBA(255, 255, 255, (int)(40 * e))); // (glass light on top)
+    icon(SORT_ICONS[k], bx, by, RGBA(255, 255, 255, (int)(255 * e)));
+    if (on) { ring9(bx - r - 5, by - r - 5, 2 * r + 10, 2 * r + 10, with_alpha(TEXT, 220)); }
+    if (cur) { circle(bx + r * 0.72f, by - r * 0.72f, 8, RGBA(90, 214, 120, 255)); icon("check", bx + r * 0.72f, by - r * 0.72f, RGBA(20, 12, 16, 255)); }
+    text_fit((int)(bx - gw / 2 + 4 + fmaxf(0, (gw - 8 - text_w(11, SORTS[k])) / 2)), (int)(by + r + 18), on ? TEXT : DIM, 11, SORTS[k], (int)gw - 8);
+    if (hit((int)(bx - gw / 2), (int)(by - 28), (int)gw, (int)rhg)) { lsheet_sel = k; in.pressed |= SCE_CTRL_CROSS; }
   }
-  sheet_nav(NSORTS);
+  // (the D-pad: across the row, and between rows)
+  int nsel = lsheet_sel < 0 ? cfg.sort : lsheet_sel;
+  if (in.pressed & SCE_CTRL_RIGHT) nsel++;
+  if (in.pressed & SCE_CTRL_LEFT) nsel--;
+  if (in.pressed & SCE_CTRL_DOWN) nsel += cols;
+  if (in.pressed & SCE_CTRL_UP) nsel -= cols;
+  if (nsel < 0) nsel = 0;
+  if (nsel >= NSORTS) nsel = NSORTS - 1;
+  if (nsel != lsheet_sel && (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_LEFT | SCE_CTRL_DOWN | SCE_CTRL_UP))) { lsheet_sel = nsel; sfx(SFX_TICK); }
   if ((in.pressed & SCE_CTRL_CROSS) && lsheet_sel >= 0 && lsheet_sel < NSORTS) {
     sfx(SFX_TOGGLE);
     cfg.sort = lsheet_sel; refilter(); cfg_save(); sel = 0; scroll = 0;
-    lsheet = LS_NONE;
-  } else if ((in.pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_TRIANGLE)) || (in.tap && !(in.tap_x >= x && in.tap_y >= y && in.tap_y < y + h))) sheet_close();
+    lsheet = LS_NONE; was = 0;
+  } else if ((in.pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_TRIANGLE)) || (in.tap && !(in.tap_x >= x && in.tap_y >= y && in.tap_y < y + h))) { sheet_close(); was = 0; }
 }
 
 // the vault's collections, for cycling through

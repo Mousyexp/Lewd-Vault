@@ -78,7 +78,13 @@ static void draw_view_options(void) {
   if (in.pressed & SCE_CTRL_UP) vo_sel = (vo_sel + VO_N - 1) % VO_N;
   if (in.pressed & (SCE_CTRL_RIGHT | SCE_CTRL_CROSS)) d = 1;
   if (in.pressed & SCE_CTRL_LEFT) d = -1;
-  if (d) { int *v = vo_val(vo_sel), n = vo_count(vo_sel); *v = (*v + d + n) % n; sfx(SFX_TOGGLE); cfg_save(); }
+  if (d) {
+    int *v = vo_val(vo_sel), n = vo_count(vo_sel); *v = (*v + d + n) % n; sfx(SFX_TOGGLE);
+    // (the way round is one choice for both: set on the pictures' row, a video stayed as it was and it
+    //  looked as if nothing happened)
+    if (vo_sel == VO_IORIENT || vo_sel == VO_VORIENT) cfg.iorient = cfg.vorient = *v;
+    cfg_save();
+  }
   if ((in.pressed & (SCE_CTRL_CIRCLE | SCE_CTRL_TRIANGLE)) || (in.tap && (in.tap_x < x || in.tap_x > x + w || in.tap_y < y || in.tap_y > y + h))) { sfx(SFX_CLOSE); vo_open = 0; }
   in.pressed = 0; in.tap = 0; in.touching = 0; in.dbl = 0; in.flicked = 0;
 }

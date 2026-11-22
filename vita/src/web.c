@@ -32,6 +32,7 @@ static WSlot wslots[WSLOTS];
 static pthread_mutex_t wmx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wcv = PTHREAD_COND_INITIALIZER;
 static volatile int wgen = 1;
+static volatile int list_cancel; // (a new search: the page still being fetched for the old one is dropped at once)
 static int wpage, wend, wloading, list_want;
 static char werr[160];
 static int wwant[48], nwwant;
@@ -276,6 +277,7 @@ static void *list_main(void *arg) {
     while (worker_run && !list_want) wait_work(&wcv, &wmx, h);
     int page = list_want, gen = wgen, ratings = job_q.ratings;
     list_want = 0;
+    list_cancel = 0;
     // (the site copied while held: the list of sites can change on the drawing thread)
     LvSite site_copy = LV_SITES[job_q.site < LV_NSITES ? job_q.site : 0];
     const LvSite *s = &site_copy;
@@ -302,7 +304,7 @@ static void *list_main(void *arg) {
     char url[2048];
     lv_booru_url_ex(s, q, ratings, sort, span, key[0] ? key : NULL, page, url, sizeof url);
     // (no address: the site has no more pages)
-    int st = url[0] ? lv_http_get(h, url, &b, &n, 8 * 1024 * 1024, NULL, NULL, &err) : 200;
+    int st = url[0] ? lv_http_get(h, url, &b, &n, 8 * 1024 * 1024, &list_cancel, NULL, &err) : 200;
     // (a site that's busy or hiccuping, 5xx or 429: asked again by itself, after a moment, a few
     //  times, unless the search changed meanwhile)
     for (int tries = 0; url[0] && (st == 429 || (st >= 500 && st <= 599)) && tries < 4 && gen == wgen; tries++) {
@@ -310,7 +312,7 @@ static void *list_main(void *arg) {
       free(b); b = NULL; n = 0; err = NULL;
       for (int w8 = 0; w8 < (tries + 1) * 15 && gen == wgen; w8++) sceKernelDelayThread(100000); // (1.5 s, 3 s, 4.5 s, 6 s)
       if (gen != wgen) break;
-      st = lv_http_get(h, url, &b, &n, 8 * 1024 * 1024, NULL, NULL, &err);
+      st = lv_http_get(h, url, &b, &n, 8 * 1024 * 1024, &list_cancel, NULL, &err);
     }
     if (!url[0]) { b = (uint8_t *)strdup(s->kind == BK_BOORUIO ? "{\"data\":[]}" : "[]"); n = b ? strlen((char *)b) : 0; }
     int count = 0;
@@ -448,6 +450,7 @@ static void prepare_save(LvHttp *h, const LvPost *p, uint8_t *raw, size_t rawn, 
 static char video_path[256];
 // (the video downloading now, played as it comes: its post, its search, its slot's file and progress)
 static LvGrow dl_grow[2];
+static int slot_post[2] = {-1, -1}; static unsigned slot_gen[2]; // (which post each slot's file is, and of which search)
 static char dl_path[2][256];
 static volatile int dl_slot, dl_post = -1, dl_gen;
 
@@ -569,8 +572,27 @@ static void *sample_main(void *arg) {
         if (lv_http_get(h, post.file, &b, &n, 48u * 1024 * 1024, &big_cancel, &big_progress, &err) == 200 && n) { free(raw); raw = b; rawn = n; }
         else { free(b); full = 0; }
       }
-      prepare_save(h, &post, raw, rawn, &d, full);
+      // (a video: only a whole download of this very one is copied; else it's fetched now, whole.
+      //  The slot's file could be another video's, or cut short by a swipe: copied, that was a wrong
+      //  or broken file in the vault)
+      char save_tmp[256] = "";
+      if (lv_post_is_video(&post)) {
+        int okslot = -1;
+        for (int s2 = 0; s2 < 2; s2++) if (slot_post[s2] == p && slot_gen[s2] == (unsigned)gen && dl_grow[s2].done && !dl_grow[s2].failed) okslot = s2;
+        if (okslot >= 0) snprintf(video_path, sizeof video_path, "%s", dl_path[okslot]);
+        else {
+          LvGrow tg; memset(&tg, 0, sizeof tg);
+          snprintf(save_tmp, sizeof save_tmp, DATA "/saving.%s", post.ext);
+          big_cancel = 0;
+          const char *err = NULL;
+          int st = lv_http_stream_file(h, post.file, save_tmp, 1536u * 1024 * 1024, &big_cancel, &big_progress, &tg.have, &tg.total, &err);
+          if (st == 200) snprintf(video_path, sizeof video_path, "%s", save_tmp);
+          else snprintf(d.err, sizeof d.err, "%s", big_cancel ? "The save was stopped" : err && err[0] ? err : "The video didn't download");
+        }
+      }
+      if (!d.err[0]) prepare_save(h, &post, raw, rawn, &d, full);
       if (!d.err[0]) write_save(&post, &d, vgen_asked, cat);
+      if (save_tmp[0]) { sceIoRemove(save_tmp); video_path[0] = 0; }
       // (the file is on the card now: its bytes needn't wait in memory)
       free(d.a); d.a = NULL;
       free(d.b); d.b = NULL;
@@ -591,7 +613,6 @@ static void *sample_main(void *arg) {
         // (played as it comes: the drawing thread opens the player once the first part is here,
         //  stream_ready; two files in turn, so the one before can still be closing)
         // (the one just before, swiped back to: still whole on the card in its slot, played from there)
-        static int slot_post[2] = {-1, -1}; static unsigned slot_gen[2];
         int reuse = -1;
         for (int s2 = 0; s2 < 2; s2++) if (slot_post[s2] == p && slot_gen[s2] == (unsigned)gen && dl_grow[s2].done && !dl_grow[s2].failed) reuse = s2;
         if (reuse >= 0) {
@@ -707,6 +728,7 @@ static void web_clear_textures(void) {
 static void web_search(void) {
   pthread_mutex_lock(&wmx);
   wgen++;
+  list_cancel = 1;
   for (int k = 0; k < nwdone; k++) { free(wdone[k].px.rgba); free(wdone[k].a); free(wdone[k].b); }
   nwdone = 0;
   nwwant = 0;
@@ -2062,7 +2084,7 @@ static void draw_sites_sheet(void) {
   if (seen_tab != sites_tab) { dir = seen_tab < 0 ? 0 : sites_tab > seen_tab ? 1 : -1; seen_tab = sites_tab; tab_at = frame_no; }
   float tu = fminf(1, (frame_no - tab_at) / 14.0f);
   int tab_slide = (int)((1 - (1 - (1 - tu) * (1 - tu) * (1 - tu))) * 90 * dir);
-  // (opening: the dim comes in and the window rises into place, a little springy)
+  // (opening: the dim comes in and the window drops down into place, a little springy)
   static unsigned sh_last, sh_open;
   if (frame_no - sh_last > 2) sh_open = frame_no;
   sh_last = frame_no;
@@ -2074,7 +2096,7 @@ static void draw_sites_sheet(void) {
   int rows = (n + cols - 1) / cols, vis_rows = rows < 2 ? rows : 2;
   int pages = (rows + 1) / 2; // (pages of two rows: twelve tiles a page, every tab alike)
   int ww = cols * tw + (cols - 1) * gap + 36, wh = vis_rows * th + (vis_rows - 1) * gap + 100;
-  int wx = (W - ww) / 2, wy = 18 + (int)((1 - spring) * 60);
+  int wx = (W - ww) / 2, wy = 18 - (int)((1 - spring) * 90); // (it drops in from the top)
   rrect(wx, wy + 4, ww, wh, 26, RGBA(0, 0, 0, 90));
   rrect(wx, wy, ww, wh, 26, SURF);
   // the tabs: a segmented control

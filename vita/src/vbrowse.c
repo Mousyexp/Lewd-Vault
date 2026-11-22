@@ -274,6 +274,7 @@ static void *vb_main(void *arg) {
       int st = lv_http_get(h, u, &b, &n, 8u << 20, NULL, NULL, &err);
       int count = 0;
       LvPost *got = st == 200 ? lv_booru_parse(&sc, (const char *)b, n, ratings, &count) : NULL;
+      LOG("vb row %d: %s -> %d, %u bytes, %d posts\n", job, u, st, (unsigned)n, count);
       if (got && lv_site_checks_items(&sc)) {
         // (an episode site: each one's page is read first, a few at a time, and those that pass are
         //  shown as they come: the row's first cards after a few pages, not after all of them)
@@ -289,6 +290,7 @@ static void *vb_main(void *arg) {
           if (!part) continue;
           memcpy(part, got + pos, m * sizeof *part);
           int ok = check_items(h, &sc, part, m, &vb_gen, gen), kept = 0;
+          LOG("vb row %d: checked %d of %d\n", job, ok, m);
           for (int k = 0; k < ok; k++) {
             if (lv_post_is_video(&part[k]) && shown_n + kept < VB_PER) part[kept++] = part[k];
             else { LvPost *q = &part[k]; free(q->preview); free(q->sample); free(q->file); free(q->page); free(q->source); free(q->tags); }
@@ -539,6 +541,20 @@ static void vb_title_of(const LvPost *p, char *out, size_t cap) {
   size_t j = 0;
   for (size_t i = ps; i < pl && j < cap - 1 && pg[i] != '?' && pg[i] != '.'; i++) out[j++] = pg[i] == '-' || pg[i] == '_' ? ' ' : pg[i];
   out[j] = 0;
+  // (an address like /posts/123 or /video/123 names no title: then its first few tags, spelled out)
+  static const char *const GENERIC[] = {"posts", "post", "video", "videos", "watch", "view", "show", "play", "index", "index php", "page", "embed", "v", "p", NULL};
+  for (int k = 0; GENERIC[k]; k++) if (!strcasecmp(out, GENERIC[k])) { out[0] = 0; break; }
+  if (!out[0] && p && p->tags) {
+    char tg[400]; snprintf(tg, sizeof tg, "%s", p->tags);
+    int n = 0; j = 0;
+    for (char *t = strtok(tg, " "); t && n < 3; t = strtok(NULL, " ")) {
+      if (strlen(t) < 3 || strchr(t, ':') || strstr(t, "video") || strstr(t, "sound") || strstr(t, "animated") || strstr(t, "res")) continue;
+      for (const char *c = j ? ", " : ""; *c && j < cap - 1; c++) out[j++] = *c;
+      for (const char *c = t; *c && j < cap - 1; c++) out[j++] = *c == '_' ? ' ' : *c;
+      n++;
+    }
+    out[j] = 0;
+  }
   if (out[0]) out[0] = (char)toupper((unsigned char)out[0]);
 }
 static int vb_all_row = -1; static float vb_all_scroll; static unsigned vb_all_at; // (All: the row's window, over the page)
@@ -567,7 +583,7 @@ static void draw_videos(void) {
   // where the view is: the chosen row in sight (the banner scrolls away as rows go down)
   int vis = 0; // (the chosen row's place among those shown)
   for (int r = 0; r < vb_row && r < VB_ROWS; r++) vis += vb_row_shown(r);
-  float target = vb_row == 0 ? 0 : HERO_H - 94 + (vis - 1) * (VB_CH + 52);
+  float target = vb_row == 0 ? 0 : HERO_H - 4 + vis * (VB_CH + 52) - 196 - 6; // (the chosen row just under the banner)
   int nshown_rows = 0;
   for (int r = 0; r < VB_ROWS; r++) nshown_rows += vb_row_shown(r);
   float vmax = HERO_H - 4 + (nshown_rows + (nup ? 1 : 0)) * (VB_CH + 52) - (H - BAR) + 20;
@@ -583,7 +599,10 @@ static void draw_videos(void) {
       if (vb_y < 60) best = 0;
       vb_row = best; }
   } else vb_y += (target - vb_y) * ease(0.22f);
-  float y0 = -vb_y;
+  // (the banner stays at the top: as the rows go up it shrinks to HERO_MIN, then they pass under it)
+  const float HERO_MIN = 196;
+  float hh = HERO_H - fminf(fmaxf(vb_y, 0), HERO_H - HERO_MIN), shrink = HERO_H - hh;
+  float y0 = 0;
   // ---- the top: the chosen video, its picture over the right half (its own shape, not stretched),
   //      fading into the page at its left; its name big, its tags as glass chips, Play ----
   VRow *r0 = &vrows[0];
@@ -592,47 +611,6 @@ static void draw_videos(void) {
   if (hk >= hr->n) hk = hr->n ? hr->n - 1 : 0;
   int hrow = hr == r0 ? 0 : vb_row;
   (void)vb_hero_k; (void)vb_hero_at; (void)vb_hero_x;
-  if (y0 + HERO_H > 0) {
-    vita2d_texture *bt = hr == r0 && hk == 0 && vb_hero ? vb_hero : (hr->n && hk < VB_PER ? hr->tex[hk] : NULL);
-    const float px0 = W * 0.42f, pw = W - px0;
-    if (bt) draw_cover(bt, px0, y0, pw, HERO_H, RGBA(255, 255, 255, 255));
-    else rrect(px0, y0, pw, HERO_H, 0, RGBA(30, 20, 30, 255));
-    grad(px0, y0, 220, HERO_H, RGBA(8, 6, 10, 255), 255, 0, 1);       // (its left edge fading into the page)
-    grad(px0, y0 + HERO_H - 90, pw, 90, RGBA(8, 6, 10, 255), 0, 255, 0); // (and its foot)
-    if (hr->n) { // (no source name over it: the source button says it already)
-      char tt[160];
-      vb_title_of(&hr->p[hk], tt, sizeof tt);
-      if (!tt[0]) snprintf(tt, sizeof tt, "%s", VROWS[hrow].title);
-      for (int o = 0; o < 3; o++) text_fit(30 + (o == 1), y0 + 110 + (o == 2), TEXT, 30, tt, (int)px0 - 30);
-      // its tags: glass chips, two lines at most
-      { char tg[600]; snprintf(tg, sizeof tg, "%s", hr->p[hk].tags ? hr->p[hk].tags : "");
-        int cx = 30, cy = (int)y0 + 130, lines = 0;
-        for (char *t = strtok(tg, " "); t && lines < 2; t = strtok(NULL, " ")) {
-          for (char *c = t; *c; c++) if (*c == '_') *c = ' ';
-          if (strcasestr(tt, t) || strlen(t) < 3) continue; // (a word of its name isn't a tag)
-          int cw = text_w(12, t) + 20;
-          if (cw > 170) continue;
-          if (cx + cw > px0 + 40) { cx = 30; cy += 30; lines++; if (lines >= 2) break; }
-          rrect(cx, cy, cw, 24, 12, with_alpha(TEXT, 26));
-          rrect(cx + 1, cy + 1, cw - 2, 10, 5, with_alpha(TEXT, 14));
-          text(cx + 10, cy + 17, DIM, 12, t);
-          cx += cw + 6;
-        } }
-      // Play: a pink glass button, a glow beating behind it like a heart; its triangle centred
-      float pcx = 60, pcy = y0 + 222, pr = 24;
-      int pressed = in.touching && hypotf(in.tx - pcx, in.ty - pcy) < pr + 6;
-      float bt2 = fmodf(frame_no / 60.0f, 1.1f), beat = bt2 < 0.12f ? sinf(bt2 / 0.12f * 3.14159f) : bt2 > 0.22f && bt2 < 0.34f ? 0.7f * sinf((bt2 - 0.22f) / 0.12f * 3.14159f) : 0;
-      for (int g = 3; g >= 1; g--) circle(pcx, pcy, pr + g * 5 + beat * 6, with_alpha(ACC, (int)((18 + 40 * beat) / g)));
-      circle(pcx, pcy + 2, pr * (pressed ? 0.9f : 1), RGBA(0, 0, 0, 90));
-      circle(pcx, pcy, pr * (pressed ? 0.9f : 1), ACC);
-      circle(pcx, pcy - pr * 0.3f, pr * 0.62f, RGBA(255, 255, 255, 50));
-      vc_tri(pcx - 3, pcy, 12, RGBA(20, 12, 16, 255));
-      text(pcx + 40, pcy + 7, TEXT, 19, "Play");
-      if (hit((int)(pcx - pr - 4), (int)(pcy - pr - 4), (int)(pr * 2 + 80), (int)(pr * 2 + 8))) { sfx(SFX_SELECT); vb_play(hrow, hk); in = vb_keep; return; }
-    } else if (r0->state == 3) text_fit(30, y0 + 134, ACC2, 16, r0->err, 600);
-    else if (site >= 0 && LV_SITES[site].needs_key && !wkeys[site][0]) text_fit(30, y0 + 134, ACC2, 16, "Needs your account's API key: the Browser's Filter → API key", 600);
-    else spinner(60, y0 + 140, 16);
-  }
   // ---- the rows ----
   int ry = (int)y0 + HERO_H - 4;
   for (int r = 0; r < VB_ROWS; r++) {
@@ -644,13 +622,13 @@ static void draw_videos(void) {
     if (ry > H || ry + VB_CH + 40 < 0) continue;
     text(30, ry + 20, r == vb_row ? TEXT : DIM, 18, VROWS[r].title);
     if (row->state == 3) { text(30, ry + 60, FAINT, 14, row->err[0] ? row->err : "Nothing here"); continue; }
-    if (row->state < 2) { for (int k = 0; k < 5; k++) skeleton(30 + k * (VB_CW + 12), ry + 32, VB_CW, VB_CH, 10); spinner(30 + VB_CW / 2, ry + 32 + VB_CH / 2, 12); continue; }
+    if (row->state < 2) { for (int k = 0; k < 5; k++) skeleton(30 + k * (VB_CW + 12), ry + 32, VB_CW, VB_CH, 10); spinner(30 + VB_CW / 2, ry + 32 + VB_CH / 2, 12); if (r == vb_row && !in.touching) focus_ring(30, ry + 32, VB_CW, VB_CH); continue; } // (the ring on its first while it loads)
     if (!row->n) { text(30, ry + 60, FAINT, 14, "No videos here"); continue; }
     if (vb_col[r] > (row->n < VB_SHOW ? row->n : VB_SHOW)) vb_col[r] = row->n < VB_SHOW ? row->n : VB_SHOW; // (a remembered place past a shorter list; its last place is All)
     // (the chosen card kept in sight)
     float want = vb_col[r] * (VB_CW + 12) - (W - 60 - VB_CW) / 2.0f;
     if (want < 0) want = 0;
-    int held = in.touching && vb_lock == 1 && in.down_y > ry && in.down_y < ry + VB_CH + 40;
+    int held = in.touching && vb_lock == 1 && in.down_y > fmaxf(ry, hh) && in.down_y < ry + VB_CH + 40;
     // (dragged across: it follows the finger; let go, it carries on and slows by itself, no snapping
     //  back; the card nearest the middle becomes the chosen one as it goes)
     static float vb_xv[VB_ROWS + 1];
@@ -685,7 +663,7 @@ static void draw_videos(void) {
       rrect(x + VB_CW - text_w(11, e) - 18, cy + 8, text_w(11, e) + 12, 18, 9, RGBA(0, 0, 0, 150));
       text(x + VB_CW - text_w(11, e) - 12, cy + 21, TEXT, 11, e);
       if (is_saved(&row->p[k])) { circle(x + VB_CW - 16, cy + VB_CH - 16, 10, ACC); text_center(x + VB_CW - 16, cy + VB_CH - 11, RGBA(20, 12, 16, 255), 12, "✓"); }
-      if (hit((int)x, (int)cy, VB_CW, VB_CH) && in.tap_y < H - BAR) { vb_row = r; vb_col[r] = k; sfx(SFX_SELECT); vb_play(r, k); return; }
+      if (hit((int)x, (int)cy, VB_CW, VB_CH) && in.tap_y < H - BAR && in.tap_y > hh) { vb_row = r; vb_col[r] = k; sfx(SFX_SELECT); vb_play(r, k); return; }
     }
     // the All tile at the end: the whole row as a grid in the Browser
     {
@@ -699,7 +677,7 @@ static void draw_videos(void) {
         text_center((int)(x + VB_CW / 2), (int)cy + 80, TEXT, 16, "All");
         text_center((int)(x + VB_CW / 2), (int)cy + 98, FAINT, 11, VROWS[r].title);
         if (on) focus_ring(x, cy, VB_CW, VB_CH);
-        if (hit((int)x, (int)cy, VB_CW, VB_CH) && in.tap_y < H - BAR) { vb_row = r; vb_col[r] = k; sfx(SFX_OPEN); vb_all_row = r; vb_all_scroll = 0; vb_all_at = frame_no; }
+        if (hit((int)x, (int)cy, VB_CW, VB_CH) && in.tap_y < H - BAR && in.tap_y > hh) { vb_row = r; vb_col[r] = k; sfx(SFX_OPEN); vb_all_row = r; vb_all_scroll = 0; vb_all_at = frame_no; }
       }
     }
     #undef ry
@@ -728,9 +706,60 @@ static void draw_videos(void) {
         if (len > 0) { char l[16]; snprintf(l, sizeof l, "%d:%02d", len / 60, len % 60); int lw = text_w(11, l) + 12; rrect(x + VB_CW - lw - 6, cy + 8, lw, 18, 9, RGBA(0, 0, 0, 160)); text(x + VB_CW - lw, cy + 21, TEXT, 11, l); }
         heart(x + 16, cy + 18, 6, ACC);
         if (on) focus_ring(x, cy, VB_CW, VB_CH);
-        if (hit((int)x, (int)cy, VB_CW, VB_CH) && in.tap_y < H - BAR) { vb_row = r; vb_col[r] = k; sfx(SFX_SELECT); upnext_play(k); return; }
+        if (hit((int)x, (int)cy, VB_CW, VB_CH) && in.tap_y < H - BAR && in.tap_y > hh) { vb_row = r; vb_col[r] = k; sfx(SFX_SELECT); upnext_play(k); return; }
       }
     }
+  }
+  {
+    vita2d_draw_rectangle(0, 0, W, hh, RGBA(8, 6, 10, 255)); // (the rows pass under it)
+    vita2d_texture *bt = hr == r0 && hk == 0 && vb_hero ? vb_hero : (hr->n && hk < VB_PER ? hr->tex[hk] : NULL);
+    const float px0 = W * 0.42f, pw = W - px0;
+    if (bt) draw_cover(bt, px0, y0, pw, hh, RGBA(255, 255, 255, 255));
+    else rrect(px0, y0, pw, hh, 0, RGBA(30, 20, 30, 255));
+    grad(px0, y0, 220, hh, RGBA(8, 6, 10, 255), 255, 0, 1);       // (its left edge fading into the page)
+    grad(0, y0 + hh - 60, W, 60, RGBA(8, 6, 10, 255), 0, 255, 0); // (and its foot)
+    if (hr->n) { // (no source name over it: the source button says it already)
+      char tt[160];
+      vb_title_of(&hr->p[hk], tt, sizeof tt);
+      if (!tt[0]) snprintf(tt, sizeof tt, "%s", VROWS[hrow].title);
+      // (its name on up to two lines: an episode's number is at its end, and cut off it looked the same as the one before)
+      { int maxw = (int)px0 - 30, fs = 27; char l1[160]; const char *rest = NULL;
+        if (text_w(fs, tt) <= maxw) snprintf(l1, sizeof l1, "%s", tt);
+        else { size_t cut = 0; for (size_t i = 0; tt[i]; i++) if (tt[i] == ' ') { char tr[160]; snprintf(tr, sizeof tr, "%.*s", (int)i, tt); if (text_w(fs, tr) > maxw) break; cut = i; }
+               if (!cut) cut = strlen(tt); snprintf(l1, sizeof l1, "%.*s", (int)cut, tt); rest = tt[cut] ? tt + cut + 1 : NULL; }
+        float ty = y0 + 110 - shrink * 0.55f - (rest ? 26 : 0);
+        for (int o = 0; o < 3; o++) {
+          text_fit(30 + (o == 1), ty + (o == 2), TEXT, fs, l1, maxw);
+          if (rest) text_fit(30 + (o == 1), ty + 32 + (o == 2), TEXT, fs, rest, maxw);
+        } }
+      // its tags: glass chips, two lines at most
+      { char tg[600]; snprintf(tg, sizeof tg, "%s", hr->p[hk].tags ? hr->p[hk].tags : "");
+        int cx = 30, cy = (int)(y0 + 130 - shrink * 0.55f), lines = 0, maxl = shrink > 40 ? 1 : 2;
+        for (char *t = strtok(tg, " "); t && lines < maxl; t = strtok(NULL, " ")) {
+          for (char *c = t; *c; c++) if (*c == '_') *c = ' ';
+          if (strcasestr(tt, t) || strlen(t) < 3) continue; // (a word of its name isn't a tag)
+          int cw = text_w(12, t) + 20;
+          if (cw > 170) continue;
+          if (cx + cw > px0 + 40) { cx = 30; cy += 30; lines++; if (lines >= maxl) break; }
+          rrect(cx, cy, cw, 24, 12, with_alpha(TEXT, 26));
+          rrect(cx + 1, cy + 1, cw - 2, 10, 5, with_alpha(TEXT, 14));
+          text(cx + 10, cy + 17, DIM, 12, t);
+          cx += cw + 6;
+        } }
+      // Play: a pink glass button, a glow beating behind it like a heart; its triangle centred
+      float pcx = 60, pcy = y0 + 222 - shrink, pr = 24;
+      int pressed = in.touching && hypotf(in.tx - pcx, in.ty - pcy) < pr + 6;
+      float br = 0.5f - 0.5f * cosf(frame_no * 6.2832f / 180.0f); // (a slow breath, three seconds)
+      for (int g = 4; g >= 1; g--) circle(pcx, pcy, pr + g * 4, with_alpha(ACC, (int)((10 + 10 * br) / g)));
+      circle(pcx, pcy + 2, pr * (pressed ? 0.9f : 1), RGBA(0, 0, 0, 90));
+      circle(pcx, pcy, pr * (pressed ? 0.9f : 1), ACC);
+      circle(pcx, pcy - pr * 0.3f, pr * 0.62f, RGBA(255, 255, 255, 50));
+      vc_tri(pcx - 3, pcy, 12, RGBA(20, 12, 16, 255));
+      text(pcx + 40, pcy + 7, TEXT, 19, "Play");
+      if (hit((int)(pcx - pr - 4), (int)(pcy - pr - 4), (int)(pr * 2 + 80), (int)(pr * 2 + 8))) { sfx(SFX_SELECT); vb_play(hrow, hk); in = vb_keep; return; }
+    } else if (r0->state == 3) text_fit(30, y0 + 134, ACC2, 16, r0->err, 600);
+    else if (site >= 0 && LV_SITES[site].needs_key && !wkeys[site][0]) text_fit(30, y0 + 134, ACC2, 16, "Needs your account's API key: the Browser's Filter → API key", 600);
+    else spinner(60, y0 + 140, 16);
   }
   // ---- the top: back, the source (its tab of the site switcher) ----
   grad(0, 0, W, 70, RGBA(8, 6, 10, 255), 210, 0, 0);

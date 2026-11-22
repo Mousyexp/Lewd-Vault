@@ -756,15 +756,24 @@ static void rm_tree(const char *dir, int depth) {
   }
   closedir(d);
 }
+static pthread_mutex_t vmx; // (defined below: the vault's lock)
 static void *store_main(void *arg) {
   (void)arg;
+  // (the files' paths copied first, holding the vault: a save on another thread can move its list
+  //  of items in memory meanwhile; read from here it was a crash)
+  pthread_mutex_lock(&vmx);
   int n = vault.n;
+  char **paths = calloc(n + 1, sizeof *paths);
+  for (int i = 0; paths && i < n; i++) paths[i] = vault.items[i].path ? strdup(vault.items[i].path) : NULL;
+  pthread_mutex_unlock(&vmx);
   int64_t *b = calloc(n + 1, sizeof *b);
   int64_t sum = 0;
-  for (int i = 0; b && i < n && i < vault.n; i++) {
+  for (int i = 0; b && paths && i < n; i++) {
     struct stat st;
-    if (vault.items[i].path && stat(vault.items[i].path, &st) == 0) { b[i] = st.st_size; sum += st.st_size; }
+    if (paths[i] && stat(paths[i], &st) == 0) { b[i] = st.st_size; sum += st.st_size; }
   }
+  for (int i = 0; paths && i < n; i++) free(paths[i]);
+  free(paths);
   store_data = dir_bytes(DATA, 0);
   store_vault = sum + (vault.root[0] ? 0 : 0);
   static pthread_mutex_t sm = PTHREAD_MUTEX_INITIALIZER;
@@ -2539,6 +2548,14 @@ static void wifi_mark(float cx, float cy, unsigned c) {
 }
 // (the connection as a small pressed-in button: dark inside with its shadow at the top and a lit lip
 //  below, the wifi mark green online and red not; a tap says which)
+// a small bin: its lid and handle, its body narrowing to the foot, three grooves
+static void bin_mark(float cx, float cy, unsigned c) {
+  rrect(cx - 3, cy - 10, 6, 3, 1, c);              // (the handle)
+  rrect(cx - 8, cy - 8, 16, 2.5f, 1, c);          // (the lid)
+  for (int k = 0; k < 13; k++) { float inset = k * 0.18f; vita2d_draw_rectangle(cx - 6.5f + inset, cy - 4 + k, 13 - 2 * inset, 1, c); }
+  unsigned g = RGBA(20, 12, 16, 200);
+  for (int k = -1; k <= 1; k++) vita2d_draw_rectangle(cx + k * 3.5f - 0.5f, cy - 2, 1.2f, 9, g);
+}
 static int online_inset(int right) {
   int on = online_now(), d = 36, x = right - d, y = HDR_Y + 10;
   unsigned c = on ? RGBA(90, 214, 120, 255) : RGBA(240, 84, 84, 255);
@@ -2997,6 +3014,7 @@ static void draw_library(void) {
   vita2d_draw_rectangle(0, hy, W, TOP_FULL, with_alpha(BG, 250));
   int sx = W - 12;
   int title_end;
+  int cat_at = -1;
   if (book_inside) { // (in a book: back to the shelf, and its name)
     rrect(10, hy + 8, 48, 40, 20, SURF2);
     icon("back", 34, hy + 28, TEXT);
@@ -3005,15 +3023,7 @@ static void draw_library(void) {
   } else {
     title_end = 10 + draw_modes(10, hy + 8) + 10;
     // the category: one button, its list opening under it
-    char cl[80];
-    snprintf(cl, sizeof cl, "%s", smart ? SMART[smart - 1] : cat < 0 ? "All categories" : vault.cats[cat]);
-    int cw = text_w(16, cl) + 44;
-    if (cw > 180) cw = 180;
-    rrect(title_end, hy + 8, cw, 40, 20, cat < 0 && !smart ? SURF2 : with_alpha(ACC, 110));
-    text_fit(title_end + 16, hy + 34, TEXT, 16, cl, cw - 40);
-    icon("chev_r", title_end + cw - 18, hy + 28, DIM);
-    if (hit(title_end, hy + 4, cw, 48)) { sfx(SFX_OPEN); lsheet = LS_CATS; lsheet_sel = cat + 1; cats_x = title_end; }
-    title_end += cw + 10;
+    cat_at = title_end; // (drawn once the right side is laid out: as wide as the room left, up to 180)
   }
   char kl[64];
   int nf = (cfg.kind != 0) + (lf.nsfw_max != 0) + (lf.stars_min != 0) + (lf.album != 0) + (lf.coll[0] != 0 && !book_inside);
@@ -3051,6 +3061,28 @@ static void draw_library(void) {
     icon("grid", x + d / 2, y + d / 2, ACC);
     if (hit(x - 4, y - 6, d + 8, d + 12) && !book_shelf) { lf.size = (lf.size + 1) % 3; relayout(); sfx(SFX_TOGGLE); say(SIZES[lf.size]); }
     sx -= d + 8;
+  }
+  { // (Clean up: a bin, the same pressed-in look, beside the card size)
+    int d = 36, x = sx - d, y = HDR_Y + 10;
+    rrect_round(x - 1, y - 1, d + 2, d + 2, d / 2 + 1, with_alpha(RGBA(0, 0, 0, 255), 80));
+    rrect_round(x, y, d, d, d / 2, mix_col(SURF2, RGBA(0, 0, 0, 255), 0.45f));
+    rrect_round(x + 1, y + 1, d - 2, d * 0.45f, d * 0.22f, RGBA(0, 0, 0, 70));
+    circle(x + d / 2, y + d / 2, 13, with_alpha(ACC, 30));
+    bin_mark(x + d / 2.0f, y + d / 2.0f, ACC);
+    if (hit(x - 4, y - 6, d + 8, d + 12) && !book_inside) { sfx(SFX_OPEN); clean_open(); in = saved_in; in.pressed = 0; in.tap = 0; return; }
+    sx -= d + 8;
+  }
+  if (cat_at >= 0) { // the category: one button, its list opening under it
+    char cl[80];
+    snprintf(cl, sizeof cl, "%s", smart ? SMART[smart - 1] : cat < 0 ? "All categories" : vault.cats[cat]);
+    int cw = text_w(16, cl) + 44, room = sx - cat_at - 6;
+    if (cw > 180) cw = 180;
+    if (cw > room) cw = room < 64 ? 64 : room;
+    rrect(cat_at, hy + 8, cw, 40, 20, cat < 0 && !smart ? SURF2 : with_alpha(ACC, 110));
+    text_fit(cat_at + 16, hy + 34, TEXT, 16, cl, cw - 40);
+    icon("chev_r", cat_at + cw - 18, hy + 28, DIM);
+    if (hit(cat_at, hy + 4, cw, 48)) { sfx(SFX_OPEN); lsheet = LS_CATS; lsheet_sel = cat + 1; cats_x = cat_at; }
+    title_end = cat_at + cw + 10;
   }
   if (query[0] && sx - title_end > 90) {
     char q[160];
@@ -3441,23 +3473,31 @@ static void vctl_draw(const LvVideo *v, int a, float have) {
   // the middle: back ten, play/pause, on ten (bare, white, as the reference: no discs behind)
   // (a soft dark shadow under each, so they read on a light picture too)
   unsigned sh = RGBA(0, 0, 0, 110 * a / 240);
-  for (int k = -1; k <= 1; k++) { circle(W / 2 + k * 140, VC_BTN_Y + 2, k ? 30 : 40, RGBA(0, 0, 0, 55 * a / 240)); circle(W / 2 + k * 140, VC_BTN_Y + 2, k ? 22 : 30, RGBA(0, 0, 0, 45 * a / 240)); }
-  if (lv_video_paused(v)) { vc_tri(W / 2 - 2, VC_BTN_Y + 2, 26, sh); vc_tri(W / 2 - 4, VC_BTN_Y, 26, ink); } // (centred: the triangle's middle on the button's)
-  else { rrect(W / 2 - 15, VC_BTN_Y - 20, 11, 44, 3, sh); rrect(W / 2 + 6, VC_BTN_Y - 20, 11, 44, 3, sh); rrect(W / 2 - 16, VC_BTN_Y - 22, 11, 44, 3, ink); rrect(W / 2 + 5, VC_BTN_Y - 22, 11, 44, 3, ink); }
-  vc_skip_icon(W / 2 - 139, VC_BTN_Y + 2, -1, sh); vc_skip_icon(W / 2 + 141, VC_BTN_Y + 2, 1, sh);
+  // (each icon's shadow is the icon itself, faint, drawn a little around and below it: a soft edge
+  //  that follows its shape, not a disc behind it)
+  static const float sho[][2] = {{-2, 1}, {2, 1}, {0, -1}, {0, 3}, {-1, 2}, {1, 2}};
+  sh = RGBA(0, 0, 0, 40 * a / 240);
+  for (int o = 0; o < 6; o++) {
+    float ox = sho[o][0], oy = sho[o][1];
+    if (lv_video_paused(v)) vc_tri(W / 2 - 4 + ox, VC_BTN_Y + oy, 26, sh);
+    else { rrect(W / 2 - 16 + ox, VC_BTN_Y - 22 + oy, 11, 44, 3, sh); rrect(W / 2 + 5 + ox, VC_BTN_Y - 22 + oy, 11, 44, 3, sh); }
+    vc_skip_icon(W / 2 - 140 + ox, VC_BTN_Y + oy, -1, sh); vc_skip_icon(W / 2 + 140 + ox, VC_BTN_Y + oy, 1, sh);
+  }
+  if (lv_video_paused(v)) vc_tri(W / 2 - 4, VC_BTN_Y, 26, ink); // (centred: the triangle's middle on the button's)
+  else { rrect(W / 2 - 16, VC_BTN_Y - 22, 11, 44, 3, ink); rrect(W / 2 + 5, VC_BTN_Y - 22, 11, 44, 3, ink); }
   vc_skip_icon(W / 2 - 140, VC_BTN_Y, -1, ink);
   vc_skip_icon(W / 2 + 140, VC_BTN_Y, 1, ink);
   // the volume, top right: a bar and a speaker
   { float vx = W - 200, vy = 88, vw = 140, fv = fminf(1, cfg.volume / 100.0f);
     static float vgrow;
-    int vtouch = in.touching && in.down_y > 66 && in.down_y < 110 && in.down_x > W - 230;
+    int vtouch = in.touching && in.down_y > 62 && in.down_y < 116 && in.down_x > W - 236;
     if (vtouch) { fv = fminf(1, fmaxf(0, (in.tx - vx) / vw)); cfg.volume = (int)(fv * 100 + 0.5f); lv_video_set_volume((LvVideo *)v, cfg.volume * 32768 / 100); }
     vgrow += ((vtouch ? 1.0f : 0.0f) - vgrow) * ease(0.3f);
-    float vt = 6 + vgrow * 8;
-    unsigned heat = mix_col(mix_col(ACC, TEXT, 0.35f), RGBA(255, 150, 60, 255), fv * fv); // (louder: warmer, towards orange)
+    float vt = 12 + vgrow * 14;
+    unsigned heat = mix_col(ACC, TEXT, 0.25f); // (the same pink as the time bar's played part)
     rrect(vx, vy - vt / 2, vw, vt, vt / 2, with_alpha(TEXT, a / 3));
     rrect(vx, vy - vt / 2, fmaxf(vt, vw * fv), vt, vt / 2, with_alpha(heat, a));
-    if (vgrow > 0.05f) circle(vx + vw * fv, vy, 6 + vgrow * 4, with_alpha(TEXT, a));
+    circle(vx + vw * fv, vy, 7 + vgrow * 9, with_alpha(TEXT, a));
     float sx = vx + vw + 22; // (the speaker: its box, its cone, two waves)
     rrect(sx - 8, vy - 4, 5, 8, 1, ink);
     for (int k = 0; k < 6; k++) vita2d_draw_rectangle(sx - 3 + k, vy - 4 - k, 1, 8 + k * 2, ink);
@@ -3473,13 +3513,14 @@ static void vctl_draw(const LvVideo *v, int a, float have) {
   }
   // the bar: thick, the whole, what's here, what's played; under a finger it grows and follows it
   const float bx = 28, bw = W - 56;
-  float th = vc_scrub ? 14 : 8, by = VC_BAR_Y - th / 2;
+  static float vc_grow; vc_grow += ((vc_scrub ? 1.0f : 0.0f) - vc_grow) * ease(0.3f);
+  float th = 14 + vc_grow * 16, by = VC_BAR_Y - th / 2;
   float shown_f = vc_scrub ? vc_scrub_f : f;
   rrect(bx, by, bw, th, th / 2, with_alpha(TEXT, a / 4));
   if (have >= 0) rrect(bx, by, bw * fminf(1, have), th, th / 2, with_alpha(TEXT, a * 2 / 5));
   rrect(bx, by, fmaxf(th, bw * shown_f), th, th / 2, with_alpha(mix_col(ACC, TEXT, 0.25f), a)); // (played: a touch of pink)
   rrect(bx + 2, by + 1, fmaxf(th, bw * shown_f) - 4, th * 0.4f, th * 0.2f, with_alpha(TEXT, a / 4));
-  circle(bx + bw * shown_f, VC_BAR_Y, vc_scrub ? 11 : 6, ink);
+  circle(bx + bw * shown_f, VC_BAR_Y, 9 + vc_grow * 10, ink);
   char t1[16], t2[20];
   uint64_t at = vc_scrub ? (uint64_t)(d * vc_scrub_f) : q;
   fmt_time(at, t1, sizeof t1);
@@ -3488,13 +3529,13 @@ static void vctl_draw(const LvVideo *v, int a, float have) {
   text(bx, VC_BAR_Y + 30, with_alpha(TEXT, a * 200 / 255), 14, t1);
   text(bx + bw - text_w(14, t2), VC_BAR_Y + 30, with_alpha(TEXT, a * 200 / 255), 14, t2);
   // (dragging the bar: the place follows the finger; let go, it plays from there)
-  if (in.touching && in.down_y > VC_BAR_Y - 26 && in.down_y < VC_BAR_Y + 30 && d) { vc_scrub = 1; vc_scrub_f = fminf(1, fmaxf(0, (in.tx - bx) / bw)); }
+  if (in.touching && in.down_y > VC_BAR_Y - 34 && in.down_y < VC_BAR_Y + 34 && d) { vc_scrub = 1; vc_scrub_f = fminf(1, fmaxf(0, (in.tx - bx) / bw)); }
   else if (vc_scrub) { vc_scrub = 0; lv_video_seek((LvVideo *)v, (int64_t)(d * vc_scrub_f)); }
 }
 // (a touch that began on the bar or the volume while the controls show: theirs, nothing else moves)
 static int vctl_owns_touch(int shown) {
   if (!in.touching || !shown) return 0;
-  return (in.down_y > VC_BAR_Y - 26 && in.down_y < VC_BAR_Y + 30) || (in.down_y > 66 && in.down_y < 110 && in.down_x > W - 230);
+  return (in.down_y > VC_BAR_Y - 34 && in.down_y < VC_BAR_Y + 34) || (in.down_y > 62 && in.down_y < 116 && in.down_x > W - 236);
 }
 // A tap while the controls show: 1 if it was theirs (play/pause, a skip, the bar, the volume, download)
 static int vctl_tap(LvVideo *v, int x, int y, int64_t *seek_to) {
@@ -3502,8 +3543,8 @@ static int vctl_tap(LvVideo *v, int x, int y, int64_t *seek_to) {
   if (hypotf(x - W / 2, y - VC_BTN_Y) < 48) { lv_video_pause(v, !lv_video_paused(v)); sfx(SFX_TOGGLE); return 1; }
   for (int s = -1; s <= 1; s += 2)
     if (hypotf(x - (W / 2 + s * 140), y - VC_BTN_Y) < 38) { *seek_to = (int64_t)lv_video_pos(v) + s * 10000; vflash(s); return 2; }
-  if (y > VC_BAR_Y - 26 && y < VC_BAR_Y + 30) return 2; // (the bar: dragged, handled as it's drawn)
-  if (y > 66 && y < 110 && x > W - 220) { // (the volume: where it's tapped)
+  if (y > VC_BAR_Y - 34 && y < VC_BAR_Y + 34) return 2; // (the bar: dragged, handled as it's drawn)
+  if (y > 62 && y < 116 && x > W - 236) { // (the volume: where it's tapped)
     float fv = fminf(1, fmaxf(0, (x - (W - 200)) / 140.0f));
     cfg.volume = (int)(fv * 100 + 0.5f); lv_video_set_volume(v, cfg.volume * 32768 / 100); sfx(SFX_TICK); return 1;
   }
@@ -3586,7 +3627,7 @@ static void open_viewer(int k, int show) {
   details = 0;
   details_y = 0;
   swipe_x = 0;
-  chrome_until = frame_no + 180;
+  chrome_until = frame_no + 360;
   screen = S_VIEWER;
   PT("open_viewer start");
   show_item(k);
@@ -3764,9 +3805,9 @@ static void draw_viewer(void) {
   // (just carried on: one glass box saying from where, its right part starting from the beginning)
   if (vid && resumed_at && frame_no - resumed_at < 300) {
     const char *l2 = "\u21ba From the start";
-    int w1 = text_w(15, resumed_msg) + 28, w2 = text_w(15, l2) + 28, bw = w1 + w2, bx = W / 2 - bw / 2, by = H - 150;
+    int w1 = text_w(15, resumed_msg) + 28, w2 = text_w(15, l2) + 28, bw = w1 + w2, bx = W / 2 - bw / 2, by = 76; // (at the top: clear of the strip and the bar)
     float u = fminf(1, (frame_no - resumed_at) / 12.0f), fade = frame_no - resumed_at > 270 ? (300 - (frame_no - resumed_at)) / 30.0f : 1;
-    by += (int)((1 - u) * 20);
+    by -= (int)((1 - u) * 20);
     glass(bx, by, bw, 42, 0);
     text(bx + 14, by + 27, with_alpha(TEXT, (int)(255 * fade)), 15, resumed_msg);
     vita2d_draw_rectangle(bx + w1, by + 8, 1, 26, with_alpha(TEXT, 60));
@@ -3790,7 +3831,7 @@ static void draw_viewer(void) {
   if (vo_open) { draw_view_options(); return; } // (Viewing: its panel over the picture)
   // --- touch: swipe for the next one, pinch to zoom, drag when zoomed, tap for the controls ---
   // (a finger that went down on the video's bar or its volume: theirs alone, the picture stays put)
-  if (vid && !vid_clip && vctl_owns_touch(frame_no < chrome_until || lv_video_paused(vid))) { swipe_x = 0; }
+  if (vid && !vid_clip && vctl_owns_touch(frame_no < chrome_until || lv_video_paused(vid))) { swipe_x = 0; chrome_until = frame_no + 360; } // (and the controls stay while it's held)
   else if (in.touching && details_y < 0.5f) {
     if (in.tcount >= 2) {
       static float pmx, pmy;
@@ -3824,8 +3865,8 @@ static void draw_viewer(void) {
   else if (in.dbl) { zoom = zoom > 1.5f ? 1 : 2.5f; float ox, oy; view_tap_off(lv_por, lv_aw, lv_ah, &ox, &oy); pan_x = ox * (zoom - 1); pan_y = oy * (zoom - 1); }
   else if (in.tap && details_y < 0.5f) {
     int chrome_on = frame_no < chrome_until || (vid && !vid_clip && lv_video_paused(vid));
-    if (vid && !vid_clip && chrome_on && vctl_tap(vid, in.tap_x, in.tap_y, &vseek)) chrome_until = frame_no + 180;
-    else if (frame_no < chrome_until && res_info_tap()) chrome_until = frame_no + 600; // (the controls stay while it's read)
+    if (vid && !vid_clip && chrome_on && vctl_tap(vid, in.tap_x, in.tap_y, &vseek)) chrome_until = frame_no + 360;
+    else if (frame_no < chrome_until && res_info_tap()) chrome_until = frame_no + 1200; // (the controls stay while it's read)
     else if (frame_no < chrome_until && fv_back_hit()) { sfx(SFX_BACK); close_viewer(); return; }
     else if (frame_no < chrome_until && in.tap_x > W - 70 && in.tap_y < 60) { details = 1; }
     else if (frame_no < chrome_until && view_btn_hit(is_video(it), W - 140)) { view_options_open(is_video(it)); return; }
@@ -3842,13 +3883,14 @@ static void draw_viewer(void) {
   }
   // --- buttons ---
   int playing_real = vid && !vid_clip;
-  unsigned next_b = details || playing_real ? SCE_CTRL_RTRIGGER : (SCE_CTRL_RIGHT | SCE_CTRL_RTRIGGER);
-  unsigned prev_b = details || playing_real ? SCE_CTRL_LTRIGGER : (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER);
+  (void)playing_real; // (←→ go to the next or previous one, a video too: skipping is on the screen's buttons)
+  unsigned next_b = details ? SCE_CTRL_RTRIGGER : (SCE_CTRL_RIGHT | SCE_CTRL_RTRIGGER);
+  unsigned prev_b = details ? SCE_CTRL_LTRIGGER : (SCE_CTRL_LEFT | SCE_CTRL_LTRIGGER);
   if ((in.pressed & next_b) && !(in.now & SCE_CTRL_LTRIGGER)) { sfx(SFX_TICK); show_item(ss.on && slideshow ? session_pick(vk) : vk + 1); return; }
   if ((in.pressed & prev_b) && !(in.now & SCE_CTRL_RTRIGGER)) { sfx(SFX_TICK); show_item(vk - 1); return; }
   if (in.pressed & SCE_CTRL_CIRCLE) { if (details) details = 0; else { close_viewer(); return; } }
   if (in.pressed & SCE_CTRL_TRIANGLE) { sfx(details ? SFX_CLOSE : SFX_OPEN); details = !details; }
-  if (in.pressed & SCE_CTRL_SQUARE) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); beat_at = frame_no ? frame_no : 1; chrome_until = frame_no + 120; }
+  if (in.pressed & SCE_CTRL_SQUARE) { sfx(SFX_DONE); char now[40]; now_iso(now, sizeof now); lv_liked(&vault, it, now); beat_at = frame_no ? frame_no : 1; chrome_until = frame_no + 240; }
   if (in.pressed & SCE_CTRL_START) {
     // (a slideshow goes through its own list: from here, if this one's in it, else from its start)
     if (!slideshow && !show_pool) { int was = shown[vk], k = show_pool_on(was); if (!nshown) { show_pool = 0; refilter(); say("No pictures, GIFs or short clips to show"); return; } if (shown[k] != was) { show_item(k); } else vk = k; }
@@ -3860,8 +3902,6 @@ static void draw_viewer(void) {
   }
   if (vid && !vid_clip && !details) {
     // ←→ ten seconds; ↑ faster (2×, 4×, back); ↓ the A-B loop (A here, B here, off)
-    if (in.pressed & SCE_CTRL_RIGHT) { vseek = (int64_t)lv_video_pos(vid) + 10000; vflash(1); chrome_until = frame_no + 120; }
-    if (in.pressed & SCE_CTRL_LEFT) { vseek = (int64_t)lv_video_pos(vid) - 10000; vflash(-1); chrome_until = frame_no + 120; }
     if (in.pressed & SCE_CTRL_UP) {
       int sp = lv_video_speed(vid) == 100 ? 200 : lv_video_speed(vid) == 200 ? 400 : 100;
       lv_video_set_speed(vid, sp);
@@ -3874,10 +3914,10 @@ static void draw_viewer(void) {
       if (ab_a < 0) { ab_a = pos; say("Loop: A set \u00b7 \u2193 again for B"); }
       else if (ab_b < 0 && pos > ab_a + 500) { ab_b = pos; lv_video_seek(vid, ab_a); say("Looping A to B \u00b7 \u2193 to stop"); }
       else { ab_a = ab_b = -1; say("Loop off"); }
-      chrome_until = frame_no + 180;
+      chrome_until = frame_no + 360;
     }
     // the left stick scrubs: further for a harder push
-    if (fabsf(in.lx) > 0.4f && frame_no % 6 == 0) { lv_video_seek(vid, (int64_t)lv_video_pos(vid) + (int64_t)(in.lx * 4000)); chrome_until = frame_no + 120; }
+    if (fabsf(in.lx) > 0.4f && frame_no % 6 == 0) { lv_video_seek(vid, (int64_t)lv_video_pos(vid) + (int64_t)(in.lx * 4000)); chrome_until = frame_no + 240; }
   } else if (!vid && !details && !tall_fit && zoom < 1.01f && (in.pressed & SCE_CTRL_UP)) {
     view_options_open(0); return; // (↑ on a picture: Viewing)
   } else if (zoom > 1.01f || (!tall_fit && (lv_mx > 1 || lv_my > 1))) {
@@ -3923,7 +3963,7 @@ static void draw_viewer(void) {
     heart(W / 2, H / 2, sz, with_alpha(ACC, (int)(230 * a)));
   } else heart_at = 0;
 
-  if (vseek != INT64_MIN && vid && !vid_clip) { lv_video_seek(vid, vseek < 0 ? 0 : vseek); chrome_until = frame_no + 150; }
+  if (vseek != INT64_MIN && vid && !vid_clip) { lv_video_seek(vid, vseek < 0 ? 0 : vseek); chrome_until = frame_no + 300; }
   // --- the controls on top, fading away ---
   int chrome = (frame_no < chrome_until || details || (vid && !vid_clip && lv_video_paused(vid))) && vhero.drag <= 0;
   if (chrome) {
@@ -5420,7 +5460,7 @@ int main(void) {
       if (wf_run) { wf_stop(); wf_last[0] = 0; if (screen == S_WIFI) wf_start(); }
       if (pin.on && pin.on_wake && screen != S_PIN) { slideshow = 0; pin_lock(screen == S_COVER ? cover_return : screen); }
     }
-    if (pin_after_load && screen != S_UNLOCKING && load_state != 1) { pin_after_load = 0; pin_lock(screen); }
+    if (pin_after_load && screen != S_UNLOCKING && load_state != 1 && frame_no >= splash_until) { pin_after_load = 0; pin_lock(screen); }
     // (a video playing, or a slideshow: the Vita doesn't dim or sleep)
     if ((vid && !lv_video_paused(vid)) || (wv_vid && !lv_video_paused(wv_vid)) || (screen == S_VIEWER && slideshow) || drive.state == DRV_SYNCING || drive.state == DRV_CODE || wf_run ||
         dl_post >= 0 || msave_on || conv_on) { // (and while a video downloads or a chapter is saved: sleep would cut the Wi-Fi)
@@ -5558,6 +5598,9 @@ int main(void) {
     }
 
     PT("before drawing");
+    // (a video playing: the frame before is drawn and done before a new one is taken from the player,
+    //  which reuses its memory at once (otherwise frames jumped back and forth))
+    if (vid || wv_vid) vita2d_wait_rendering_done();
     vita2d_start_drawing();
     // (vita2d starts every frame's vertices at the beginning of one pool, while the GPU may still be
     //  drawing the frame before from it (up to two frames are queued): its shapes came out garbled.
@@ -5598,15 +5641,15 @@ int main(void) {
     }
     if (otag_open) { in = otag_keep; draw_otag(); } // (your tags for a save: over everything, its input its own)
     // the loading screen at start, fading into whatever is behind it once the vault is open
-    if (screen == S_PIN) pin_was_shown = 1;
-    if (frame_no < splash_until + 24 && !pin_was_shown) {
-      static int splash_over; // (once the PIN pad has shown, the loading screen doesn't come back after it)
-      if (screen == S_PIN) { splash_over = 1; splash_until = 0; }
-      if (pin_was_shown) { splash_over = 1; splash_until = 0; }
+    // (with a PIN the pad comes up as the loading screen ends: the heart fades into it, once)
+    if (frame_no < splash_until + 24) {
+      static int splash_over; // (the PIN pad has come: the loading screen isn't held up again)
+      if (screen == S_PIN) splash_over = 1;
       if (!splash_over && frame_no >= splash_until && (screen == S_UNLOCKING || load_state == 1)) splash_until = frame_no + 1; // (still opening)
       int a = frame_no < splash_until ? 255 : (int)(255 * (splash_until + 24 - frame_no) / 24.0f);
       if (screen != S_LOCKED || frame_no < splash_until) draw_splash(screen == S_LOCKED ? "Untraceable vault" : "Opening the vault\u2026", a);
     }
+    if (screen == S_PIN) pin_was_shown = 1;
     if (frame_no < message_until && screen != S_COVER && screen != S_CALC) {
       int w = text_w(16, message) + 44;
       int a = message_until - frame_no < 20 ? (message_until - frame_no) * 12 : 240;

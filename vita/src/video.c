@@ -244,43 +244,38 @@ static void gain_into(int16_t *dst, const int16_t *src, int n, int vol) {
     dst[k] = (int16_t)(x > 32767 ? 32767 : x < -32768 ? -32768 : x);
   }
 }
+// (the sound, as VitaMediaDeck plays the system player's: a BGM port (the MAIN port takes 48 kHz
+//  only, so 44.1 kHz sound was played wrong), its block set to each frame's own length and the frame
+//  played whole, once; nothing output between frames (silence padded in there made gaps the player's
+//  clock didn't know about: the sound drifted, stuttered and sounded doubled))
 static int av_sound_main(SceSize args, void *argp) {
   sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), SCE_KERNEL_CPU_MASK_USER_0 << 2); // (off the drawing thread's core)
   LvVideo *v = *(LvVideo **)argp;
-  int rate = 48000, ch = 2;
-  int port = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN, GRAIN, rate, SCE_AUDIO_OUT_MODE_STEREO);
-  int16_t *silence = memalign(64, GRAIN * 2 * sizeof(int16_t));
-  memset(silence, 0, GRAIN * 2 * sizeof(int16_t));
-  int16_t *gbuf = memalign(64, GRAIN * 2 * sizeof(int16_t));
+  int rate = 48000, ch = 2, grain = GRAIN;
+  int port = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_BGM, grain, rate, SCE_AUDIO_OUT_MODE_STEREO);
+  if (port < 0) port = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN, grain, rate, SCE_AUDIO_OUT_MODE_STEREO);
+  int16_t *gbuf = NULL; size_t gcap = 0;
   if (port >= 0) { int lr[2] = {SCE_AUDIO_VOLUME_0DB, SCE_AUDIO_VOLUME_0DB}; sceAudioOutSetVolume(port, SCE_AUDIO_VOLUME_FLAG_L_CH | SCE_AUDIO_VOLUME_FLAG_R_CH, lr); }
   while (v->run) {
     SceAvPlayerFrameInfo f;
-    if (v->ready && !v->paused && sceAvPlayerIsActive(v->h_av) && sceAvPlayerGetAudioData(v->h_av, &f)) {
-      int r = (int)f.details.audio.sampleRate, c = f.details.audio.channelCount;
-      if (port >= 0 && c && r && (r != rate || c != ch)) {
-        rate = r; ch = c;
-        sceAudioOutSetConfig(port, GRAIN, rate, ch == 1 ? SCE_AUDIO_OUT_MODE_MONO : SCE_AUDIO_OUT_MODE_STEREO);
+    if (port >= 0 && v->ready && !v->paused && sceAvPlayerIsActive(v->h_av) && sceAvPlayerGetAudioData(v->h_av, &f) && f.pData) {
+      int r = (int)f.details.audio.sampleRate, c = (int)f.details.audio.channelCount;
+      if (!r) r = rate;
+      if (c != 1 && c != 2) c = 2;
+      int n = f.details.audio.size ? (int)(f.details.audio.size / (2 * c)) : GRAIN;
+      if (n < 64 || n > 65472) continue; // (the port takes 64 to 65472 samples a block)
+      n &= ~63; // (in steps of 64)
+      if (r != rate || c != ch || n != grain) {
+        if (sceAudioOutSetConfig(port, n, r, c == 1 ? SCE_AUDIO_OUT_MODE_MONO : SCE_AUDIO_OUT_MODE_STEREO) >= 0) { rate = r; ch = c; grain = n; }
+        else continue;
       }
-      // (a frame can hold more than one block, 2048 samples for HE-AAC: all of it played, a block at a
-      //  time; a short tail made whole with silence. Only its first block played before: the sound
-      //  stuttered and "echoed" on long videos)
-      int total = f.details.audio.size && ch ? (int)(f.details.audio.size / (2 * ch)) : GRAIN;
-      const int16_t *src = (const int16_t *)f.pData;
-      for (int off = 0; port >= 0 && gbuf && off < total; off += GRAIN) {
-        int nsm = total - off < GRAIN ? total - off : GRAIN;
-        gain_into(gbuf, src + off * ch, nsm * ch, v->volume);
-        if (nsm < GRAIN) memset(gbuf + nsm * ch, 0, (GRAIN - nsm) * ch * sizeof(int16_t));
-        sceAudioOutOutput(port, gbuf);
-      }
-      if (port >= 0 && !gbuf) sceAudioOutOutput(port, f.pData);
-    } else if (port >= 0) {
-      sceAudioOutOutput(port, silence); // (keeps the port's timing; also waits a block)
-    } else {
-      sceKernelDelayThread(10000);
-    }
+      size_t need = (size_t)n * c * sizeof(int16_t);
+      if (need > gcap) { free(gbuf); gbuf = memalign(64, need); gcap = gbuf ? need : 0; }
+      if (gbuf) { gain_into(gbuf, (const int16_t *)f.pData, n * c, v->volume); sceAudioOutOutput(port, gbuf); }
+      else sceAudioOutOutput(port, f.pData);
+    } else sceKernelDelayThread(2000);
   }
   if (port >= 0) { sceAudioOutOutput(port, NULL); sceAudioOutReleasePort(port); }
-  free(silence);
   free(gbuf);
   v->snd_done = 1;
   return sceKernelExitDeleteThread(0);
@@ -303,8 +298,8 @@ static int av_open(LvVideo *v) {
   init.fileReplacement.size = f_size;
   init.eventReplacement.objectPointer = v;
   init.eventReplacement.eventCallback = av_event;
-  init.basePriority = 125;
-  init.numOutputVideoFrameBuffers = 6;
+  init.basePriority = 0xA0;
+  init.numOutputVideoFrameBuffers = 2; // (few: a frame given back is decoded into again soon, not one far ahead shown late)
   init.autoStart = SCE_FALSE;
   v->h_av = sceAvPlayerInit(&init);
   // (the handle is an address in the player's memory, 0x81000000 up: negative as an int; an error is
@@ -321,6 +316,9 @@ static int av_open(LvVideo *v) {
 
 static vita2d_texture *av_frame(LvVideo *v) {
   SceAvPlayerFrameInfo f;
+  // (taking a new frame gives the last one back to the player, which decodes into it: the GPU must
+  //  be done drawing it first, or a later picture shows up where an earlier one was meant: frames
+  //  jumping back and forth. lv_video_gpu_idle() is called before each frame's drawing starts)
   // (a frame with no size, or an absurd one, is skipped: drawn, its scale would be infinite and the
   //  GPU would get NaN corners: garbage over the whole screen)
   if (v->ready && sceAvPlayerIsActive(v->h_av) && sceAvPlayerGetVideoData(v->h_av, &f) && f.pData &&
